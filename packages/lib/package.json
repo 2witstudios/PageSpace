@@ -3281,6 +3281,11 @@
       "import": "./dist/billing/agent-payer.js",
       "require": "./dist/billing/agent-payer.js"
     },
+    "./agent-accounts/account-change-lock": {
+      "types": "./dist/agent-accounts/account-change-lock.d.ts",
+      "import": "./dist/agent-accounts/account-change-lock.js",
+      "require": "./dist/agent-accounts/account-change-lock.js"
+    },
     "./agent-accounts/account-authority-executor": {
       "types": "./dist/agent-accounts/account-authority-executor.d.ts",
       "import": "./dist/agent-accounts/account-authority-executor.js",

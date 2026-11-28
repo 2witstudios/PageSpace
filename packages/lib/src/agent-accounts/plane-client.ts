@@ -4,8 +4,11 @@
  *
  * The web process holds NO store identity, no plane metadata access and no
  * write-digest key: it holds the plane's URL and service secret, and can ask
- * for exactly three things — store this material (`put`, write-only), deny
- * this account (`revoke`), run this request under this signed grant
+ * for: store this material (`put`, write-only), deny or erase this account
+ * (`revoke`, `delete`), read its bindings' version and consenters
+ * (`describe`, metadata only), rewrite its bindings (`rebind` — a widening is
+ * refused by the plane unless it carries an `OwnerConsent`), read its policy
+ * window's usage (`usage`), and run a request under a signed grant
  * (`execute`). It can never ask for material back: there is no such route.
  *
  * Every call is signed over method, path, body digest and time
@@ -15,9 +18,19 @@
  * plane is `plane_unavailable`. Never a thrown error a route turns into a 500.
  */
 import { createHash, createHmac } from 'node:crypto';
-import type { DeleteResult, PutResult, RevokeResult } from './store/store-adapter';
+import type { DeleteResult, PutResult, RebindResult, RevokeResult } from './store/store-adapter';
 import type { HttpExecutionResult } from './executor/decide-execution-result';
-import type { PlaneDeleteBody, PlaneExecuteBody, PlanePutBody, PlaneRevokeBody } from './executor/plane-wire';
+import type {
+  PlaneDeleteBody,
+  PlaneDescribeBody,
+  PlaneDescribeResult,
+  PlaneExecuteBody,
+  PlanePutBody,
+  PlaneRebindBody,
+  PlaneRevokeBody,
+  PlaneUsageBody,
+  PlaneUsageResult,
+} from './executor/plane-wire';
 import { PLANE_ROUTES } from './executor/plane-wire';
 import { PLANE_SIGNATURE_HEADER, signPlaneRequest } from './executor/plane-request-signature';
 import { classifyPlaneCallFailure, type PlaneCallFailure, type PlaneRoute } from './classify-plane-call-failure';
@@ -32,6 +45,10 @@ export type PlaneClient = {
   readonly revoke: (body: PlaneRevokeBody) => Promise<RevokeResult | PlaneUnavailable>;
   /** Erase the material wherever it is — used for an account whose first put never committed. */
   readonly delete: (body: PlaneDeleteBody) => Promise<DeleteResult | PlaneUnavailable>;
+  readonly describe: (body: PlaneDescribeBody) => Promise<PlaneDescribeResult | PlaneUnavailable>;
+  /** An uncertain failure (`plane_unavailable`) may still have applied: re-`describe` before retrying. */
+  readonly rebind: (body: PlaneRebindBody) => Promise<RebindResult | PlaneUnavailable>;
+  readonly usage: (body: PlaneUsageBody) => Promise<PlaneUsageResult | PlaneUnavailable>;
   readonly execute: (body: PlaneExecuteBody) => Promise<HttpExecutionResult | PlaneUnavailable>;
 };
 
@@ -79,6 +96,9 @@ export function createPlaneClient({
     put: (body) => call<PutResult>('put', PLANE_ROUTES.put, body) as Promise<PutResult | PlaneUnavailable>,
     revoke: (body) => call<RevokeResult>('revoke', PLANE_ROUTES.revoke, body) as Promise<RevokeResult | PlaneUnavailable>,
     delete: (body) => call<DeleteResult>('delete', PLANE_ROUTES.delete, body) as Promise<DeleteResult | PlaneUnavailable>,
+    describe: (body) => call<PlaneDescribeResult>('describe', PLANE_ROUTES.describe, body) as Promise<PlaneDescribeResult | PlaneUnavailable>,
+    rebind: (body) => call<RebindResult>('rebind', PLANE_ROUTES.rebind, body) as Promise<RebindResult | PlaneUnavailable>,
+    usage: (body) => call<PlaneUsageResult>('usage', PLANE_ROUTES.usage, body) as Promise<PlaneUsageResult | PlaneUnavailable>,
     execute: (body) => call<HttpExecutionResult>('execute', PLANE_ROUTES.execute, body) as Promise<HttpExecutionResult | PlaneUnavailable>,
   };
 }

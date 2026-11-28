@@ -13,12 +13,15 @@
  * - the PLANE's record: current and previous credential version, rotation
  *   time, revocation — plane-attested (G1c R3/M7). A revocation the plane
  *   records makes the account `revoked` whatever the main-DB row says.
+ * - the DELEGATION row a grant names (unattended runs): read from the main DB
+ *   by the grant's own `delegationId`, so the verifier's F7 compares the
+ *   signed ids against the stored row, its expiry and its revocation.
  * An account missing from either side is an `UnknownAccountBinding`.
  * The ceiling is evaluated over the grant's OWN signed `allowedDriveIds`.
  */
 import type { AgentAccountRecord, CredentialVersion, PolicyVersion, TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { AccountId } from '@pagespace/db/schema/agent-accounts';
-import type { AgentPageId, ConversationId, DriveId, ExpectedBinding, GrantHuman, GrantPresenter, RunId } from '../grant';
+import type { AgentPageId, ConversationId, DelegationFact, DriveId, ExpectedBinding, GrantHuman, GrantPresenter, RunId } from '../grant';
 import { isDriveWithinCredentialScope } from '../../agent-workspaces/credential-scope';
 
 export type RunEnvelope = {
@@ -47,12 +50,15 @@ export function expectedBindingFor({
   row,
   plane,
   allowedDriveIds,
+  delegation,
 }: {
   readonly run: RunEnvelope;
   readonly presenter: GrantPresenter & { readonly channel: 'http-executor' };
   readonly row: Pick<AgentAccountRecord, 'id' | 'kind' | 'status' | 'ownerDriveId' | 'tenantId' | 'policyVersion'> | null;
   readonly plane: PlaneAttestedFacts | null;
   readonly allowedDriveIds: readonly string[];
+  /** The delegation row the grant named, as a fact; `none` when it names none or the row is gone. */
+  readonly delegation: DelegationFact;
 }): ExpectedBinding<'http-executor'> {
   const accountDriveId = (row?.ownerDriveId ?? null) as DriveId | null;
   const runBinding = {
@@ -63,7 +69,7 @@ export function expectedBindingFor({
     conversationId: run.conversationId,
     runId: run.runId,
     tenantId: (row?.tenantId ?? '') as TenantId,
-    delegation: run.human.sessionId !== null ? ({ kind: 'live_session' } as const) : ({ kind: 'none' } as const),
+    delegation: run.human.sessionId !== null ? ({ kind: 'live_session' } as const) : delegation,
     sandbox: null,
     ceilingAdmitsAccount: isDriveWithinCredentialScope(allowedDriveIds, accountDriveId),
   };

@@ -13,6 +13,8 @@
  *   no caller header that was not digested.
  * - Body: the exact bytes, refused unless their SHA-256 is the canonical
  *   `bodySha256`.
+ * - `bearer` material rides in `Authorization: Bearer <token>`; `api_key`
+ *   material in the header or query parameter its placement names.
  * - The key is formatted by `applyAuth` (the pure formatter the integrations
  *   saga already uses, ADR 0005 §6). A placement that collides with a header or
  *   query parameter the request already carries is refused, not merged, so the
@@ -34,6 +36,22 @@ export type OutboundRequest = {
   readonly headers: readonly (readonly [string, string])[];
   readonly body: Uint8Array;
 };
+
+/** What the executor resolved, by kind — the HTTP executor presents these two. */
+export type PresentedMaterial =
+  | { readonly kind: 'api_key'; readonly material: SecretMaterialByKind['api_key'] }
+  | { readonly kind: 'bearer'; readonly material: SecretMaterialByKind['bearer'] };
+
+/**
+ * The literal values `filterResponse` scrubs from what is released: the secret itself and the exact
+ * header value it was sent as. An `api_key` stored as `Bearer <token>` also scrubs the bare token.
+ */
+export function knownValuesOf(presented: PresentedMaterial): readonly string[] {
+  if (presented.kind === 'bearer') return [presented.material.token, `Bearer ${presented.material.token}`];
+  const { value } = presented.material;
+  const bare = /^bearer\s+(.+)$/i.exec(value)?.[1];
+  return bare === undefined ? [value] : [value, bare];
+}
 
 export type OutboundRequestVerdict =
   | { readonly ok: true; readonly request: OutboundRequest }
@@ -69,19 +87,22 @@ export function buildOutboundRequest({
 }: {
   readonly canonical: CanonicalRequest;
   readonly body: Uint8Array;
-  readonly material: SecretMaterialByKind['api_key'];
+  readonly material: PresentedMaterial;
   readonly sha256: HashBytes;
 }): OutboundRequestVerdict {
   if (sha256(body) !== canonical.bodySha256) return { ok: false, reason: 'body_mismatch' };
-  if (typeof material.value !== 'string' || material.value.length === 0 || CONTROL_CHAR_RE.test(material.value)) return { ok: false, reason: 'key_invalid' };
+  const secret = material.kind === 'bearer' ? material.material.token : material.material.value;
+  if (typeof secret !== 'string' || secret.length === 0 || CONTROL_CHAR_RE.test(secret)) return { ok: false, reason: 'key_invalid' };
 
   const originMatch = /^https:\/\/([a-z0-9.-]+):(\d+)$/.exec(canonical.origin);
   if (originMatch === null) return { ok: false, reason: 'malformed' };
   const hostname = originMatch[1]!;
   const port = Number(originMatch[2]);
 
-  const placement = material.placement;
-  const auth = applyAuth({ apiKey: material.value }, { type: 'api_key', config: { placement: placement.in, paramName: placement.name } });
+  const auth =
+    material.kind === 'bearer'
+      ? applyAuth({ token: secret }, { type: 'bearer_token', config: { headerName: 'authorization', prefix: 'Bearer ' } })
+      : applyAuth({ apiKey: secret }, { type: 'api_key', config: { placement: material.material.placement.in, paramName: material.material.placement.name } });
 
   const query = canonical.query.map(([name, value]) => `${name}=${value}`);
   for (const [name, value] of Object.entries(auth.queryParams)) {

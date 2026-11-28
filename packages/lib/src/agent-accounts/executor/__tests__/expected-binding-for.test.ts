@@ -22,7 +22,7 @@ const presenter = { keyId: 'exec_1' as PresenterKeyId, channel: 'http-executor' 
 
 describe('expectedBindingFor', () => {
   it('given a known account, should combine the run principals, the row facts and the plane-attested versions', () => {
-    const actual = expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: [] });
+    const actual = expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: [], delegation: { kind: 'none' } });
     const expected = {
       aud: 'http-executor',
       presenter,
@@ -47,13 +47,13 @@ describe('expectedBindingFor', () => {
   });
 
   it('given the plane records a revocation the main-DB row does not, should report the account revoked', () => {
-    const actual = expectedBindingFor({ run, presenter, row, plane: { ...plane, revokedAt: 5_000 }, allowedDriveIds: [] }).accountStatus;
+    const actual = expectedBindingFor({ run, presenter, row, plane: { ...plane, revokedAt: 5_000 }, allowedDriveIds: [], delegation: { kind: 'none' } }).accountStatus;
     const expected = 'revoked';
     expect(actual).toEqual(expected);
   });
 
   it('given no row or no plane record, should be an unknown account binding', () => {
-    const actual = [expectedBindingFor({ run, presenter, row: null, plane, allowedDriveIds: [] }), expectedBindingFor({ run, presenter, row, plane: null, allowedDriveIds: [] })].map((binding) => [binding.accountId, binding.currentCredentialVersion, binding.accountStatus]);
+    const actual = [expectedBindingFor({ run, presenter, row: null, plane, allowedDriveIds: [], delegation: { kind: 'none' } }), expectedBindingFor({ run, presenter, row, plane: null, allowedDriveIds: [], delegation: { kind: 'none' } })].map((binding) => [binding.accountId, binding.currentCredentialVersion, binding.accountStatus]);
     const expected = [
       [null, null, null],
       [null, null, null],
@@ -62,13 +62,13 @@ describe('expectedBindingFor', () => {
   });
 
   it('given an unattended run (no session), should carry no live-session delegation fact', () => {
-    const actual = expectedBindingFor({ run: { ...run, human: { ...run.human, sessionId: null } }, presenter, row, plane, allowedDriveIds: [] }).delegation;
+    const actual = expectedBindingFor({ run: { ...run, human: { ...run.human, sessionId: null } }, presenter, row, plane, allowedDriveIds: [], delegation: { kind: 'none' } }).delegation;
     const expected = { kind: 'none' };
     expect(actual).toEqual(expected);
   });
 
   it('given a caller ceiling that excludes the account drive, should report the ceiling does not admit it', () => {
-    const actual = expectedBindingFor({ run, presenter, row, plane, allowedDriveIds: ['drive_other'] }).ceilingAdmitsAccount;
+    const actual = expectedBindingFor({ run, presenter, row, plane, delegation: { kind: 'none' }, allowedDriveIds: ['drive_other'] }).ceilingAdmitsAccount;
     const expected = false;
     expect(actual).toEqual(expected);
   });

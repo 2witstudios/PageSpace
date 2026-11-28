@@ -19,7 +19,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { createHash, createHmac, generateKeyPairSync, randomBytes, verify as nodeVerify, createPublicKey } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, randomBytes, verify as nodeVerify, createPublicKey, sign as nodeSign } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
@@ -28,7 +28,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { Pool } from 'pg';
 import { createId } from '@paralleldrive/cuid2';
-import { db } from '@pagespace/db/db';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { createAccountChangeLock } from '../../account-change-lock';
 import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
@@ -115,7 +116,7 @@ function startUpstream(): Promise<void> {
   ca = execFileSync('openssl', ['x509', '-in', 'ca.pem'], { cwd: certDir }).toString('utf8');
   upstream = createHttpsServer({ key: readFileSync(path.join(certDir, 'leaf.key')), cert: readFileSync(path.join(certDir, 'leaf.pem')) }, (req, res) => {
     upstreamHits.push(req.url ?? '');
-    const authorized = req.headers['x-api-key'] === CANARY;
+    const authorized = req.headers['x-api-key'] === CANARY || req.headers.authorization === `Bearer ${CANARY}`;
     if (!authorized) {
       res.writeHead(401, { 'content-type': 'application/json' });
       return res.end('{"error":"unauthorized"}');
@@ -137,6 +138,7 @@ function startUpstream(): Promise<void> {
 function planeStore() {
   const metadata = createPlaneMetadataRepository({ pool: metadataPool as never });
   const provisioner = createInfisicalTenantProvisioner({ baseUrl: INFISICAL_URL, organizationId: orgId, auth: { kind: 'token', token: ADMIN_TOKEN ?? '' }, pool: metadataPool as never, advisoryLockPool: metadata.advisoryLockPool });
+  const usage = createUsageLedgerRepository({ pool: metadataPool });
   const store = createInfisicalStoreAdapter({
     infisical: createInfisicalClient({ baseUrl: INFISICAL_URL, environment: 'dev' }),
     metadata,
@@ -147,15 +149,15 @@ function planeStore() {
     writeDigestKey: new Uint8Array(randomBytes(32)) as WriteDigestKey,
     hmac: (key, bytes) => createHmac('sha3-256', key).update(bytes).digest('hex'),
     now: () => Date.now(),
-    consentPublicKey: new Uint8Array(generateKeyPairSync('ed25519').publicKey.export({ type: 'spki', format: 'der' })),
+    consentPublicKey: new Uint8Array(CONSENT_PAIR.publicKey.export({ type: 'spki', format: 'der' })),
     verify: verifyEd25519,
     consentLedger: createConsentLedgerRepository({ pool: metadataPool }),
   });
-  return { metadata, provisioner, store };
+  return { metadata, provisioner, store, usage };
 }
 
 async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountAuditRepository) => r }: { readonly isPublic?: (ip: string) => boolean; readonly wrapAudit?: (r: AgentAccountAuditRepository) => AgentAccountAuditRepository } = {}): Promise<PlaneClient> {
-  const { metadata, provisioner, store } = planeStore();
+  const { metadata, provisioner, store, usage } = planeStore();
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
@@ -163,7 +165,7 @@ async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountA
     grantGate: createGrantGate({ replayStore: createReplayStoreRepository({ db }) }),
     audited: createAuditedExecutor({ auditRepository: wrapAudit(createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) })), hash: sha3 }),
     planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
-    usage: createUsageLedgerRepository({ pool: metadataPool }),
+    usage,
     network: createPinnedHttpsClient({ resolveHost: async () => [{ address: '127.0.0.1', family: 4 }], isPublic, ca, limits: { totalTimeoutMs: 5_000, maxResponseBytes: 1_000_000, maxConcurrent: 8 } }),
     registry: [],
     issuerPublicKey: keyring.current.publicKey,
@@ -176,15 +178,19 @@ async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountA
     maxReleasedBodyBytes: 64 * 1024,
   });
   const server = createHttpServer(
-    createPlaneRequestHandler({ secret: SECRET, store, provisioner, executor, hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'), sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'), now: () => Date.now() }),
+    createPlaneRequestHandler({ secret: SECRET, store, usage, provisioner, executor, hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'), sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'), now: () => Date.now() }),
   );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   planes.push(server);
   return createPlaneClient({ baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, secret: SECRET });
 }
 
+/** The step-up consent key: the plane holds the public half, the authority signs with the private one. */
+const CONSENT_PAIR = generateKeyPairSync('ed25519');
+const CONSENT_KEY = { sign: (message: Uint8Array) => new Uint8Array(nodeSign(null, message, CONSENT_PAIR.privateKey)) };
+
 const authorityOver = (plane: PlaneClient): AccountAuthority =>
-  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], hash: sha3, now: () => Date.now() });
+  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
 
 const caller = (overrides: Partial<Parameters<AccountAuthority['requestOperation']>[0]['caller']> = {}) => ({
   actorUserId: OWNER,
@@ -498,9 +504,13 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
   }, 120_000);
 
   // Codex P1 on #2705: the advertised 60-per-hour cap of a standing permission is enforced by the plane
-  // from its own stored scope and ledger — the 61st use in the hour is refused with nothing sent.
-  it('given a standing permission already used 60 times this hour, should refuse the next request before any upstream I/O; at 59, should run it', async () => {
-    const authority = authorityOver(await startPlane());
+  // from its own stored scope and ledger — the 61st use in the hour is refused with nothing sent. Since slice 2
+  // the authority reads the same ledger and refuses first with its reason; an authority that counts nothing
+  // (here: one whose usage read always says zero) is still refused by the plane itself.
+  it('given a standing permission already used 60 times this hour, should refuse the next request before any upstream I/O — at the authority with limits_exceeded, and at the plane when the authority counts nothing; at 59, should run it', async () => {
+    const plane = await startPlane();
+    const authority = authorityOver(plane);
+    const blind = authorityOver({ ...plane, usage: async () => ({ ok: true, usesThisHour: 0, bytesOutThisHour: 0, concurrent: 0 }) });
     const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
     if (!created.ok) throw new Error(created.reason);
     const seed = async (count: number) => {
@@ -512,11 +522,12 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     await seed(60);
     const before = upstreamHits.length;
     const atCap = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?at=cap`) }));
+    const atCapBlind = seen(await blind.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?at=cap-blind`) }));
     const hitsAtCap = upstreamHits.length - before;
     await seed(59);
     const underCap = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather?at=59`) }));
-    const actual = { atCap, hitsAtCap, underCap: underCap.ok ? underCap.response.status : underCap };
-    const expected = { atCap: { ok: false, reason: 'refused' }, hitsAtCap: 0, underCap: 200 };
+    const actual = { atCap, atCapBlind, hitsAtCap, underCap: underCap.ok ? underCap.response.status : underCap };
+    const expected = { atCap: { ok: false, reason: 'limits_exceeded' }, atCapBlind: { ok: false, reason: 'refused' }, hitsAtCap: 0, underCap: 200 };
     expect(actual).toEqual(expected);
   }, 60_000);
 
@@ -540,6 +551,214 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const actual = { before, revoked: revoked.ok, after: after.ok ? 'still present' : after.reason };
     const expected = { before: true, revoked: true, after: 'not_found' };
     expect(actual).toEqual(expected);
+  }, 60_000);
+
+  // ---- Slice 2: "only what I assign" — permissions edits, bindings, delegations, real usage, bearer ----
+
+  const STEP_UP = { challengeId: 'stepup_e2e' };
+  const off = { enabled: false } as const;
+  const on = (maxUsesPerHour: number) => ({ enabled: true, maxUsesPerHour, until: null }) as const;
+  const unattended = () => caller({ sessionId: null });
+
+  it('given an account that asks every time, should refuse to turn on "allow without asking" without step-up; with it, the plane accepts the consented rebind and the next call runs unasked; turning it off needs no step-up and asks again', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const call = () => authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/weather?city=Oslo`) });
+
+    const before = await call();
+    const unproven = await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: null });
+    const widened = await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: STEP_UP });
+    const during = seen(await call());
+    const narrowed = await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: off }, stepUp: null });
+    const after = await call();
+
+    const actual = {
+      before: before.ok ? 'ran' : before.reason,
+      unproven: unproven.ok ? 'ok' : unproven.reason,
+      widened: widened.ok ? widened.settings.autoApprove : widened.reason,
+      during: during.ok ? during.response.status : during.reason,
+      narrowed: narrowed.ok ? narrowed.settings.autoApprove : narrowed.reason,
+      after: after.ok ? 'ran' : after.reason,
+    };
+    const expected = { before: 'approval_required', unproven: 'step_up_required', widened: { enabled: true, maxUsesPerHour: 10, until: null }, during: 200, narrowed: null, after: 'approval_required' };
+    expect(actual).toEqual(expected);
+  }, 90_000);
+
+  it('given a second site added with step-up then removed without it, should reach it only while it is pinned', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const second = `https://${EVIL_HOST}:${upstreamPort}`;
+    const toSecond = () => authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${second}/v1/weather`) });
+
+    const beforeAdd = await toSecond();
+    const added = await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin, second], autoApprove: on(60) }, stepUp: STEP_UP });
+    const whilePinned = await toSecond();
+    const removed = await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(60) }, stepUp: null });
+    const afterRemove = await toSecond();
+
+    const actual = {
+      beforeAdd: beforeAdd.ok ? 'ran' : beforeAdd.reason,
+      added: added.ok ? added.settings.account.allowedOrigins : added.reason,
+      whilePinned: whilePinned.ok ? whilePinned.response.status : whilePinned.reason,
+      removed: removed.ok ? removed.settings.account.allowedOrigins : removed.reason,
+      afterRemove: afterRemove.ok ? 'ran' : afterRemove.reason,
+    };
+    const expected = {
+      beforeAdd: 'destination_denied',
+      added: [origin, second].sort(),
+      whilePinned: 200,
+      removed: [origin],
+      afterRemove: 'destination_denied',
+    };
+    expect(actual).toEqual(expected);
+  }, 90_000);
+
+  it('given an unattended run, should refuse without a delegation, refuse to delegate without step-up or while every call asks, run with one, and refuse again once it is revoked — and the plane verifier reads the same row', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const run = () => authority.requestOperation({ ...asHuman(unattended()), accountId: id, request: get(`${origin}/v1/weather?city=Oslo`) });
+    const expiresAt = Date.now() + 7 * 86_400_000;
+
+    const withoutDelegation = await run();
+    const unproven = await authority.createDelegation({ actor: owner, accountId: id, agentPageId: PAGE_A, expiresAt, stepUp: null });
+    const whileAsking = await authority.createDelegation({ actor: owner, accountId: id, agentPageId: PAGE_A, expiresAt, stepUp: STEP_UP });
+    await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(60) }, stepUp: STEP_UP });
+    const delegated = await authority.createDelegation({ actor: owner, accountId: id, agentPageId: PAGE_A, expiresAt, stepUp: STEP_UP });
+    const withDelegation = seen(await run());
+    const delegationId = delegated.ok ? delegated.settings.delegations[0]?.id ?? '' : '';
+    await authority.revokeDelegation({ actor: owner, accountId: id, delegationId });
+    const afterRevoke = await run();
+
+    const actual = {
+      withoutDelegation: withoutDelegation.ok ? 'ran' : withoutDelegation.reason,
+      unproven: unproven.ok ? 'ok' : unproven.reason,
+      whileAsking: whileAsking.ok ? 'ok' : whileAsking.reason,
+      delegations: delegated.ok ? delegated.settings.delegations.map((d) => d.agentPageId) : delegated.reason,
+      withDelegation: withDelegation.ok ? withDelegation.response.status : withDelegation.reason,
+      afterRevoke: afterRevoke.ok ? 'ran' : afterRevoke.reason,
+    };
+    const expected = { withoutDelegation: 'account_unavailable', unproven: 'step_up_required', whileAsking: 'auto_approve_required', delegations: [PAGE_A], withDelegation: 200, afterRevoke: 'account_unavailable' };
+    expect(actual).toEqual(expected);
+  }, 90_000);
+
+  it('given a user-owned account, should be unusable from agent page A until the owner binds it (with step-up), usable only by the owner after, and unusable again once unbound', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const fromA = () => authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/weather`) });
+
+    const beforeBind = await fromA();
+    const unproven = await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: null });
+    const byViewer = await authority.bindAccount({ actor: credentialActor(VIEWER, null), accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    const bound = await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    const afterBind = seen(await fromA());
+    const viewerList = await authority.listAccounts({ actor: credentialActor(VIEWER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A } });
+    const ownerList = await authority.listAccounts({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A } });
+    const unbound = await authority.unbindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A });
+    const afterUnbind = await fromA();
+
+    const actual = {
+      beforeBind: beforeBind.ok ? 'ran' : beforeBind.reason,
+      unproven: unproven.ok ? 'ok' : unproven.reason,
+      byViewer: byViewer.ok ? 'ok' : byViewer.reason,
+      bound: bound.ok ? bound.settings.bindings.map((b) => b.agentPageId) : bound.reason,
+      afterBind: afterBind.ok ? afterBind.response.status : afterBind.reason,
+      viewerSees: (viewerList ?? []).some((account) => account.id === id),
+      ownerSees: (ownerList ?? []).some((account) => account.id === id),
+      unbound: unbound.ok ? unbound.settings.bindings : unbound.reason,
+      afterUnbind: afterUnbind.ok ? 'ran' : afterUnbind.reason,
+    };
+    const expected = { beforeBind: 'account_unavailable', unproven: 'step_up_required', byViewer: 'account_unavailable', bound: [PAGE_A], afterBind: 200, viewerSees: false, ownerSees: true, unbound: [], afterUnbind: 'account_unavailable' };
+    expect(actual).toEqual(expected);
+  }, 90_000);
+
+  it('given "allow without asking" capped at one call an hour, should run the first and refuse the second with limits_exceeded from the real usage count', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
+    if (!created.ok) throw new Error(created.reason);
+    await authority.updateAccount({ actor: owner, accountId: created.account.id, edit: { allowedOrigins: [origin], autoApprove: on(1) }, stepUp: STEP_UP });
+    const call = () => authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/weather`) });
+    const first = await call();
+    const second = await call();
+    const settings = await authority.describeAccount({ actor: owner, accountId: created.account.id });
+    const actual = { first: first.ok ? first.response.status : first.reason, second: second.ok ? 'ran' : second.reason, usesThisHour: settings.ok ? settings.settings.usesThisHour : settings.reason };
+    expect(actual).toEqual({ first: 200, second: 'limits_exceeded', usesThisHour: 1 });
+  }, 90_000);
+
+  it('given a bearer account, should send the token as Authorization: Bearer and release none of it', async () => {
+    const authority = authorityOver(await startPlane());
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: { ...createInput(true), kind: 'bearer' } });
+    if (!created.ok) throw new Error(created.reason);
+    const result = seen(await authority.requestOperation({ ...asHuman(caller()), accountId: created.account.id, request: get(`${origin}/v1/echo`) }));
+    const actual = { kind: created.account.kind, ok: result.ok, status: result.ok ? result.response.status : result, leaked: JSON.stringify(result).includes(CANARY) };
+    expect(actual).toEqual({ kind: 'bearer', ok: true, status: 200, leaked: false });
+  }, 60_000);
+
+  it('given a drive member who is not a pinned consenter, should refuse to widen with not_a_consenter even after step-up', async () => {
+    const plane = await startPlane();
+    const authority = authorityOver(plane);
+    const created = await authority.createAccount({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(false) });
+    if (!created.ok) throw new Error(created.reason);
+    // An authority that wrongly believes VIEWER is a drive admin signs a real consent for them: the plane, which pinned
+    // only the drive's consenters at creation, still refuses it.
+    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
+    const actual = await forged.updateAccount({ actor: credentialActor(VIEWER, null), accountId: created.account.id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: STEP_UP });
+    expect(actual.ok ? 'widened' : actual.reason).toEqual('not_a_consenter');
+  }, 60_000);
+
+  it('given two permission edits racing on one account, should apply at most one and leave the account usable with the plane and the row agreeing', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const outcomes = await Promise.all([
+      authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(30) }, stepUp: null }),
+      authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: on(20) }, stepUp: null }),
+    ]);
+    const after = await authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/weather`) });
+    const actual = { applied: outcomes.filter((outcome) => outcome.ok).length >= 1, refusals: outcomes.filter((outcome) => !outcome.ok).map((outcome) => (outcome.ok ? null : outcome.reason)), after: after.ok ? after.response.status : after.reason };
+    expect({ ...actual, refusals: actual.refusals.every((reason) => reason === 'conflict') }).toEqual({ applied: true, refusals: true, after: 200 });
+  }, 90_000);
+
+  it('given a user-owned account detached from an agent and attached again, should not revive the unattended use it had', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const id = created.account.id;
+    const run = () => authority.requestOperation({ ...asHuman(unattended()), accountId: id, request: get(`${origin}/v1/weather`) });
+    await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    await authority.createDelegation({ actor: owner, accountId: id, agentPageId: PAGE_A, expiresAt: Date.now() + 86_400_000, stepUp: STEP_UP });
+    const delegated = await run();
+    await authority.unbindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A });
+    const rebound = await authority.bindAccount({ actor: owner, accountId: id, agentPageId: PAGE_A, stepUp: STEP_UP });
+    const afterRebind = await run();
+    const actual = { delegated: delegated.ok ? delegated.response.status : delegated.reason, delegationsAfter: rebound.ok ? rebound.settings.delegations.length : rebound.reason, afterRebind: afterRebind.ok ? 'ran' : afterRebind.reason };
+    expect(actual).toEqual({ delegated: 200, delegationsAfter: 0, afterRebind: 'account_unavailable' });
+  }, 90_000);
+
+  it('given a page that is not an agent, should refuse to attach an account to it', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const created = await authority.createAccount({ actor: owner, owner: { kind: 'user' }, input: createInput(true) });
+    if (!created.ok) throw new Error(created.reason);
+    const notAgent = createId();
+    await db.insert(pages).values({ id: notAgent, title: 'notes', type: 'DOCUMENT', driveId: DRIVE, position: 9 });
+    const actual = await authority.bindAccount({ actor: owner, accountId: created.account.id, agentPageId: notAgent, stepUp: STEP_UP });
+    expect(actual.ok ? 'bound' : actual.reason).toEqual('page_unavailable');
   }, 60_000);
 
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {
