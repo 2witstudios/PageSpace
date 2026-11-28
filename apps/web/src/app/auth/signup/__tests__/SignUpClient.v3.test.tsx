@@ -39,7 +39,8 @@ import { SignUpClient } from '../SignUpClient';
 const driveInvite = {
   kind: 'drive' as const,
   driveName: 'Studio',
-  inviterName: 'Jono', inviterAccountType: 'human',
+  inviterName: 'Jono',
+  inviterAccountType: 'human' as const,
   role: 'MEMBER' as const,
   email: 'lena@studio.example',
   isExistingUser: false,
