@@ -30,6 +30,7 @@ import type { AuditedExecutor } from '../audit-gate-executor';
 import type { PinnedHttpsClient } from './pinned-https-client';
 import type { ReleasedResponse } from '../filter-response';
 import { parseGrant } from '../parse-grant';
+import { digestBindings } from '../store/digest-bindings';
 import { canonicalizeRequest } from '../canonicalize-request';
 import { digestRequest } from '../digest-request';
 import { buildOutboundRequest, knownValuesOf, type PresentedMaterial } from '../build-outbound-request';
@@ -45,7 +46,7 @@ import { decideExecutionResult, type HttpExecutionResult } from './decide-execut
 export type HttpRequestExecutorDeps = {
   readonly store: Pick<StoreAdapter, 'resolve' | 'describe'>;
   readonly provisioner: Pick<TenantProvisioner, 'identityOf'>;
-  readonly accounts: Pick<AgentAccountRepository, 'find' | 'findApproval' | 'findDelegation' | 'touchLastUsed'>;
+  readonly accounts: Pick<AgentAccountRepository, 'find' | 'findApproval' | 'findDelegation' | 'touchLastUsed' | 'advanceCredentialVersion'>;
   readonly grantGate: GrantGate;
   readonly audited: AuditedExecutor;
   readonly network: PinnedHttpsClient;
@@ -108,7 +109,11 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
     ref,
     providerSlug,
     bindings,
+    identity,
+    origin,
   }: {
+    readonly identity: { readonly identityId: string };
+    readonly origin: string;
     readonly grant: VerifiedGrant<'http-executor'>;
     readonly ref: SecretRef & { readonly kind: 'oauth2' };
     readonly providerSlug: string | null;
@@ -116,7 +121,12 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
   }): Promise<{ readonly ok: true; readonly presented: PresentedMaterial } | { readonly ok: false }> {
     if (deps.refresh === null) return { ok: false };
     const outcome = await deps.refresh.ensureFresh({ ref: ref as never, version: grant.credentialVersion, providerSlug, bindings });
-    return outcome.ok ? { ok: true, presented: { kind: 'oauth2', material: outcome.material } } : { ok: false };
+    if (!outcome.ok) return { ok: false };
+    // The refresh resolved under the plane's CURRENT bindings: before the token leaves, they must still be the
+    // bindings this grant was signed over (a rebind in between — a narrowing — refuses the request, as resolve does).
+    const now = await deps.store.describe({ ref, identity: { tenantId: ref.tenantId, identityId: identity.identityId, blastRadius: 'tenant', channel: 'manage' } });
+    if (!now.ok || now.revokedAt !== null || digestBindings({ bindings: now.bindings, hash: deps.hash }) !== grant.bindingDigest || !(now.bindings.allowedOrigins as readonly string[]).includes(origin)) return { ok: false };
+    return { ok: true, presented: { kind: 'oauth2', material: outcome.material } };
   }
 
   return {
@@ -129,6 +139,11 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
       const tenant = row === null ? null : await deps.provisioner.identityOf(row.tenantId as never);
       const identityBase = row === null || tenant === null ? null : { tenantId: row.tenantId as never, identityId: tenant.identityId, blastRadius: 'tenant' as const };
       const plane = row === null || identityBase === null ? null : await planeFacts(row, identityBase);
+      // A refresh rotated the plane past the row (its mirror write failed): repair the row so the NEXT grant names
+      // the plane's version. This request's grant was signed over the stale one and is judged as such below.
+      if (row !== null && plane !== null && plane.version > row.credentialVersion && row.credentialVersion > 0) {
+        await deps.accounts.advanceCredentialVersion({ id: row.id, from: row.credentialVersion, to: plane.version }).catch(() => false);
+      }
 
       const canonicalized = canonicalizeRequest({ request, providerSlug: row?.providerSlug ?? null, registry: deps.registry });
       if (!canonicalized.ok) return deny(claim, 'digest_mismatch', now);
@@ -205,7 +220,7 @@ export function createHttpRequestExecutor(deps: HttpRequestExecutorDeps): HttpRe
           const ref = { tenantId: identityBase.tenantId, accountId: grant.accountId, kind: presentedKind };
           const resolved: { readonly ok: true; readonly presented: PresentedMaterial } | { readonly ok: false } =
             presentedKind === 'oauth2'
-              ? await freshOAuth2({ grant, ref: { ...ref, kind: 'oauth2' }, providerSlug: row.providerSlug, bindings: plane.bindings })
+              ? await freshOAuth2({ grant, ref: { ...ref, kind: 'oauth2' }, providerSlug: row.providerSlug, bindings: plane.bindings, identity: identityBase, origin: canonical.origin })
               : await deps.store
                   .resolve<'http-executor', 'api_key' | 'bearer'>({ ref: { ...ref, kind: presentedKind }, version: grant.credentialVersion, grant, identity: { ...identityBase, channel: 'http-executor' } })
                   .then((result) => (result.ok ? { ok: true as const, presented: { kind: result.kind, material: result.material } as PresentedMaterial } : { ok: false as const }));

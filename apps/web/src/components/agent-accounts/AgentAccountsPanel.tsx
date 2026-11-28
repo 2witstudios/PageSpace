@@ -22,6 +22,7 @@ const CONNECT_COPY: Readonly<Record<string, string>> = {
   identity_invalid: 'Google did not confirm which account was used. Try again.',
   not_configured: 'Connecting Google is not set up on this PageSpace deployment.',
   forbidden: 'Only a drive owner or admin can add an account to this agent.',
+  rate_limited: 'Too many Google sign-ins in a short time. Wait a few minutes and try again.',
 };
 
 /** The outcome Google's redirect back carried (`?agentAccount=`), shown once and then removed from the URL. */

@@ -65,7 +65,10 @@ function placementFor(authMethod: AuthMethod, credentials: Readonly<Record<strin
       const username = credentials[authMethod.config.usernameField];
       const password = credentials[authMethod.config.passwordField];
       if (username === undefined || password === undefined) return refuse('no_credential');
-      return { value: `Basic ${btoa(`${username}:${password}`)}`, placement: { in: 'header', name: 'Authorization' } };
+      // btoa takes Latin-1 only (as the legacy path does): anything it cannot encode stays on the legacy path.
+      const pair = `${username}:${password}`;
+      if (/[^\u0000-\u00ff]/.test(pair)) return refuse('unsupported_auth');
+      return { value: `Basic ${btoa(pair)}`, placement: { in: 'header', name: 'Authorization' } };
     }
     case 'oauth2': {
       const { tokenPlacement = 'header', tokenPrefix = 'Bearer ' } = authMethod.config;
@@ -76,7 +79,8 @@ function placementFor(authMethod: AuthMethod, credentials: Readonly<Record<strin
     }
     case 'custom_header': {
       const secretHeaders = authMethod.config.headers.filter((header) => header.valueFrom === 'credential');
-      if (secretHeaders.length > 1) return refuse('unsupported_auth');
+      // A static header the legacy path also sends cannot ride on a plane account: not byte-identical, so it stays legacy.
+      if (secretHeaders.length > 1 || authMethod.config.headers.some((header) => header.valueFrom !== 'credential')) return refuse('unsupported_auth');
       const [header] = secretHeaders;
       const value = header?.credentialKey === undefined ? undefined : credentials[header.credentialKey];
       return header !== undefined && nonEmpty(value) ? { value, placement: { in: 'header', name: header.name } } : refuse('no_credential');

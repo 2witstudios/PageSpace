@@ -78,15 +78,24 @@ describe('planConnectionAccount', () => {
     expect(actual).toEqual(expected);
   });
 
-  it('given a custom-header connection, should carry its one credential header and refuse two', () => {
+  it('given a custom-header connection, should carry its one credential header and refuse two, or one beside a static header (not byte-identical)', () => {
     const one: AuthMethod = { type: 'custom_header', config: { headers: [{ name: 'X-Secret', valueFrom: 'credential', credentialKey: 'secret' }, { name: 'X-Version', valueFrom: 'static', staticValue: '2' }] } };
     const two: AuthMethod = { type: 'custom_header', config: { headers: [{ name: 'X-A', valueFrom: 'credential', credentialKey: 'a' }, { name: 'X-B', valueFrom: 'credential', credentialKey: 'b' }] } };
     const actual = [
       planConnectionAccount({ connection: userConnection, provider: provider(one), credentials: { secret: 's' } }),
       planConnectionAccount({ connection: userConnection, provider: provider(two), credentials: { a: '1', b: '2' } }),
     ].map((plan) => (plan.ok ? plan.material : plan));
-    const expected = [{ value: 's', placement: { in: 'header', name: 'X-Secret' } }, { ok: false, reason: 'unsupported_auth' }];
+    const alone: AuthMethod = { type: 'custom_header', config: { headers: [{ name: 'X-Secret', valueFrom: 'credential', credentialKey: 'secret' }] } };
+    const expected = [{ ok: false, reason: 'unsupported_auth' }, { ok: false, reason: 'unsupported_auth' }];
     expect(actual).toEqual(expected);
+    const single = planConnectionAccount({ connection: userConnection, provider: provider(alone), credentials: { secret: 's' } });
+    expect(single.ok ? single.material : single).toEqual({ value: 's', placement: { in: 'header', name: 'X-Secret' } });
+  });
+
+  it('given Basic credentials btoa cannot encode, should refuse instead of throwing', () => {
+    const basic: AuthMethod = { type: 'basic_auth', config: { usernameField: 'u', passwordField: 'p' } };
+    const plan = planConnectionAccount({ connection: userConnection, provider: provider(basic), credentials: { u: '用户', p: 'x' } });
+    expect(plan).toEqual({ ok: false, reason: 'unsupported_auth' });
   });
 
   it('given a drive-scoped connection or a base-URL override, should refuse and leave it on the legacy path', () => {

@@ -14,14 +14,20 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getAccountAuthority } from './account-authority-client';
 import { codeVerifierFor, ENROLLMENT_COOKIE, googleRedirectUri, readEnrollmentState } from './google-enrollment-flow';
 
 const baseUrl = () => process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 const FALLBACK_RETURN = '/settings/agent-accounts';
+const ENROLLMENT_RATE_LIMIT = { maxAttempts: 10, windowMs: 10 * 60_000 };
 
-/** A redirect to the person's own path on THIS site; anything that resolves elsewhere goes to the fallback. */
-function back(returnTo: string, outcome: string): NextResponse {
+/**
+ * A redirect to the person's own path on THIS site; anything that resolves elsewhere goes to the fallback.
+ * `clearBinding`: only once THIS browser's binding was matched — an unrelated or forged callback must not
+ * end a sign-in the browser is still in the middle of.
+ */
+function back(returnTo: string, outcome: string, clearBinding = false): NextResponse {
   const base = new URL(baseUrl());
   let url = new URL(FALLBACK_RETURN, base);
   try {
@@ -32,8 +38,7 @@ function back(returnTo: string, outcome: string): NextResponse {
   }
   url.searchParams.set('agentAccount', outcome);
   const response = NextResponse.redirect(url);
-  // The binding cookie is single-use: cleared whatever the outcome.
-  response.headers.append('set-cookie', `${ENROLLMENT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+  if (clearBinding) response.headers.append('set-cookie', `${ENROLLMENT_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
   return response;
 }
 
@@ -60,12 +65,15 @@ export async function handleAgentAccountGoogleCallback(request: Request): Promis
   const nonce = cookieOf(request, ENROLLMENT_COOKIE);
   if (nonce === null || !secureCompare(nonce, state.nonce)) return back(fallback, 'expired');
   const error = params.get('error');
-  if (error !== null) return back(returnTo, error === 'access_denied' ? 'cancelled' : 'refused');
+  if (error !== null) return back(returnTo, error === 'access_denied' ? 'cancelled' : 'refused', true);
   const code = params.get('code');
-  if (code === null || code.length === 0 || code.length > 4_096) return back(returnTo, 'refused');
+  if (code === null || code.length === 0 || code.length > 4_096) return back(returnTo, 'refused', true);
+  // Each exchange costs the plane and Google quota: a browser replaying its own binding is bounded.
+  const limited = await checkDistributedRateLimit(`agent-account-oauth:user:${state.userId}`, ENROLLMENT_RATE_LIMIT).catch(() => ({ allowed: true }));
+  if (!limited.allowed) return back(returnTo, 'rate_limited', true);
 
   const authority = getAccountAuthority();
-  if (authority === null) return back(returnTo, 'not_configured');
+  if (authority === null) return back(returnTo, 'not_configured', true);
   try {
     const result = await authority.completeOAuthEnrollment({
       actor: credentialActor(state.userId, null),
@@ -77,12 +85,12 @@ export async function handleAgentAccountGoogleCallback(request: Request): Promis
     });
     if (!result.ok) {
       loggers.api.warn('Agent account Google connect refused', { reason: result.reason, detail: 'detail' in result ? result.detail : undefined });
-      return back(returnTo, result.reason === 'provider_refused' ? result.detail : result.reason);
+      return back(returnTo, result.reason === 'provider_refused' ? result.detail : result.reason, true);
     }
     auditRequest(request, { eventType: 'authz.permission.granted', userId: state.userId, resourceType: 'agent_account', resourceId: result.account.id, details: { change: 'connect', provider: 'google' } });
-    return back(returnTo, 'connected');
+    return back(returnTo, 'connected', true);
   } catch (failure) {
     loggers.api.error('Error connecting a Google agent account', failure as Error);
-    return back(returnTo, 'failed');
+    return back(returnTo, 'failed', true);
   }
 }

@@ -9,11 +9,14 @@
  *   labels, trash/untrash.
  * - `irreversible`: anything that can reach another person or cannot be taken
  *   back — sending email; creating or editing calendar events (Google can
- *   email the attendees); creating, copying, editing or uploading Drive files
- *   (a file placed in a folder someone else shared inherits that folder's
- *   sharing); permanently deleting drafts, mail, events or files.
- * - `privilege`: sharing a Drive file with someone (`permissions` create) — it
- *   grants another person access, so it always asks, with step-up.
+ *   email the attendees); permanently deleting drafts, mail, events or files.
+ * - `privilege`: anything that can give another person access — sharing a
+ *   file (`permissions`), and EVERY Drive create, copy, upload or edit: a file
+ *   placed in, or moved into (`addParents`), a folder someone else shared
+ *   inherits that folder's sharing, and an edit can re-enable inherited access
+ *   (`inheritedPermissionsDisabled`). The registry matches paths, not query or
+ *   body, so it cannot tell the harmless edit from the sharing one: all ask,
+ *   with step-up.
  *
  * A standing "allow without asking" policy can only ever cover `read` and
  * `write` (ALWAYS_ALLOWED_BY_CLASS); the rest ask a human every time. A Google
@@ -91,11 +94,11 @@ export const GOOGLE_OPERATIONS: OperationRegistry = [
   drive('GET', '/drive/v3/files/{fileId}', 'read', 'files.get'),
   drive('GET', '/drive/v3/files/{fileId}/export', 'read', 'files.export'),
   drive('GET', '/drive/v3/files/{fileId}/permissions', 'read', 'permissions.list'),
-  drive('POST', '/drive/v3/files', 'irreversible', 'files.create'),
-  drive('POST', '/drive/v3/files/{fileId}/copy', 'irreversible', 'files.copy'),
-  drive('PATCH', '/drive/v3/files/{fileId}', 'irreversible', 'files.update'),
-  drive('POST', '/upload/drive/v3/files', 'irreversible', 'files.upload'),
-  drive('PATCH', '/upload/drive/v3/files/{fileId}', 'irreversible', 'files.uploadUpdate'),
+  drive('POST', '/drive/v3/files', 'privilege', 'files.create'),
+  drive('POST', '/drive/v3/files/{fileId}/copy', 'privilege', 'files.copy'),
+  drive('PATCH', '/drive/v3/files/{fileId}', 'privilege', 'files.update'),
+  drive('POST', '/upload/drive/v3/files', 'privilege', 'files.upload'),
+  drive('PATCH', '/upload/drive/v3/files/{fileId}', 'privilege', 'files.uploadUpdate'),
   drive('DELETE', '/drive/v3/files/{fileId}', 'irreversible', 'files.delete'),
   drive('POST', '/drive/v3/files/{fileId}/permissions', 'privilege', 'permissions.create'),
   drive('DELETE', '/drive/v3/files/{fileId}/permissions/{permissionId}', 'privilege', 'permissions.delete'),

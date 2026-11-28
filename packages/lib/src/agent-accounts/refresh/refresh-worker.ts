@@ -182,8 +182,13 @@ export function createRefreshWorker(deps: RefreshWorkerDeps) {
     if (!rotated.ok) return { ok: false, reason: rotated.reason === 'version_conflict' ? 'version_conflict' : 'store_unavailable' };
     // The rotation is committed in the plane: bookkeeping failures below must not turn it into a
     // reported failure (the caller would re-issue against a version that no longer resolves).
-    await deps.attempts.write({ ref: request.ref, fact: null }).catch(() => undefined);
-    await deps.accounts.advanceCredentialVersion({ id: request.ref.accountId, from: current.version, to: rotated.version }).catch(() => false);
+    // Retried once each: a stale failure count would exhaust the next refresh early, and a stale row version is
+    // repaired by the executor the next time it sees the plane ahead (http-request-executor).
+    const retry = async (write: () => Promise<unknown>) => {
+      await write().catch(() => write().catch(() => undefined));
+    };
+    await retry(() => deps.attempts.write({ ref: request.ref, fact: null }));
+    await retry(() => deps.accounts.advanceCredentialVersion({ id: request.ref.accountId, from: current.version, to: rotated.version }));
     return { ok: true, material: accessOnly(plan.next), version: rotated.version, refreshed: true };
   }
 
