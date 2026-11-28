@@ -23,7 +23,7 @@ vi.mock('@/retained/components/ai/chat/input/ProviderModelSelector', () => ({ Pr
 // The drive's tree names an agent's folder in its picker row.
 vi.mock('@/retained/hooks/usePageTree', () => ({ usePageTree: () => ({ tree: [{ id: 'f-launch', title: 'Launch', children: [] }] }) }));
 const sourceRead = vi.hoisted(() => vi.fn());
-vi.mock('@/retained/hooks/useConversationSpend', () => ({ useConversationSpend: (conversationId: string | null, scope: unknown) => { sourceRead(conversationId, scope); return { spend: { options: [{ source: 'own_credits', walletId: 'own', label: 'Your credits', remainingCredits: '900' }], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }, choose: vi.fn(), isPending: false }; }, useDriveSpend: () => ({ spend: null }) }));
+vi.mock('@/retained/hooks/useConversationSpend', () => ({ useConversationSpend: (conversationId: string | null, scope: unknown) => { sourceRead(conversationId, scope); return { spend: { options: [{ source: 'drive_wallet', walletId: 'drive', label: 'Other wallet', remainingCredits: '300' }, { source: 'own_credits', walletId: 'own', label: 'Your credits', remainingCredits: '900' }], resolved: { kind: 'spend', source: 'own_credits', walletId: 'own', fallbackApplied: false, fallbackFrom: null } }, choose: vi.fn(), isPending: false }; }, useDriveSpend: () => ({ spend: null }) }));
 import { useSpendContextStore } from '@/retained/stores/useSpendContextStore';
 const { ChatPane } = await import('./chat-pane');
 beforeEach(() => { useSpendContextStore.setState({ entries: [], active: null }); setUiState(createInitialState()); host.props = null; useRetainedChatSelection.getState().select(null); });
@@ -48,10 +48,9 @@ describe('persistent chat orchestration', () => {
   });
   it('keeps explicit history selection and the draft through object navigation', async () => {
     dispatch(transactions.openConversation, 'c2'); dispatch(transactions.setChatDraft, 'Unsent draft');
-    const { container } = show('/d1/files/p1'); await settle();
+    show('/d1/files/p1'); await settle();
     expect(host.props?.conversationId).toBe('c2');
     expect(getUiState().resources.chatDraft).toBe('Unsent draft');
-    expect(container.querySelector('aside > header > span')?.textContent).toBe('Brief');
     expect(host.props?.placeholder).toBe('Ask about Brief…');
   });
   it('passes a new thread to the host without displaying an older conversation', async () => {
@@ -144,11 +143,11 @@ describe('History and New chat in the head', () => {
     expect(host.props?.conversationId).toBeNull();
   });
 
-  it('names no context on the chat home and the section on a list', async () => {
+  it('puts no context chip in the head; the placeholder names the context', async () => {
     const home = show('/d1').container; await settle();
     const files = show('/d1/files').container; await settle();
     expect(home.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
-    expect(files.querySelector('aside > header > span:not(.flex-1)')?.textContent).toBe('Pages');
+    expect(files.querySelector('aside > header > span:not(.flex-1)')).toBeNull();
   });
 });
 

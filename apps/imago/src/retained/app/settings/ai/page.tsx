@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Sparkles } from 'lucide-react';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
 import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import { AI_PROVIDERS } from '@/retained/lib/ai/core/ai-providers-config';
 import { isOnPrem } from '@/retained/lib/deployment-mode';
@@ -59,7 +59,7 @@ export default function AiSettingsPage() {
       lede="PageSpace AI is included with your account. Providers are managed for the whole deployment — there are no keys to paste here."
     >
       <div className="flex items-center gap-3 rounded-xl border border-border px-4 py-3">
-        <Sparkles className="h-4 w-4 flex-none text-accent-deep" aria-hidden="true" />
+        <ImagoOrb size="glyph" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-foreground">PageSpace AI</div>
           <div className="text-xs text-muted-foreground">Powers chat, agents and page AI on this instance</div>

@@ -31,13 +31,13 @@ export type AgentPickerProps = {
   readonly onNewAgent: (() => void) | null;
 };
 
-/** Imago is its liquid-metal orb, alive in the head; any other agent is the sparkle on its hue. */
-const spark = (imago: boolean, size: 'head' | 'row'): ReactNode =>
+/** Imago is its liquid-metal orb, alive in the head; any other agent is the bot on its hue. */
+const agentMark = (imago: boolean, size: 'head' | 'row'): ReactNode =>
   imago ? (
     <ImagoOrb size={size === 'head' ? 'tile' : 'row'} live={size === 'head'} />
   ) : (
     <span className={agentTileClass(false, size)} aria-hidden="true">
-      {renderIcon({ name: 'sparkle', size: size === 'head' ? 12 : 14 })}
+      {renderIcon({ name: 'bot', size: size === 'head' ? 12 : 14 })}
     </span>
   );
 
@@ -57,7 +57,7 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
   return (
     <details ref={ref} className="relative" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className={pickerTriggerClass} aria-label={`Choose agent: ${agentName}`}>
-        {spark(imago, 'head')}
+        {agentMark(imago, 'head')}
         <span className="truncate">{agentName}</span>
         {renderIcon({ name: 'chevronDown', size: 11 })}
       </summary>
@@ -84,7 +84,7 @@ export function AgentPicker(props: AgentPickerProps): ReactNode {
                     className={pickerRowClass(checked, option.disabled)}
                     onClick={() => pick(option.value)}
                   >
-                    {spark(option.imago === true, 'row')}
+                    {agentMark(option.imago === true, 'row')}
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="truncate text-sm font-medium text-ink">{option.title}</span>
                       {option.meta === undefined ? null : <span className="truncate text-xs text-ink-muted">{option.meta}</span>}

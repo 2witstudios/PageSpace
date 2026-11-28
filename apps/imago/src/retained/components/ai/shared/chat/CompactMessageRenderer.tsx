@@ -69,14 +69,14 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
 
   return (
     <div
-      className={`group relative text-xs mb-1 min-w-0 max-w-full ${role === 'user'
+      className={`group relative text-chat mb-1 min-w-0 max-w-full ${role === 'user'
           ? 'p-2 rounded-md bg-primary-soft ml-2'
           : ''
         }`}
     >
       {role === 'user' && (
         <div className="flex items-center mb-0.5">
-          <div className="text-xs font-medium text-primary dark:text-primary">
+          <div className="text-sm font-medium text-primary dark:text-primary">
             {senderName}
           </div>
           <AgentBadge accountType={senderAccountType} className="ml-1.5" />
@@ -84,7 +84,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
       )}
 
       {isEditing && onSaveEdit && onCancelEdit ? (
-        <div className="text-xs">
+        <div className="text-chat">
           <MessageEditor
             initialContent={content}
             onSave={onSaveEdit}
@@ -94,7 +94,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
         </div>
       ) : (
         <>
-          <div className={`text-gray-900 dark:text-gray-100 prose prose-xs dark:prose-invert min-w-0 max-w-full break-words ${styles.compactProseContent}`}>
+          <div className={`text-gray-900 dark:text-gray-100 prose prose-chat dark:prose-invert min-w-0 max-w-full break-words ${styles.compactProseContent}`}>
             <StreamingMarkdown
               content={content}
               isStreaming={isStreaming}
@@ -103,7 +103,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
           </div>
           {/* Always show footer with buttons; timestamp only when createdAt exists */}
           <div className="flex items-center justify-between mt-1">
-            <div className="flex items-center gap-1 text-[10px] text-gray-500">
+            <div className="flex items-center gap-1 text-2xs text-gray-500">
               {createdAt && (
                 <>
                   {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -227,7 +227,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
       return (
         <div className="mb-3">
           <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
-            <div className="text-xs text-yellow-700 dark:text-yellow-300">
+            <div className="text-sm text-yellow-700 dark:text-yellow-300">
               No tasks found for this todo list.
             </div>
           </div>
@@ -240,7 +240,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
         fallback={
           <div className="mb-3">
             <div className="bg-yellow-50 dark:bg-yellow-950/30 border border-yellow-200 dark:border-yellow-800 rounded-md p-2">
-              <div className="text-xs text-yellow-700 dark:text-yellow-300">
+              <div className="text-sm text-yellow-700 dark:text-yellow-300">
                 Failed to load TODO list. Please refresh the page.
               </div>
             </div>
@@ -340,7 +340,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
           return null;
         })}
         {isInterrupted && (
-          <div className="mt-1 flex items-center gap-1.5 text-[10px]" data-testid="interrupted-affordance">
+          <div className="mt-1 flex items-center gap-1.5 text-2xs" data-testid="interrupted-affordance">
             <span className="rounded bg-amber-100 dark:bg-amber-950/40 px-1 py-0.5 font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
               Interrupted
             </span>

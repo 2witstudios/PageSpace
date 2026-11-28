@@ -1,6 +1,6 @@
 import { describe, test } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { chatChipFor, chatContextFor, consoleStage, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
+import { chatContextFor, consoleStage, isConsole, paneLayout, stageFor, type HideableSection } from './stage';
 
 const page = (pageId: string) => ({ kind: 'page', pageId }) as const;
 
@@ -629,33 +629,6 @@ describe('chatContextFor() before names load', () => {
   });
 });
 
-describe('chatChipFor() (IMC-2.1)', () => {
-  test('the bare name of what Imago answers about', () => {
-    assert({
-      given: 'a page, a setting, a drive tool, the account, a section index and the chat home',
-      should: 'name the page, the screen, "Account", the section, and nothing on the chat home',
-      actual: [
-        chatChipFor(stageFor('/d1/files/p1'), { object: 'Q4 Launch Plan' }),
-        chatChipFor(stageFor('/d1/settings/general'), {}),
-        chatChipFor(stageFor('/d1/calendar'), {}),
-        chatChipFor(stageFor('/account/display'), {}),
-        chatChipFor(stageFor('/d1/files'), {}),
-        chatChipFor(stageFor('/d1'), {}),
-      ],
-      expected: ['Q4 Launch Plan', 'Drive settings', 'Calendar', 'Account', 'Pages', null],
-    });
-  });
-
-  test('a page whose name has not loaded', () => {
-    assert({
-      given: 'a page open before its name arrives',
-      should: 'show no chip rather than a placeholder',
-      actual: chatChipFor(stageFor('/d1/files/p1'), {}),
-      expected: null,
-    });
-  });
-});
-
 describe('stageFor() notifications (IMC-9.14)', () => {
   test('the notifications page', () => {
     assert({
@@ -675,13 +648,13 @@ describe('stageFor() notifications (IMC-9.14)', () => {
     });
   });
 
-  test('Imago’s context and chip name the page', () => {
+  test('Imago’s context names the page', () => {
     const stage = stageFor('/notifications');
     assert({
       given: 'the notifications page',
-      should: 'name Imago’s context and chip Notifications',
-      actual: [chatContextFor(stage).contextLabel, chatChipFor(stage, {})],
-      expected: ['Notifications in context', 'Notifications'],
+      should: 'name Imago’s context Notifications',
+      actual: chatContextFor(stage).contextLabel,
+      expected: 'Notifications in context',
     });
   });
 });

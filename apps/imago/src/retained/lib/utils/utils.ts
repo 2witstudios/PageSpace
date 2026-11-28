@@ -1,5 +1,12 @@
 import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+/**
+ * tailwind-merge, taught imago's own type steps (globals.css text-chat and text-2xs, which the
+ * retained stylesheet takes from it): unknown `text-*` names otherwise read as colours, so a later
+ * `text-foreground` or `text-transparent` would silently strip the chat size.
+ */
+const twMerge = extendTailwindMerge({ extend: { theme: { text: ["chat", "2xs"] } } })
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

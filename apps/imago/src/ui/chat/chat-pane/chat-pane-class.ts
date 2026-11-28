@@ -19,10 +19,6 @@ export const chatThreadClass = (density: ChatDensity): string => threads[density
 /** The thread scrolls; the header and composer stay put. */
 export const chatScrollClass = 'min-h-0 flex-1 overflow-y-auto';
 
-/** The context chip in Imago's head: 22px, primary-soft, the bare page or screen name. */
-export const chatChipClass =
-  'inline-flex h-context-chip min-w-0 items-center truncate rounded-round bg-accent-soft px-2 text-xs font-medium whitespace-nowrap text-accent-deep';
-
 /** The invitation an empty conversation shows, centred in the thread. */
 export const chatEmptyClass = 'my-auto text-center text-ink-faint';
 

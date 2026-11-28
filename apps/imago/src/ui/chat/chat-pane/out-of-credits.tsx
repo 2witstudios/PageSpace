@@ -11,7 +11,7 @@ import { isBillingEnabled } from '@/retained/lib/deployment-mode';
 import { monthlyCreditsPhrase } from '@/retained/lib/subscription/credits';
 
 export const OUT_OF_CREDITS_COPY =
-  'You have run out of credits. Add credits or wait for your monthly allowance to reset.';
+  "You're out of credits. Add credits, or more arrive with your next monthly allowance.";
 
 /** Pro's monthly allowance, from the plan constants: "Upgrade to Pro — 150 credits/month". */
 export const UPGRADE_TO_PRO_LABEL = `Upgrade to Pro — ${monthlyCreditsPhrase('pro')}`;

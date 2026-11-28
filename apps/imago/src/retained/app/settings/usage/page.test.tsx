@@ -100,18 +100,18 @@ afterEach(() => {
 });
 
 describe('UsagePage (/account/usage)', () => {
-  test('renders the balance as whole credits with the monthly progress bar', () => {
+  test('renders the balance as one whole-credit total and the next grant', () => {
     render(<UsagePage />);
-    const bar = screen.getByRole('progressbar', { name: 'Monthly credits used' });
     assert({
-      given: 'a Pro balance of 90 of 150 monthly credits left',
-      should: 'show the left and allowance as whole credits and the used portion on the progress bar',
+      given: 'a Pro balance of 90 credits on a 150 monthly allowance ending Nov 3',
+      should: 'show the total and "150 more on Nov 3", with no used meter or reset (credits roll over)',
       actual: {
-        balance: screen.getByText('/ 150 credits').previousElementSibling?.textContent,
-        used: screen.getByText('60 of 150 used', { exact: false }) !== null,
-        bar: bar.tagName,
+        balance: screen.getByText('credits').previousElementSibling?.textContent,
+        next: screen.queryByText('150 more on Nov 3') !== null,
+        bar: screen.queryByRole('progressbar', { name: 'Monthly credits used' }),
+        used: screen.queryByText(/\d+ of [\d,]+ used/),
       },
-      expected: { balance: '90', used: true, bar: 'DIV' },
+      expected: { balance: '90', next: true, bar: null, used: null },
     });
   });
 

@@ -5,7 +5,8 @@ import useSWR from 'swr';
 import { signOut } from '@/lib/auth/sign-out';
 import { FeedbackDialog } from '@/retained/components/shared/FeedbackDialog';
 import { ThemeSwitcher } from '../../components/theme-switcher/theme-switcher';
-import { CREDITS } from '../../chat/spend-strip/spend-strip-model';
+import { TextSizeSwitcher } from '../../components/text-size-switcher/text-size-switcher';
+import { useCreditBalance } from '@/retained/hooks/useCreditBalance';
 import { useDisclosure } from '../disclosure/use-disclosure';
 import { useVerifyEmail } from '../banners/verify-email-banner';
 import { creditsCardOf } from './avatar-menu-model';
@@ -51,7 +52,9 @@ export const profileFrom = (body: unknown): Profile => {
  */
 export function AvatarMenu({ active = false, more }: { readonly active?: boolean; readonly more?: { readonly notifications: number } } = {}) {
   const { data } = useSWR<unknown>(ME);
-  const { data: creditsBody } = useSWR<unknown>(CREDITS);
+  // The live balance: /api/credits once, then each authoritative credits:updated push applied
+  // in place (and a refetch when the tab is shown again), so the card follows every turn.
+  const { balance } = useCreditBalance();
   const { open, setOpen, ref } = useDisclosure();
   const [signingOut, setSigningOut] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -76,9 +79,10 @@ export function AvatarMenu({ active = false, more }: { readonly active?: boolean
         onToggle: setOpen,
         onPick: () => setOpen(false),
         theme: <ThemeSwitcher />,
+        textSize: <TextSizeSwitcher />,
         onSignOut,
         signingOut,
-        credits: creditsCardOf(creditsBody),
+        credits: creditsCardOf(balance),
         onFeedback: () => setFeedbackOpen(true),
         verifyEmail: profile.emailVerified === false ? { onVerify: () => { setOpen(false); void resend(); } } : null,
         detailsRef: ref,

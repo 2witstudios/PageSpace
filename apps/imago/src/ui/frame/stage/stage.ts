@@ -312,17 +312,5 @@ export const chatContextFor = (
   };
 };
 
-/**
- * Imago's context chip (SPEC v3 assistant head): the bare name of what it answers about — the
- * open page (once its name loads), the screen, "Account", the section — and none on the chat
- * home, where the conversation itself is the context.
- */
-export const chatChipFor = (stage: Stage, names: { readonly object?: string; readonly screen?: string }): string | null => {
-  const { object } = stage;
-  if (object?.kind === 'page' || object?.kind === 'conversation') return named(names.object) ?? null;
-  if (object !== null && object.kind !== 'taskView') return named(names.screen) ?? sectionTitle(stage);
-  return sectionTitle(stage);
-};
-
 /** The middle's title when it has no head of its own: the section's name. */
 export const stageTitle = (stage: Stage): string => sectionTitle(stage) ?? 'Chat';

@@ -135,6 +135,7 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
     displayIsStreaming: false,
     isMessagesLoading: false,
     hasLoadError: false,
+    messagesLoadStatus: 'loaded',
     reloadConversation: vi.fn(async () => {}),
     handleSend: vi.fn(async () => true),
     handleStop: vi.fn(async () => {}),
@@ -185,6 +186,18 @@ function spendFailed() {
 }
 vi.mock('@/retained/hooks/useConversationSpend', () => ({
   useConversationSpend: () => spendHook.current,
+}));
+vi.mock('@/retained/components/ai/voice/realtime', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  VoiceCallBarForConversation: () => null,
+}));
+// Imago's own strip, recorded so a test can read what the composer told it.
+const imagoStrip = vi.hoisted(() => ({ props: [] as { hasMessages?: boolean }[] }));
+vi.mock('@/ui/chat/spend-strip/spend-strip', () => ({
+  SpendStrip: (props: { hasMessages?: boolean }) => {
+    imagoStrip.props.push(props);
+    return null;
+  },
 }));
 
 describe('SessionChat', () => {
@@ -243,6 +256,22 @@ describe('SessionChat', () => {
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('session-chat-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-messages-area')).not.toBeInTheDocument();
+  });
+
+  it("counts an existing conversation as having messages until it has loaded empty, so a choice never flashes or sticks", () => {
+    imagoStrip.props = [];
+    const strip = (state: Parameters<typeof baseChatState>[0]) => {
+      chatState.current = baseChatState(state);
+      render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" imagoComposer={{ placeholder: 'Ask anything…' }} />);
+      return imagoStrip.props.at(-1)?.hasMessages;
+    };
+    expect([
+      strip({ messagesLoadStatus: 'idle' }),
+      strip({ messagesLoadStatus: 'loading', isMessagesLoading: true }),
+      strip({ messagesLoadStatus: 'error', hasLoadError: true }),
+      strip({ messagesLoadStatus: 'loaded' }),
+      strip({ messagesLoadStatus: 'loaded', messages: [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Hi' }] }] }),
+    ]).toEqual([true, true, true, false, true]);
   });
 
   it('shows the load-error banner with a retry action that calls reloadConversation', () => {

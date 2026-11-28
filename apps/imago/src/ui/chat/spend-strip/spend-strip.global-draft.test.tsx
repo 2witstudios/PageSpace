@@ -45,6 +45,13 @@ describe('a fresh global draft source before sending', () => {
     expect(screen.getByRole('status', { name: 'Spending from' })).toHaveTextContent('Your credits');
   });
 
+  it('Given the same conversation once it has messages, should leave the composer quiet about a healthy source', async () => {
+    const { container } = render(<SpendStrip conversationId="draft" driveId="product" isGlobal hasMessages />, { wrapper });
+    await waitFor(() => expect(fetchWithAuth).toHaveBeenCalled());
+    await waitFor(() => expect(container.querySelector('[data-testid="composer-spend-strip-pending"]')).toBeNull());
+    expect(screen.queryByRole('status', { name: 'Spending from' })).toBeNull();
+  });
+
   it.each([401, 403, 500])('Given a %s refusal, should not pretend it is a draft or fetch a drive preview', async status => {
     fetchWithAuth.mockResolvedValue(new Response('{}', { status }));
     const { result } = renderHook(() => useConversationSpend('draft', { driveId: 'product', isGlobal: true }), { wrapper });

@@ -469,3 +469,36 @@ describe('imago theme selection and motion', () => {
     });
   });
 });
+
+describe('the touch-screen field floor', () => {
+  /** Every custom property the coarse-pointer block sets on fields, and its font-size. */
+  const coarseFields = (): Map<string, string> => {
+    const decls = new Map<string, string>();
+    postcss.parse(readFileSync(stylesheet, 'utf8')).walkAtRules('media', (media) => {
+      if (media.params !== '(pointer: coarse)') return;
+      media.walkDecls((decl) => {
+        decls.set(decl.prop, decl.value);
+      });
+    });
+    return decls;
+  };
+
+  test('fields never drop below 16px, and still scale with the text-size setting', () => {
+    const floor = coarseFields();
+    const sizes = ['--text-2xs', '--text-xs', '--text-sm', '--text-base', '--text-chat'];
+
+    assert({
+      given: 'the type tokens the touch-screen block redefines on fields',
+      should: 'floor each at 16px over its own rem value, so a larger root size still enlarges it',
+      actual: sizes.map((name) => floor.get(name)),
+      expected: sizes.map((name) => `max(16px, ${imagoTokens.get(name)})`),
+    });
+
+    assert({
+      given: 'a field with no size utility',
+      should: 'inherit at least 16px',
+      actual: floor.get('font-size'),
+      expected: 'max(16px, 1em)',
+    });
+  });
+});

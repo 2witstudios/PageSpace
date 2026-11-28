@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Bot, Check, RotateCcw, Sparkles } from 'lucide-react';
+import { Bot, Check, RotateCcw } from 'lucide-react';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/retained/components/ui/dialog';
 import { Button } from '@/retained/components/ui/button';
 import { Textarea } from '@/retained/components/ui/textarea';
@@ -326,8 +327,8 @@ function Step({
 
 function Avatar() {
   return (
-    <span aria-hidden="true" className="mt-0.5 grid size-[22px] shrink-0 place-items-center rounded-md bg-primary">
-      <Sparkles className="size-3 text-primary-foreground" />
+    <span aria-hidden="true" className="mt-0.5 grid size-[22px] shrink-0 place-items-center">
+      <ImagoOrb size="glyph" />
     </span>
   );
 }

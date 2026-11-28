@@ -10,8 +10,8 @@ describe('renderPageIcon()', () => {
     assert({
       given: 'any page but Imago’s',
       should: 'draw its type icon',
-      actual: renderToString(renderPageIcon({ icon: 'sparkle', size: 15 })),
-      expected: renderToString(renderIcon({ name: 'sparkle', size: 15 })),
+      actual: renderToString(renderPageIcon({ icon: 'bot', size: 15 })),
+      expected: renderToString(renderIcon({ name: 'bot', size: 15 })),
     });
   });
 
@@ -19,7 +19,7 @@ describe('renderPageIcon()', () => {
     assert({
       given: 'Imago’s own page',
       should: 'draw Imago’s orb at glyph size instead',
-      actual: renderToString(renderPageIcon({ icon: 'sparkle', size: 15, imago: true })),
+      actual: renderToString(renderPageIcon({ icon: 'bot', size: 15, imago: true })),
       expected: `<canvas class="${imagoOrbClass('glyph', false)}" data-imago-orb="glyph" aria-hidden="true"></canvas>`,
     });
   });

@@ -306,7 +306,7 @@ export function SessionChatView({
         />
         {imagoComposer?.aboveComposer}
         {spendScope && !isReadOnly && (imagoComposer
-          ? <SpendStrip conversationId={conversationId} {...spendScope} />
+          ? <SpendStrip conversationId={conversationId} {...spendScope} hasMessages={chat.messages.length > 0 || chat.messagesLoadStatus !== 'loaded'} />
           : <ComposerSpendStrip conversationId={conversationId} {...spendScope} hasMessages={chat.messages.length > 0} persistentBelowLg />)}
         <ChatInput
           value={input}

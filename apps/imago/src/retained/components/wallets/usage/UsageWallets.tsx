@@ -16,6 +16,7 @@ import { Switch } from '@/retained/components/ui/switch';
 import { fetchWithAuth, put } from '@/retained/lib/auth/auth-fetch';
 import { orgErrorMessage } from '@/retained/lib/orgs/org-error-copy';
 import { useCreditBalance } from '@/retained/hooks/useCreditBalance';
+import { nextGrantOf } from '@/lib/credits/next-grant';
 import { useDriveStore } from '@/retained/hooks/useDrive';
 import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
 import { useMyWallets, type MyWallets } from '@/retained/hooks/useMyWallets';
@@ -80,9 +81,10 @@ function SpendFromSection({ wallets }: { wallets: MyWallets }) {
   const drives = useDriveStore((state) => state.drives);
   const fundedByMe = new Set(wallets.funds.driveWallets.map((w) => w.walletId));
   const orgNameOfDrive = (driveId: string) => orgById(drives.find((d) => d.id === driveId)?.orgId)?.name ?? null;
-  const renews = balance?.monthly.periodEnd ? new Date(balance.monthly.periodEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
+  // The same promise (and UTC date) as the credit balance card and the account menu.
+  const next = nextGrantOf(balance);
   const plan = balance?.subscriptionTier ? `${balance.subscriptionTier.charAt(0).toUpperCase()}${balance.subscriptionTier.slice(1)} plan` : null;
-  const personalDetail = ['Personal balance', plan, balance && balance.monthly.allowance > 0 && renews ? `${formatCreditCount(balance.monthly.allowance)} credits included on ${renews}` : null]
+  const personalDetail = ['Personal balance', plan, next ? `${formatCreditCount(next.cents)} credits included on ${next.on}` : null]
     .filter(Boolean)
     .join(' · ');
 

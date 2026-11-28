@@ -9,7 +9,12 @@ import { useSpendContextStore, type SpendContext } from '@/retained/stores/useSp
 import { useRetainedChatSelection } from '@/retained-adapters/session-selection';
 import { RetainedSurface } from '@/retained-adapters/retained-provider';
 
-/** The focused session is authoritative; a native draft previews its agent's actual drive. */
+/**
+ * Who pays, in Imago's head, only when there are several sources (spendChipModel): the choice,
+ * or a refusal with another source to choose. A single-source refusal shows in the composer's
+ * spend strip instead. The focused session is authoritative; a native draft previews its agent's
+ * actual drive.
+ */
 export function HeaderSpendSource({ agentId, conversationId }: { agentId: string | null; conversationId: string | null }) {
   const active = useSpendContextStore(state => state.active);
   const entries = useSpendContextStore(state => state.entries);
@@ -25,7 +30,9 @@ export function HeaderSpendSource({ agentId, conversationId }: { agentId: string
   const spend = preview ? drive : conversation;
   const resolved = spend?.resolved;
   const selected = resolved?.kind === 'spend' ? spend?.options.find(option => option.walletId === resolved.walletId) ?? null : null;
-  const chip = spend ? spendChipModel(spend) ?? (selected ? { source: selected.source, text: selected.remainingCredits === null ? 'No cap' : `${selected.remainingCredits} credits`, tone: 'normal' as const, ariaLabel: `Spending from ${selected.label}: ${selected.remainingCredits === null ? 'No cap' : `${selected.remainingCredits} credits`}` } : null) : null;
+  // Only several sources earn the head a chip; one source says nothing here, healthy or refused
+  // (the strip shows a refusal, and the balance lives in the account menu).
+  const chip = spend ? spendChipModel(spend) : null;
   const pinnedStillMounted = pinned === null || entries.some(entry => entry.conversationId === pinned.conversationId) || fallback?.conversationId === pinned.conversationId;
   useEffect(() => { if (!pinnedStillMounted) { setOpen(false); setPinned(null); } }, [pinnedStillMounted]);
   if (!spend || !chip) return null;

@@ -1,7 +1,7 @@
 'use client';
 
 import { useRouter } from '@/retained-adapters/navigation';
-import { FileText, Hash, CheckSquare, MessageSquare, Folder, Sparkles, Table, Code, File } from 'lucide-react';
+import { FileText, Hash, CheckSquare, Bot, Folder, FileImage, Table, Code, File } from 'lucide-react';
 import type { LinkPreviewData } from '@/retained/hooks/useLinkPreview';
 
 export function getPageTypeLabel(type: string): string {
@@ -40,9 +40,9 @@ function PageTypeIcon({ type }: { type: string }) {
     case 'DOCUMENT': return <FileText className={cls} />;
     case 'CHANNEL': return <Hash className={cls} />;
     case 'TASK_LIST': return <CheckSquare className={cls} />;
-    case 'AI_CHAT': return <MessageSquare className={cls} />;
+    case 'AI_CHAT': return <Bot className={cls} />;
     case 'FOLDER': return <Folder className={cls} />;
-    case 'CANVAS': return <Sparkles className={cls} />;
+    case 'CANVAS': return <FileImage className={cls} />;
     case 'SHEET': return <Table className={cls} />;
     case 'CODE': return <Code className={cls} />;
     case 'FILE': return <File className={cls} />;

@@ -6,6 +6,14 @@ import tailwind from '@tailwindcss/postcss';
 const appRoot = path.resolve(import.meta.dirname, '..');
 const classicSource = path.resolve(appRoot, '../web/src/app/globals.css');
 const source = path.join(appRoot, 'src/retained-adapters/retained.source.css');
+const imagoGlobals = await readFile(path.join(appRoot, 'src/app/globals.css'), 'utf8');
+/** One of imago's type tokens, read from its theme so retained text sizes never drift from it. */
+const imagoToken = (name) => {
+  // The @theme token itself (a plain rem), not the touch-screen floor's max(16px, …) override.
+  const match = imagoGlobals.match(new RegExp(`--${name}:\\s*([0-9.]+rem);`));
+  if (match === null) throw new Error(`imago's globals.css has no --${name} token`);
+  return match[1].trim();
+};
 let css = await readFile(classicSource, 'utf8');
 css = css.replace('../styles/tiptap.css', '../retained/styles/tiptap.css');
 // Explicit scan of retained features, not the classic application shell.
@@ -34,12 +42,30 @@ css += `
 .find-highlight { background-color: #fef08a; }
 .find-highlight-current { background-color: #fbbf24; }
 .prose-xs { font-size: .75rem; }
+/* The chat's reading size, from imago's own scale (text-chat, text-2xs), so the chat reads larger
+   than the sidebar and scales with the text-size setting. The prose override is unlayered so it
+   wins over .prose's own 1rem; prose children are em-relative and follow it. */
+@theme { --text-2xs: ${imagoToken('text-2xs')}; --text-chat: ${imagoToken('text-chat')}; }
+.prose-chat { font-size: var(--text-chat); }
 .prose-red { --tw-prose-body: var(--color-red-700); }
 .holographic-card { position: relative; }
 `;
 await writeFile(source, css);
 const result = await postcss([tailwind({ base: appRoot, optimize: false })]).process(css, { from: source });
 const root = result.root;
+/** A type token as the compiled retained theme declares it (Tailwind's scale plus imago's two). */
+const retainedToken = (name) => {
+  let value;
+  root.walkAtRules('layer', (layer) => {
+    if (layer.params !== 'theme' || value !== undefined) return;
+    layer.walkDecls(name, (decl) => { value ??= decl.value; });
+  });
+  if (value === undefined) throw new Error(`the retained theme has no ${name}`);
+  return value;
+};
+const fieldFloor = ['--text-2xs', '--text-xs', '--text-sm', '--text-base', '--text-chat']
+  .map((name) => `${name}: max(16px, ${retainedToken(name)});`)
+  .join(' ');
 const scoped = postcss.atRule({ name: 'scope', params: '(.retained-ui)' });
 const output = postcss.root();
 root.walkRules(rule => {
@@ -57,9 +83,18 @@ output.append(postcss.parse(`
     --font-sans: var(--font-body);
     --font-mono: var(--font-face-mono), monospace;
     font-family: var(--font-body);
-    font-size: 14px;
+    font-size: 0.875rem;
     color: var(--foreground);
     line-height: 1.6;
+  }
+  /* Touch screens: imago's globals.css floors fields at 16px over IMAGO's scale (text-base
+     0.875rem). Retained fields size from Tailwind's scale (text-base 1rem), so they are floored
+     again over their own rems; unlayered, this wins over imago's layered rule, and a larger
+     text-size setting still enlarges them past 16px. */
+  @media (pointer: coarse) {
+    :scope :is(input, textarea, select, [contenteditable]:not([contenteditable='false'])) {
+      ${fieldFloor}
+    }
   }
 }
 `));

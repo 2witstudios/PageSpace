@@ -47,7 +47,6 @@ import {
   Send,
   Settings,
   Share2,
-  Sparkles,
   Sun,
   Square,
   SquareTerminal,
@@ -79,7 +78,6 @@ export const icons = {
   folder: Folder,
   page: FileText,
   plus: Plus,
-  sparkle: Sparkles,
   send: Send,
   share: Share2,
   grid: LayoutGrid,
@@ -100,7 +98,6 @@ export const icons = {
   monitor: Monitor,
   // The spine's drive tools and bell (IMC-1.4).
   activity: Activity,
-  agents: Sparkles,
   workflows: Workflow,
   members: Users,
   bell: Bell,

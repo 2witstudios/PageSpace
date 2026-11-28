@@ -43,3 +43,23 @@ describe('renderTaskActivity() agent marker (Agent Signup Phase 2c)', () => {
     });
   });
 });
+
+describe('renderTaskActivity() Imago marker', () => {
+  test('a change by Imago', () => {
+    assert({
+      given: 'an activity Imago made',
+      should: 'mark it with Imago’s orb at glyph size',
+      actual: renderToString(renderTaskActivity([row({ actor: 'Imago', byImago: true })])).includes('data-imago-orb="glyph"'),
+      expected: true,
+    });
+  });
+
+  test('a change by a person', () => {
+    assert({
+      given: 'an activity a person made',
+      should: 'draw no orb',
+      actual: renderToString(renderTaskActivity([row()])).includes('data-imago-orb'),
+      expected: false,
+    });
+  });
+});

@@ -17,7 +17,7 @@ export interface AIErrorCause {
   httpStatus: number | null;
   /** User-facing copy — never the raw server/JSON body. */
   message: string;
-  /** Whether the user can reasonably retry (vs. needing to buy credits / wait for a reset). */
+  /** Whether the user can reasonably retry (vs. needing to buy credits / wait for the next allowance). */
   retryable: boolean;
   /**
    * SPEND-4: on `spend_source_refused`, the source the call named (null when several

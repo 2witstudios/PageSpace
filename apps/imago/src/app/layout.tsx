@@ -12,6 +12,8 @@ import {
   parseThemePreference,
 } from '@/lib/theme/theme-preference';
 import { ThemeProvider } from '@/lib/theme/theme-provider';
+import { TEXT_SIZE_COOKIE_NAME, parseTextSize } from '@/lib/text-size/text-size-preference';
+import { TextSizeProvider } from '@/lib/text-size/text-size-provider';
 import './globals.css';
 import '../retained-adapters/retained.generated.css';
 
@@ -55,14 +57,17 @@ export default async function RootLayout({
   // The served HTML carries the viewer's theme: data-theme selects
   // color-scheme in globals.css, so the first paint is already right and no
   // script has to correct it.
-  const theme = parseThemePreference(
-    (await cookies()).get(THEME_COOKIE_NAME)?.value,
-  );
+  const jar = await cookies();
+  const theme = parseThemePreference(jar.get(THEME_COOKIE_NAME)?.value);
+  // The text-size setting, likewise: data-text-size scales the root font size
+  // in globals.css, so the first paint is already at the viewer's size.
+  const textSize = parseTextSize(jar.get(TEXT_SIZE_COOKIE_NAME)?.value);
 
   return (
     <html
       lang="en"
       data-theme={theme}
+      data-text-size={textSize}
       className={`${sans.variable} ${mono.variable}`}
     >
       <body>
@@ -77,10 +82,13 @@ export default async function RootLayout({
             layout never remounts. Every imago page is behind the session
             middleware, so the tab is signed in when the socket connects.
             The theme provider starts from the same cookie as data-theme, so
-            the switcher hydrates on the theme the page was served with. */}
+            the switcher hydrates on the theme the page was served with; the
+            text-size provider does the same with data-text-size. */}
         <ImagoSWRProvider>
           <RealtimeProvider>
-            <ThemeProvider initialPreference={theme}>{children}</ThemeProvider>
+            <ThemeProvider initialPreference={theme}>
+              <TextSizeProvider initialSize={textSize}>{children}</TextSizeProvider>
+            </ThemeProvider>
           </RealtimeProvider>
         </ImagoSWRProvider>
       </body>

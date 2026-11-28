@@ -13,7 +13,7 @@ export type AgentOption = {
   readonly disabled: boolean;
   /** The row's second line in the picker: "Global · your chosen model", or model · folder. */
   readonly meta?: string;
-  /** Imago's own row, drawn with its orb; every other agent has the sparkle tile. */
+  /** Imago's own row, drawn with its orb; every other agent has the bot tile. */
   readonly imago?: true;
 };
 

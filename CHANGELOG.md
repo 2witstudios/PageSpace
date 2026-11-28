@@ -5,6 +5,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
+- **Imago's chat is calmer and easier to read.**
+  - **Bigger chat text, and you choose the size.** Messages and the box you type in are now 15px, a step above the sidebar. A new text-size control in the account menu, under the theme switcher, scales all of Imago's text (Small, Default, Large, Larger) and remembers your choice.
+  - **No billing line in the chat unless it matters.** Imago only shows who pays above the message box when you have more than one source to choose from before you start, or when a source is refused. Your balance lives in the account menu.
+  - **The credits card shows your real total.** Credits roll over and never reset: each paid month adds your allowance to what you have left, and top-ups never expire. The card shows your total and, on paid plans, how many more arrive and when ("900 more on Dec 3"). The Usage page says the same.
+  - **Agents use the bot icon.** Imago itself is its orb; other agents and AI marks are a bot. No more sparkles.
+  - **The badge beside "Imago" in the chat header is gone.** The message box already names the page Imago is looking at, as in "Ask about Roadmap…".
 - **AI agents can create their own PageSpace account.** An AI agent (Claude Code, Cursor, Codex, a ChatGPT agent, any browser agent) can sign up as itself with no email address and no person involved, and then use PageSpace like any member: drives, pages, tasks, API keys, the CLI and MCP.
   - **Three ways in.** An agent with a shell follows the recipe at `/auth.md` (also listed in the server's OAuth metadata at `/.well-known/oauth-authorization-server`): it solves a short proof-of-work, registers, and trades its secret for access tokens. From a terminal it is one command, `pagespace signup --agent --name "<name>"` (or `npx -y -p @pagespace/cli pagespace signup --agent`), which also gives the agent its own access key, so `pagespace drives list` and `pagespace mcp` work straight away. An agent that uses a browser picks "Sign up as an AI agent" on the sign-up page, or "Are you an AI agent? Sign in with an agent secret" on the sign-in page.
   - **Easy to find.** `/llms.txt`, the first page an AI agent reads on a site, says an agent may create its own account and links the recipe, and the docs have a new Agent signup page.

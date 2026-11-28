@@ -5,7 +5,6 @@ import { renderIcon } from '../../components/icon/icon.render';
 import { renderRailTooltip, renderSpineCount } from '../rail-button/rail-button.render';
 import {
   accountBadgeClass,
-  accountCountClass,
   accountEmailClass,
   accountHeadClass,
   accountItemClass,
@@ -16,8 +15,6 @@ import {
   creditsCardClass,
   creditsFigureClass,
   creditsHeadClass,
-  creditsMeterClass,
-  creditsMeterFillClass,
   creditsNoteClass,
   phoneAccountMenuClass,
   phoneMoreClass,
@@ -44,6 +41,8 @@ export type AvatarMenuRenderProps = {
   readonly onPick: () => void;
   /** The theme switcher, bound to the page's theme by the container. */
   readonly theme: ReactNode;
+  /** The text-size control, bound to the page's text size by the container. */
+  readonly textSize: ReactNode;
   /** Void action: revokes the session and leaves for sign-in. */
   readonly onSignOut: () => void;
   readonly signingOut: boolean;
@@ -65,7 +64,7 @@ export type AvatarMenuRenderProps = {
 
 /**
  * The avatar at the foot of the rail and its menu (C-Shell-AccountMenu): who is signed in, the
- * credits card, the account's pages, feedback, the theme and log out.
+ * credits card, the account's pages, feedback, the theme, the text size and log out.
  */
 export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
   const {
@@ -76,6 +75,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
     onToggle,
     onPick,
     theme,
+    textSize,
     onSignOut,
     signingOut,
     credits,
@@ -125,17 +125,15 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
         {credits === null ? null : (
           <li className={creditsCardClass} data-credits-card="">
             <div className={creditsHeadClass}>
-              <span className="font-medium uppercase tracking-wide">Your credits</span>
-              <span>{credits.plan === null ? null : credits.resets === null ? credits.plan : `${credits.plan} · resets ${credits.resets}`}</span>
+              <span className="font-medium uppercase tracking-wide">Credits</span>
+              {credits.plan === null ? null : <span>{credits.plan}</span>}
             </div>
-            <div className={creditsFigureClass}>
-              {countOf(credits.left)} <span className="font-normal text-ink-muted">/ {countOf(credits.allowance)} credits</span>
-            </div>
-            <div role="progressbar" aria-label="Monthly credits left" aria-valuenow={credits.percent} aria-valuemin={0} aria-valuemax={100} className={creditsMeterClass}>
-              <span className={creditsMeterFillClass} style={{ display: 'block', width: `${credits.percent}%` }} />
-            </div>
-            {credits.bonus > 0 ? <span className={creditsNoteClass}>+{countOf(credits.bonus)} bonus credits from top-ups</span> : null}
-            {credits.reserved > 0 ? <span className={creditsNoteClass}>~{countOf(credits.reserved)} reserved on in-flight calls</span> : null}
+            <div className={creditsFigureClass}>{countOf(credits.total)} credits</div>
+            {credits.nextGrant === null ? null : (
+              <span className={creditsNoteClass}>
+                {countOf(credits.nextGrant.amount)} more on {credits.nextGrant.on}
+              </span>
+            )}
             <Link href={USAGE_PATH} prefetch={true} className={creditsBuyClass} onClick={onPick}>
               Buy credits
             </Link>
@@ -153,8 +151,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
         </li>
         <li>
           <Link href={USAGE_PATH} prefetch={true} className={accountItemClass} onClick={onPick}>
-            <span>Usage</span>
-            {credits === null ? null : <span className={accountCountClass}>{`${countOf(credits.left)} / ${countOf(credits.allowance)}`}</span>}
+            Usage
           </Link>
         </li>
         {credits === null ? null : (
@@ -182,6 +179,7 @@ export function renderAvatarMenu(props: AvatarMenuRenderProps): ReactNode {
           </button>
         </li>
         <li>{theme}</li>
+        <li>{textSize}</li>
         <li>
           {/* Not on the board: kept during the rollout so classic PageSpace stays one click away (D5). */}
           <a href={CLASSIC_HOME} className={accountItemClass}>

@@ -28,16 +28,9 @@ export const creditsHeadClass = 'flex items-baseline justify-between gap-2 text-
 
 export const creditsFigureClass = 'text-sm font-semibold tabular-nums text-ink';
 
-export const creditsMeterClass = 'h-1 w-full overflow-hidden rounded-full bg-fill';
-
-export const creditsMeterFillClass = 'h-full rounded-full bg-accent-deep';
-
 export const creditsNoteClass = 'text-xs text-ink-faint';
 
 export const creditsBuyClass = 'inline-flex items-center gap-1 pt-1 text-xs font-medium text-accent-deep no-underline hover:underline';
-
-/** A row's trailing figure, such as Usage's "612 / 900". */
-export const accountCountClass = 'ml-auto text-xs tabular-nums text-ink-muted';
 
 /** The "Unverified" tag on the Verify Email row. */
 export const accountBadgeClass = 'ml-auto rounded-md px-2 py-1 text-xs font-medium text-status-warning-ink bg-status-warning/10';

@@ -67,7 +67,23 @@ test('SPEND-1 (partial) UI-8 (partial) opening an org drive keeps the global Ima
   const w = await world();
   const page = await open(browser, baseURL!, w.user, imagoPath(w.driveId, 'files'));
   const chat = page.getByRole('complementary', { name: 'Imago', exact: true });
-  await expect(chat.locator('header').getByTestId('spend-source-chip')).toHaveAttribute('aria-label', /^Spending from Your credits:/);
+  // The column previews the global agent's own (home) drive, never the org drive in view. Reload
+  // with a listener on that preview so the quiet-UI checks below run on settled data.
+  const homePreview = `/api/wallets/drives/${encodeURIComponent(w.user.homeDriveId)}`;
+  const previewed = page.waitForResponse(response => response.request().method() === 'GET' && new URL(response.url()).pathname === homePreview);
+  await page.reload(); await hydrated(page);
+  expect((await previewed).ok()).toBe(true);
+  // One healthy personal source is nothing to choose and nothing wrong: no chip, no strip, and
+  // nothing in the column names the org wallet (spend-surface D20.8).
+  await expect(chat.getByLabel('Message Imago', { exact: true })).toBeVisible();
+  await expect(chat.locator('header').getByTestId('spend-source-chip')).toHaveCount(0);
+  await expect(chat.getByText('Product wallet')).toHaveCount(0);
+  // The payer, from the server: the same preview the column reads resolves to the viewer's own wallet.
+  const own = await getBalance(w.user.id);
+  const preview = JSON.parse((await browserGet(page, homePreview)).body) as { options: { walletId: string }[]; resolved: { kind: string; walletId?: string } };
+  expect(preview.resolved).toMatchObject({ kind: 'spend', walletId: own!.id });
+  expect(preview.resolved.walletId).not.toBe(w.walletId);
+  expect(preview.options.map(option => option.walletId)).not.toContain(w.walletId);
   const roster = JSON.parse((await browserGet(page, '/api/user/builtin-agents')).body) as { agents: { key: string; pageId: string | null }[] };
   const imagoId = roster.agents.find(agent => agent.key === 'imago')?.pageId;
   expect(imagoId).toBeTruthy();

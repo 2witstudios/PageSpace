@@ -16,6 +16,30 @@ vi.mock('@/lib/auth/sign-out', () => ({ signOut }));
 vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
   ThemeSwitcher: () => h('div', { role: 'radiogroup', 'aria-label': 'Theme' }),
 }));
+vi.mock('@/ui/components/text-size-switcher/text-size-switcher', () => ({
+  TextSizeSwitcher: () => h('div', { role: 'group', 'aria-label': 'Text size' }),
+}));
+// The live balance (retained useCreditBalance): /api/credits through the SWR provider, then the
+// realtime socket's credits:updated pushes. A stand-in socket lets a test push a new balance.
+const live = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(payload: unknown) => void>>();
+  const socket = {
+    on: (event: string, handler: (payload: unknown) => void) => {
+      handlers.set(event, (handlers.get(event) ?? new Set()).add(handler));
+    },
+    off: (event: string, handler: (payload: unknown) => void) => {
+      handlers.get(event)?.delete(handler);
+    },
+  };
+  const store = { socket, connect: async () => {} };
+  return {
+    store,
+    emit: (event: string, payload: unknown) => handlers.get(event)?.forEach((handler) => handler(payload)),
+  };
+});
+vi.mock('@/retained/stores/useSocketStore', () => ({
+  useSocketStore: (select: (store: typeof live.store) => unknown) => select(live.store),
+}));
 
 const { AvatarMenu, ME, profileFrom } = await import('./avatar-menu');
 
@@ -58,21 +82,22 @@ describe('AvatarMenu', () => {
       </ImagoSWRProvider>,
     );
     await settle(() => {
-      if (!container.textContent?.includes('Ada Lovelace') || !container.textContent?.includes('/ 900 credits')) throw new Error('not loaded');
+      if (!container.textContent?.includes('Ada Lovelace') || !container.textContent?.includes('612 credits')) throw new Error('not loaded');
     });
 
     assert({
       given: 'the profile from /api/auth/me and the balance from /api/credits',
-      should: 'load each once, draw the avatar from its same-origin picture, and list the account rows',
+      should: 'load each once, draw the avatar from its same-origin picture, show the total and the next grant, and list the account rows',
       actual: [
         fake.count(`GET ${ME}`),
         fake.count('GET /api/credits'),
         container.querySelector('summary img')?.getAttribute('src'),
         container.textContent?.includes('ada@example.com'),
+        container.textContent?.includes('612 credits900 more on Nov 3'),
         rowsOf(container).at(-1),
         container.querySelectorAll('a[href="/account/profile"]').length,
       ],
-      expected: [1, 1, '/api/avatar/user-1.png', true, 'Log out', 1],
+      expected: [1, 1, '/api/avatar/user-1.png', true, true, 'Log out', 1],
     });
   });
 
@@ -118,6 +143,40 @@ describe('AvatarMenu', () => {
       should: 'leave out the Verify Email row',
       actual: rowsOf(container).some((row) => row?.startsWith('Verify Email')),
       expected: false,
+    });
+  });
+
+  test('a credits:updated push updates the card', async () => {
+    const fake = web(true);
+    const container = mount(
+      <ImagoSWRProvider client={fake.client}>
+        <AvatarMenu />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!container.textContent?.includes('612 credits')) throw new Error('not loaded');
+    });
+    // A turn settles: the server pushes the authoritative balance (no subscriptionTier).
+    act(() => {
+      live.emit('credits:updated', {
+        billingEnabled: true,
+        monthly: { remaining: 5980, allowance: 9000, periodEnd: '2026-11-03T12:00:00.000Z' },
+        topup: { remaining: 0 },
+        debt: 0,
+        spendable: 5980,
+        reserved: 0,
+      });
+    });
+    await settle(() => {
+      if (!container.textContent?.includes('598 credits')) throw new Error('not updated');
+    });
+    const card = container.querySelector('[data-credits-card]')?.textContent?.replace(/\s+/g, ' ').trim();
+
+    assert({
+      given: 'a credits:updated push after a turn',
+      should: 'show the pushed total on the card, keep the plan, and not refetch the balance',
+      actual: [card, fake.count('GET /api/credits')],
+      expected: ['CreditsPro598 credits900 more on Nov 3Buy credits', 1],
     });
   });
 

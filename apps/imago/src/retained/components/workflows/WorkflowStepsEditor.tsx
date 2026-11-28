@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Trash2, Plus, Braces, Sparkles, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronUp, Trash2, Plus, Braces, Bot, Wrench } from 'lucide-react';
 import { Button } from '@/retained/components/ui/button';
 import { Input } from '@/retained/components/ui/input';
 import { Textarea } from '@/retained/components/ui/textarea';
@@ -435,7 +435,7 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
               className="flex items-center gap-2 flex-1 min-w-0 text-left"
             >
               <Badge variant={step.kind === 'ai' ? 'default' : 'secondary'} className="shrink-0 gap-1 font-normal">
-                {step.kind === 'ai' ? <Sparkles className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
+                {step.kind === 'ai' ? <Bot className="h-3 w-3" /> : <Wrench className="h-3 w-3" />}
                 {index + 1}. {step.kind === 'ai' ? 'AI' : TOOL_FIELD_SPECS[step.toolName]?.label ?? step.toolName}
               </Badge>
               <span className="text-xs text-muted-foreground truncate">
@@ -491,7 +491,7 @@ export function WorkflowStepsEditor({ steps, onChange, agents }: WorkflowStepsEd
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start">
           <DropdownMenuItem onClick={() => addStep('ai')}>
-            <Sparkles className="h-3.5 w-3.5 mr-2" />
+            <Bot className="h-3.5 w-3.5 mr-2" />
             AI step
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => addStep('tool')}>

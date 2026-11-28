@@ -340,6 +340,7 @@ export function useAssistantSessionChat({
     displayIsStreaming,
     isMessagesLoading: loadState.isLoading,
     hasLoadError: loadState.hasError,
+    messagesLoadStatus: loadState.status,
     reloadConversation,
     handleSend,
     handleStop,

@@ -206,6 +206,8 @@
   --text-sm: 0.8125rem;
   /* 14px: the UI and chat size, as PageSpace sets it. */
   --text-base: 0.875rem;
+  /* 15px: chat messages and the composer, a step above the sidebar's 13px rows. */
+  --text-chat: 0.9375rem;
   --text-md: 1rem;
   --text-lg: 1.1875rem;
   --text-xl: 1.4375rem;
@@ -288,20 +290,38 @@
   /* iOS zooms into a focused text field under 16px. On touch screens every field and editor is
      at least 16px, so focus never zooms and pinch zoom stays free; fine pointers (the desktop)
      keep their sizes. A field with no size utility inherits at least 16px; one with a small
-     size utility (text-sm is var(--text-sm)) reads 16px from the tokens redefined on it, and
-     larger sizes such as titles are untouched. */
+     size utility (text-sm is var(--text-sm)) reads at least 16px from the tokens redefined on
+     it, and larger sizes such as titles are untouched. Each floor is max(16px, <its rem>), with
+     the rem written out (a token cannot refer to itself), so a larger text-size setting still
+     enlarges fields past 16px. */
   @media (pointer: coarse) {
     input,
     textarea,
     select,
     [contenteditable]:not([contenteditable='false']) {
       font-size: max(16px, 1em);
-      --text-2xs: 16px;
-      --text-xs: 16px;
-      --text-sm: 16px;
-      --text-base: 16px;
+      --text-2xs: max(16px, 0.6875rem);
+      --text-xs: max(16px, 0.75rem);
+      --text-sm: max(16px, 0.8125rem);
+      --text-base: max(16px, 0.875rem);
+      --text-chat: max(16px, 0.9375rem);
     }
   }
+}
+
+/* The text-size setting (lib/text-size): <html data-text-size> scales the root font size, and
+   every type token is rem, so all text follows while px spacing keeps the layout. The root
+   layout renders it from the imago-text-size cookie, so nothing flashes. Default sets nothing. */
+:root[data-text-size='small'] {
+  font-size: 87.5%;
+}
+
+:root[data-text-size='large'] {
+  font-size: 112.5%;
+}
+
+:root[data-text-size='larger'] {
+  font-size: 125%;
 }
 
 /* Reduced motion cuts every duration to 0.01ms and every delay to zero:

@@ -740,6 +740,8 @@
       --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
       --default-font-family: var(--font-geist-sans);
       --default-mono-font-family: var(--font-geist-mono);
+      --text-2xs: 0.6875rem;
+      --text-chat: 0.9375rem;
     }
   }
   @layer base {
@@ -4630,6 +4632,9 @@
       font-size: var(--text-xs);
       line-height: var(--tw-leading, var(--text-xs--line-height));
     }
+    .text-2xs {
+      font-size: var(--text-2xs);
+    }
     .text-\[0\.8rem\] {
       font-size: 0.8rem;
     }
@@ -4674,6 +4679,9 @@
     }
     .text-\[40px\] {
       font-size: 40px;
+    }
+    .text-chat {
+      font-size: var(--text-chat);
     }
     .leading-4 {
       --tw-leading: calc(var(--spacing) * 4);
@@ -10103,6 +10111,9 @@
   .prose-xs {
     font-size: .75rem;
   }
+  .prose-chat {
+    font-size: var(--text-chat);
+  }
   .prose-red {
     --tw-prose-body: var(--color-red-700);
   }
@@ -10212,8 +10223,17 @@
     --font-sans: var(--font-body);
     --font-mono: var(--font-face-mono), monospace;
     font-family: var(--font-body);
-    font-size: 14px;
+    font-size: 0.875rem;
     color: var(--foreground);
     line-height: 1.6;
+  }
+  /* Touch screens: imago's globals.css floors fields at 16px over IMAGO's scale (text-base
+     0.875rem). Retained fields size from Tailwind's scale (text-base 1rem), so they are floored
+     again over their own rems; unlayered, this wins over imago's layered rule, and a larger
+     text-size setting still enlarges them past 16px. */
+  @media (pointer: coarse) {
+    :scope :is(input, textarea, select, [contenteditable]:not([contenteditable='false'])) {
+      --text-2xs: max(16px, 0.6875rem); --text-xs: max(16px, 0.75rem); --text-sm: max(16px, 0.875rem); --text-base: max(16px, 1rem); --text-chat: max(16px, 0.9375rem);
+    }
   }
 }
