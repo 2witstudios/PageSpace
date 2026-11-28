@@ -2,7 +2,7 @@
 
 import React, { memo } from 'react';
 import { usePageNavigation } from '@/retained/hooks/usePageNavigation';
-import { Sparkles, ExternalLink, MessageSquare } from 'lucide-react';
+import { Bot, ExternalLink, MessageSquare } from 'lucide-react';
 import { cn } from '@/retained/lib/utils';
 
 export interface AgentInfo {
@@ -56,7 +56,7 @@ export const AgentListRenderer: React.FC<AgentListRendererProps> = memo(function
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-muted/30 border-b">
         <div className="flex items-center gap-2">
-          <Sparkles className="h-4 w-4 text-muted-foreground" />
+          <Bot className="h-4 w-4 text-muted-foreground" />
           <span className="text-sm font-medium">{displayTitle}</span>
         </div>
         <span className="text-xs text-muted-foreground">
@@ -80,7 +80,7 @@ export const AgentListRenderer: React.FC<AgentListRendererProps> = memo(function
               <div className="flex items-center gap-3">
                 {/* Agent icon */}
                 <div className="flex items-center justify-center w-8 h-8 rounded-md bg-primary/10 shrink-0">
-                  <Sparkles className="h-4 w-4 text-primary" />
+                  <Bot className="h-4 w-4 text-primary" />
                 </div>
 
                 {/* Agent info */}
@@ -117,7 +117,7 @@ export const AgentListRenderer: React.FC<AgentListRendererProps> = memo(function
           ))
         ) : (
           <div className="text-sm text-muted-foreground text-center py-6">
-            <Sparkles className="h-8 w-8 mx-auto mb-2 opacity-50" />
+            <Bot className="h-8 w-8 mx-auto mb-2 opacity-50" />
             <p>No agents found</p>
           </div>
         )}

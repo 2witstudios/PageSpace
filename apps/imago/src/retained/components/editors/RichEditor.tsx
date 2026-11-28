@@ -5,7 +5,8 @@ import { clientExtensions } from '@/retained/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import React, { useEffect } from 'react';
 import { useRouter } from '@/retained-adapters/navigation';
-import { Bold, Italic, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote, Sparkles } from 'lucide-react';
+import { Bold, Italic, Heading1, Heading2, Heading3, Pilcrow, List, ListOrdered, Quote } from 'lucide-react';
+import { ImagoOrb } from '@/ui/metal/imago-orb/imago-orb';
 import { subscribeToNavigationEvents } from '@/retained/lib/navigation/app-navigation';
 import { dispatch, transactions } from '@/ui/store/transactions';
 import { getUiState } from '@/ui/store/store';
@@ -251,7 +252,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
             }}
             className="flex items-center gap-1.5 h-8 px-2 rounded text-sm hover:bg-muted"
           >
-            <Sparkles size={14} />
+            <ImagoOrb size="glyph" />
             <span>Ask</span>
           </button>
         </BubbleMenu>

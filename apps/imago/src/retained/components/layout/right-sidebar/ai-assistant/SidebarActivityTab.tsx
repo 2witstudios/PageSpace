@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useId, useMemo, useState } from 'react';
-import { History, Loader2, Search, Sparkles } from 'lucide-react';
+import { Bot, History, Loader2, Search } from 'lucide-react';
 import { Badge } from '@/retained/components/ui/badge';
 import { Button } from '@/retained/components/ui/button';
 import { Label } from '@/retained/components/ui/label';
@@ -306,7 +306,7 @@ export default function SidebarActivityTab({ pageId }: { readonly pageId: string
                       )}
                       aria-hidden="true"
                     >
-                      {version.isAiGenerated ? <Sparkles className="h-3 w-3" /> : initialOf(version)}
+                      {version.isAiGenerated ? <Bot className="h-3 w-3" /> : initialOf(version)}
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="text-sm leading-snug">

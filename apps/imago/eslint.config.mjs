@@ -40,6 +40,12 @@ const eslintConfig = [
               message:
                 "Use a specific subpath import e.g. @pagespace/lib/auth/session-service",
             },
+            {
+              name: "lucide-react",
+              importNames: ["Sparkles", "Sparkle", "SparklesIcon", "WandSparkles"],
+              message:
+                "No sparkles in Imago: Imago itself is ImagoOrb (ui/metal/imago-orb), any other agent or AI thing is Bot, and anything else uses its own page-type icon.",
+            },
           ],
         },
       ],
@@ -92,7 +98,7 @@ const eslintConfig = [
     rules: {
       // Literal custom CSS selectors / semantic markers in the retained styles,
       // plus a type-index string the analyzer sees inside a cn() expression.
-      "better-tailwindcss/no-unknown-classes": ["error", { ignore: ["^(dark|prose-xs|prose-red|find-highlight|find-highlight-current|not-prose|print-page-number|breadcrumb|editor-readonly|middle-section-scroll|holographic-card|liquid-glass-thin|toaster|status)$"] }],
+      "better-tailwindcss/no-unknown-classes": ["error", { ignore: ["^(dark|prose-xs|prose-chat|prose-red|find-highlight|find-highlight-current|not-prose|print-page-number|breadcrumb|editor-readonly|middle-section-scroll|holographic-card|liquid-glass-thin|toaster|status)$"] }],
       "better-tailwindcss/no-duplicate-classes": "error",
     },
   },

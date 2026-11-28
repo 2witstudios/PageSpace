@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { isAgentAccount } from '@pagespace/lib/auth/agent/display-name';
-import { Icon } from '../../components/icon/icon';
+import { ImagoOrb } from '../../metal/imago-orb/imago-orb';
 import { renderAgentMark } from '../../components/agent-mark/agent-mark.render';
 import type { ActivityRow } from './task-activity';
 import {
@@ -12,7 +12,7 @@ import {
   taskSectionHeadingClass,
 } from './task-detail-class';
 
-/** The task's Activity: who did what and when, Imago's changes marked with its sparkle. */
+/** The task's Activity: who did what and when, Imago's changes marked with its orb. */
 export function renderTaskActivity(rows: readonly ActivityRow[]): ReactNode {
   if (rows.length === 0) return null;
   return (
@@ -21,7 +21,7 @@ export function renderTaskActivity(rows: readonly ActivityRow[]): ReactNode {
       <ol className={taskActivityListClass}>
         {rows.map((row) => (
           <li key={row.id} className={taskActivityRowClass}>
-            {row.byImago ? <Icon name="sparkle" size={12} /> : null}
+            {row.byImago ? <ImagoOrb size="glyph" /> : null}
             <span className={taskActivityTextClass}>
               {isAgentAccount(row.accountType) ? (
                 <>

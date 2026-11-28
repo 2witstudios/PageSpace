@@ -9,7 +9,7 @@ import {
   CheckSquare,
   FileText,
   MessageSquare,
-  Sparkles,
+  Newspaper,
   type LucideIcon,
 } from "lucide-react";
 import Link from "@/retained-adapters/link";
@@ -28,7 +28,8 @@ const ICONS: Record<SignalIconName, LucideIcon> = {
   "check-square": CheckSquare,
   "message-square": MessageSquare,
   "file-text": FileText,
-  sparkles: Sparkles,
+  // The wire key stays 'sparkles' (composer.ts's pulse summary); imago draws it as a newspaper.
+  sparkles: Newspaper,
 };
 
 export interface HomeLineProps {

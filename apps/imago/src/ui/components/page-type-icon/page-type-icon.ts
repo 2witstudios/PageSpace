@@ -12,7 +12,7 @@ export const pageTypeIcons: Readonly<Record<PageTypeValue, { readonly icon: Icon
   SHEET: { icon: 'sheet', hue: 'text-type-sheet' },
   CHANNEL: { icon: 'hash', hue: 'text-type-channel' },
   FOLDER: { icon: 'folder', hue: 'text-type-folder' },
-  AI_CHAT: { icon: 'sparkle', hue: 'text-type-agent' },
+  AI_CHAT: { icon: 'bot', hue: 'text-type-agent' },
   CANVAS: { icon: 'canvas', hue: 'text-type-canvas' },
   CODE: { icon: 'code', hue: 'text-type-code' },
   FILE: { icon: 'file', hue: 'text-type-file' },
