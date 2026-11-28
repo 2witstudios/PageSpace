@@ -35,6 +35,12 @@ describe('a choice: several sources before the first message', () => {
     expect(markup()).toContain('Your Team allowance');
     expect(markup()).toContain('Design wallet cannot cover this');
   });
+  test('a fallback is a problem the sender must see, even mid-conversation', () => {
+    state.spend = { conversationId: 'c1', driveId: 'd1', chosenWalletId: 'drive', options, resolved: { kind: 'spend', source: 'seat_allowance', walletId: 'seat', fallbackApplied: true, fallbackFrom: 'drive_wallet' } };
+    const result = markup(true);
+    expect(result).toContain('Your Team allowance');
+    expect(result).toContain('Design wallet cannot cover this');
+  });
   test('once the conversation has messages the choice is made, so the strip goes quiet', () => {
     state.spend = spending('drive_wallet');
     expect(markup(true)).toBe('');

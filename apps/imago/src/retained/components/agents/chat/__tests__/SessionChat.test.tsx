@@ -186,6 +186,18 @@ function spendFailed() {
 vi.mock('@/retained/hooks/useConversationSpend', () => ({
   useConversationSpend: () => spendHook.current,
 }));
+vi.mock('@/retained/components/ai/voice/realtime', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  VoiceCallBarForConversation: () => null,
+}));
+// Imago's own strip, recorded so a test can read what the composer told it.
+const imagoStrip = vi.hoisted(() => ({ props: [] as { hasMessages?: boolean }[] }));
+vi.mock('@/ui/chat/spend-strip/spend-strip', () => ({
+  SpendStrip: (props: { hasMessages?: boolean }) => {
+    imagoStrip.props.push(props);
+    return null;
+  },
+}));
 
 describe('SessionChat', () => {
   // Regression: the composer rendered with no command drive at all, so `/`
@@ -243,6 +255,16 @@ describe('SessionChat', () => {
     render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
     expect(screen.getByTestId('session-chat-loading')).toBeInTheDocument();
     expect(screen.queryByTestId('chat-messages-area')).not.toBeInTheDocument();
+  });
+
+  it("tells Imago's strip the conversation has messages while they load, so a choice never flashes", () => {
+    imagoStrip.props = [];
+    const strip = (state: Parameters<typeof baseChatState>[0]) => {
+      chatState.current = baseChatState(state);
+      render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" imagoComposer={{ placeholder: 'Ask anything…' }} />);
+      return imagoStrip.props.at(-1)?.hasMessages;
+    };
+    expect([strip({ isMessagesLoading: true }), strip({ isMessagesLoading: false })]).toEqual([true, false]);
   });
 
   it('shows the load-error banner with a retry action that calls reloadConversation', () => {

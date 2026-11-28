@@ -14,7 +14,8 @@ export const spendStripClass = 'mx-2 flex min-h-spend-strip flex-none items-cent
 /**
  * Who pays, above the composer — only when there is a choice or a problem. It shows:
  * (a) several sources to choose from, before the first message (composerStripModel);
- * (b) a refused source, with its refusal copy (and Choose when there is another), even mid-thread;
+ * (b) a refused source, with its refusal copy (and Choose when there is another), or a permitted
+ *     fallback with its note, both even mid-thread;
  * (c) a drive context whose source is still resolving or failed to resolve (JOURNEYS-2).
  * Paying from your own credits with nothing to choose shows nothing: the balance lives in the
  * account menu, and running out is OutOfCreditsAlert's to say.
@@ -39,8 +40,10 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
     : null;
   const refusedChoice = resolved?.kind === 'refuse' ? spend?.options.find(option => option.source === resolved.source) ?? null : null;
   const refusedCopy = resolved?.kind === 'refuse' ? spendRefusalCopy({ reason: resolved.reason, source: refusedChoice, hasOptions: resolved.options.length > 0, now: new Date() }) : null;
+  // A fallback is a problem, not a choice: its note ("X cannot cover this") shows even mid-thread.
+  const fallback = resolved?.kind === 'spend' && resolved.fallbackApplied;
   const strip = spend
-    ? composerStripModel({ ...spend, hasMessages }) ?? (refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null)
+    ? composerStripModel({ ...spend, hasMessages: hasMessages && !fallback }) ?? (refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null)
     : null;
   // JOURNEYS-2: in a drive (multi-source) context an UNRESOLVED source is state the sender
   // must see, not silence — sending pauses (the composer's readiness gate reads the same
