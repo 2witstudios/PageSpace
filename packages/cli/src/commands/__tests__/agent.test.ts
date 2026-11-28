@@ -136,7 +136,7 @@ describe('pagespace signup', () => {
     const store = profileStore();
     const activeKeyStore = createFakeActiveKeyStore();
     const stdout = createRecordingSink();
-    const signup = vi.fn(async () => IDENTITY);
+    const signup = vi.fn(async (_input: Record<string, unknown>) => IDENTITY);
     const d = deps();
     const ctx = createFakeContext({
       stdout,
@@ -174,7 +174,7 @@ describe('pagespace signup', () => {
   });
 
   it('defaults the source to the CLI and omits the name when none is given', async () => {
-    const signup = vi.fn(async () => IDENTITY);
+    const signup = vi.fn(async (_input: Record<string, unknown>) => IDENTITY);
     const ctx = createFakeContext({ credentialStore: profileStore(), sdk: fakeSdk({ agent: { challenge: async () => CHALLENGE, signup } }) });
 
     await createSignupHandler(deps())(ctx, routed(['signup', '--agent'], 1));

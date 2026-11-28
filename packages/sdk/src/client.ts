@@ -590,7 +590,9 @@ export class PageSpaceClient {
         // `agent.signup`, `agent.claim`) never asks the provider for a token
         // and never sends one: a token the server does not need is a token
         // that can leak.
-        const authorization = op.unauthenticated ? {} : { Authorization: `Bearer ${await this.#auth.getAccessToken()}` };
+        const authorization: Record<string, string> = op.unauthenticated
+          ? {}
+          : { Authorization: `Bearer ${await this.#auth.getAccessToken()}` };
         const descriptor = buildRequest(op, input, this.#config);
         raw = await executeRequest(
           { ...descriptor, headers: { ...descriptor.headers, ...authorization } },
