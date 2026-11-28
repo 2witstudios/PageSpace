@@ -222,7 +222,12 @@ export interface AiStreamStartPayload {
    * The server remains the authority either way (see stream-subscription-authz.ts).
    */
   isShared?: boolean;
-  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+  /**
+   * `accountType` is present only for an agent account (Agent Signup Phase 2c),
+   * so a human's payload is unchanged and an absent field reads as human. The
+   * "X is chatting with the AI" line badges an agent from it, never from the name.
+   */
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string; accountType?: 'agent' };
 }
 // lib/websocket/socket-utils.ts#AiStreamCompletePayload
 export interface AiStreamCompletePayload {

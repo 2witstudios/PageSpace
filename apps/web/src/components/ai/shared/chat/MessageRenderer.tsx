@@ -15,6 +15,7 @@ import type { ConversationMessage, TextPart } from './message-types';
 import { isTextGroupPart, isProcessedToolPart, isFileGroupPart, isCommandExecutionPart, isSpendFallbackPart, isToolRunGroupPart } from './message-types';
 import { ImageMessageContent } from './ImageMessageContent';
 import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { CommandExecutionIndicator } from '@/components/messages/CommandExecutionIndicator';
 import { SpendFallbackNotice } from '@/components/messages/SpendFallbackNotice';
 
@@ -22,6 +23,8 @@ interface TextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
   senderName?: string;
+  /** `users.accountType` of the sender; an agent gets an AgentBadge. */
+  senderAccountType?: string | null;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -46,6 +49,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   parts,
   role,
   senderName,
+  senderAccountType,
   createdAt,
   editedAt,
   onEdit,
@@ -75,6 +79,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
           <div className="text-sm font-medium text-primary dark:text-primary">
             {senderName}
           </div>
+          <AgentBadge accountType={senderAccountType} className="ml-1.5" />
         </div>
       )}
 
@@ -273,6 +278,7 @@ export const MessageRenderer: React.FC<MessageRendererProps> = React.memo(({
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 senderName={message.userName ?? user?.name ?? 'Unknown'}
+                senderAccountType={message.userName ? message.userAccountType : user?.accountType}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}

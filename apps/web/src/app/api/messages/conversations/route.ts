@@ -83,6 +83,7 @@ export async function GET(request: Request) {
         cd.last_read,
         u.id as other_user_id,
         u.name as other_user_name,
+        u."accountType" as other_user_account_type,
         u.email as other_user_email,
         u.image as other_user_image,
         up.username as other_user_username,
@@ -125,6 +126,8 @@ export async function GET(request: Request) {
           // Fail closed: on a missing join row emit null, never the raw
           // (potentially ciphertext) column value.
           name: decryptedOtherUser?.name ?? null,
+          // Marks a self-named AI agent account beside the name (Phase 2c).
+          accountType: row.other_user_account_type ?? null,
           email: decryptedOtherUser?.email ?? null,
           image: row.other_user_image,
           username: row.other_user_username,

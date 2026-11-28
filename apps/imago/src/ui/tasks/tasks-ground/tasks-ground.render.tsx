@@ -29,6 +29,7 @@ import {
   statusOptionClass,
   statusPillClass,
 } from './tasks-ground-class';
+import { assigneeLabel } from '../task-model/assignee-label';
 
 const STATUS_OPTIONS: readonly { readonly value: StatusGroupFilter; readonly label: string }[] = [
   { value: 'active', label: 'Active' },
@@ -94,7 +95,7 @@ function renderRow(row: GroundRow, { toggleComplete, notice }: RowContext): Reac
           {row.people.map((person, index) => (
             <span
               key={`${person.type}-${person.id}`}
-              title={person.name}
+              title={assigneeLabel(person)}
               className={`${avatarClass(person.type === 'agent')} ${index > 0 ? avatarOverlapClass : ''}`}
             >
               {initials(person.name)}

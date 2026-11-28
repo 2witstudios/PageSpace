@@ -66,7 +66,7 @@ vi.mock('../../../../../../../lib/websocket/calendar-events', () => ({
   broadcastCalendarEvent: vi.fn().mockResolvedValue(undefined),
 }));
 
-import { DELETE } from '../route';
+import { DELETE, GET } from '../route';
 import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions } from '../../../../../../../lib/auth';
 
@@ -157,5 +157,24 @@ describe('DELETE /api/calendar/events/[eventId]/attendees', () => {
     );
 
     expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /api/calendar/events/[eventId]/attendees', () => {
+  it('selects accountType with each attendee user and returns it, so an agent attendee can be marked (Agent Signup 2c)', async () => {
+    stubEvent();
+    (db.query.eventAttendees.findMany as Mock).mockResolvedValue([
+      { eventId: EVENT_ID, userId: TARGET_ID, user: { id: TARGET_ID, name: 'Helper', email: null, image: null, accountType: 'agent' } },
+    ]);
+
+    const res = await GET(new Request(`https://example.com/api/calendar/events/${EVENT_ID}/attendees`), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    const query = (db.query.eventAttendees.findMany as Mock).mock.calls[0][0] as {
+      with: { user: { columns: Record<string, boolean> } };
+    };
+    expect(query.with.user.columns.accountType).toBe(true);
+    expect(body.attendees[0].user).toMatchObject({ name: 'Helper', accountType: 'agent' });
   });
 });

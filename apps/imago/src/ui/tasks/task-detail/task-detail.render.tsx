@@ -45,6 +45,7 @@ import {
   taskStripButtonClass,
   taskUnassignedClass,
 } from './task-detail-class';
+import { assigneeLabel } from '../task-model/assignee-label';
 
 /** The writes the detail makes, each a void action on the open task unless it names another. */
 export type TaskDetailActions = {
@@ -335,7 +336,7 @@ const fields = (task: Task, props: TaskDetailRenderProps): ReactNode => {
           {task.assignees.length === 0 ? (
             <span className={taskUnassignedClass}>Unassigned</span>
           ) : (
-            <AvatarGroup names={task.assignees.map((entry) => entry.name)} agents={agents} label="Assigned to" />
+            <AvatarGroup names={task.assignees.map(assigneeLabel)} agents={agents} label="Assigned to" />
           )}
         </span>
         <span className={taskChipReadOnlyClass}>

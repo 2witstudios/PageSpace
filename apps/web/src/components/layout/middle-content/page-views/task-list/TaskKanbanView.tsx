@@ -55,6 +55,7 @@ import {
   PRIORITY_CONFIG,
 } from './task-list-types';
 import { SubTaskProgress } from './SubTaskProgress';
+import { TaskAssigneeLabel } from './TaskAssigneeLabel';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -274,11 +275,7 @@ function TaskCard({
           <SubTaskProgress task={task} className="text-xs text-muted-foreground tabular-nums" />
 
           {/* Assignee */}
-          {(task.assignee || task.assigneeAgent) && (
-            <span className="text-xs text-muted-foreground">
-              {task.assignee?.name || task.assigneeAgent?.title || 'Assigned'}
-            </span>
-          )}
+          <TaskAssigneeLabel task={task} />
 
           {/* Due date */}
           {task.dueDate && (

@@ -43,6 +43,8 @@ export interface StartChatGenerationArgs {
   messageId: string;
   userId: string;
   displayName: string;
+  /** The generating user's `users.accountType`, so an agent is marked to co-viewers. */
+  accountType?: string | null;
   browserSessionId: string;
   streamId: string;
   isShared: boolean;
@@ -87,6 +89,7 @@ export async function startChatGeneration(
         conversationId: args.conversationId,
         userId: args.userId,
         displayName: args.displayName,
+        ...(args.accountType !== undefined ? { accountType: args.accountType } : {}),
         browserSessionId: args.browserSessionId,
         streamId: args.streamId,
         isShared: args.isShared,

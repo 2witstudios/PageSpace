@@ -247,6 +247,28 @@ describe('renderBoardCard()', () => {
     });
   });
 
+  test('an agent account on a card', () => {
+    const container = mount(
+      renderBoardCard(
+        card({
+          task: task('z', {
+            title: 'Book venue',
+            assignees: [
+              { type: 'user', id: 'u-1', name: 'Ada Lovelace', accountType: 'human' },
+              { type: 'user', id: 'u-2', name: 'Helper', accountType: 'agent' },
+            ],
+          }),
+        }),
+      ),
+    );
+    assert({
+      given: 'a card with a person and an AI agent account on it',
+      should: 'mark only the agent account in the faces\' accessible name (Agent Signup 2c)',
+      actual: container.querySelector('[role="img"]')?.getAttribute('aria-label'),
+      expected: 'Assigned to Ada Lovelace, Helper (AI agent)',
+    });
+  });
+
   test('a quiet card', () => {
     const container = mount(renderBoardCard(card({ task: task('z', { title: 'Book venue', priority: 'medium' }) })));
     assert({

@@ -161,3 +161,48 @@ describe('DriveActivityTimeline', () => {
     });
   });
 });
+
+describe('DriveActivityTimeline agent marker (Agent Signup Phase 2c)', () => {
+  const user = (name: string, accountType: string) => ({ id: `u-${name}`, name, email: `${name}@example.com`, image: null, accountType });
+
+  test('badges an agent actor from its live accountType', async () => {
+    respondWith([row({ id: 'a', user: user('Helper', 'agent') })], 1);
+    const container = mount(<DriveActivityTimeline driveId="d1" />);
+    await settle(() => expect(container.textContent).toContain('Helper'));
+    assert({
+      given: 'an activity by an agent account',
+      should: 'render the agent marker beside the actor',
+      actual: container.querySelectorAll('[aria-label="AI agent account"]').length,
+      expected: 1,
+    });
+  });
+
+  test('renders no marker for a human or an erased actor', async () => {
+    respondWith([row({ id: 'a', user: user('Dana', 'human') }), row({ id: 'b', user: null, actorDisplayName: 'Deleted User' })], 2);
+    const container = mount(<DriveActivityTimeline driveId="d1" />);
+    await settle(() => expect(container.textContent).toContain('Deleted User'));
+    assert({
+      given: 'a human actor and an erased actor',
+      should: 'render no agent marker',
+      actual: container.querySelectorAll('[aria-label="AI agent account"]').length,
+      expected: 0,
+    });
+  });
+
+  test('badges an agent on a grouped AI stream summary', async () => {
+    const agent = user('Helper', 'agent');
+    respondWith([
+      row({ id: 'a', aiConversationId: 'conv', isAiGenerated: true, user: agent }),
+      row({ id: 'b', aiConversationId: 'conv', isAiGenerated: true, user: agent }),
+    ], 2);
+    const container = mount(<DriveActivityTimeline driveId="d1" />);
+    await settle(() => expect(container.textContent).toContain('AI updated'));
+    assert({
+      given: 'an AI stream group by an agent account',
+      should: 'mark the group summary',
+      actual: container.querySelectorAll('[aria-label="AI agent account"]').length >= 1,
+      expected: true,
+    });
+  });
+});
+

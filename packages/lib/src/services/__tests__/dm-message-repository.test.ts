@@ -1867,3 +1867,31 @@ describe('DM mirror edit propagation (#2153)', () => {
     });
   });
 });
+
+describe('dmMessageRepository reactor accountType (Agent Signup Phase 2c)', () => {
+  it('loads each reactor\'s accountType so the reactions tooltip can mark an agent', async () => {
+    testDbState.seed('users', [
+      { id: 'u-1', name: 'Alice', accountType: 'human' },
+      { id: 'u-2', name: 'Helper', accountType: 'agent' },
+    ]);
+    testDbState.seed('directMessages', [
+      { id: 'msg-1', conversationId: 'conv-1', senderId: 'u-1', isActive: true, parentId: null, createdAt: new Date('2026-05-04T12:00:00Z') },
+    ]);
+    testDbState.seed('dmMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const rows = await dmMessageRepository.listActiveMessages({ conversationId: 'conv-1', limit: 50 });
+    const reaction = await dmMessageRepository.loadDmReactionWithUser('rx-1');
+
+    assert({
+      given: 'a reaction by an agent account',
+      should: 'carry the reactor accountType on both the message relation and the reaction broadcast load',
+      actual: {
+        onMessage: (rows[0]?.reactions as Array<{ user: { accountType: string } }> | undefined)?.[0]?.user?.accountType,
+        onReaction: (reaction?.user as { accountType: string } | null)?.accountType,
+      },
+      expected: { onMessage: 'agent', onReaction: 'agent' },
+    });
+  });
+});

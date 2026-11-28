@@ -265,6 +265,28 @@ describe('getUserNotifications', () => {
       drive: { slug: 'my-drive' },
     });
   });
+
+  it('selects the actor accountType so the "by <name>" line can badge an agent (Agent Signup Phase 2c)', async () => {
+    const rows = [{
+      notification: mockNotification,
+      triggeredByUser: { id: 'a1', name: 'PageSpace Support', email: 'a@agents.invalid', image: null, accountType: 'agent' },
+      drive: null,
+    }];
+    const limitFn = vi.fn().mockResolvedValue(rows);
+    const orderByFn = vi.fn().mockReturnValue({ limit: limitFn });
+    const whereFn = vi.fn().mockReturnValue({ orderBy: orderByFn });
+    const leftJoin2Fn = vi.fn().mockReturnValue({ where: whereFn });
+    const leftJoin1Fn = vi.fn().mockReturnValue({ leftJoin: leftJoin2Fn });
+    const fromFn = vi.fn().mockReturnValue({ leftJoin: leftJoin1Fn });
+    const selectFn = vi.fn().mockReturnValue({ from: fromFn });
+    vi.mocked(db.select).mockImplementation(selectFn);
+
+    const result = await getUserNotifications('user-1');
+
+    const selection = selectFn.mock.calls[0][0] as { triggeredByUser: Record<string, unknown> };
+    expect(Object.keys(selection.triggeredByUser)).toContain('accountType');
+    expect(result[0].triggeredByUser).toMatchObject({ name: 'PageSpace Support', accountType: 'agent' });
+  });
 });
 
 describe('getUnreadNotificationCount', () => {
@@ -768,5 +790,93 @@ describe('markConnectionRequestActioned', () => {
     vi.mocked(db.query.notifications.findFirst).mockResolvedValue(undefined as never);
     await markConnectionRequestActioned('conn-1', 'user-1', 'accepted');
     expect(db.update).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Agent Signup Phase 2c: an agent actor's name is marked in the stored text
+// ---------------------------------------------------------------------------
+describe('agent actors are marked in notification text (written at create time)', () => {
+  const page = {
+    id: 'page-1',
+    title: 'My Page',
+    type: 'DOCUMENT',
+    driveId: 'drive-1',
+    drive: { name: 'My Drive', slug: 'my-drive' },
+  };
+  const agent = { id: 'agent-1', name: 'PageSpace Support', accountType: 'agent' };
+  const human = { id: 'user-2', name: 'Alice', accountType: 'human' };
+
+  const insertedRow = (valuesFn: ReturnType<typeof setupInsertChain>['valuesFn']) =>
+    valuesFn.mock.calls[0][0] as { message: string; metadata?: Record<string, unknown> };
+
+  beforeEach(() => {
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(page as never);
+    vi.mocked(db.query.drives.findFirst).mockResolvedValue({ id: 'drive-1', name: 'My Drive', slug: 'my-drive' } as never);
+    vi.mocked(db.query.notifications.findFirst).mockResolvedValue(undefined as never);
+  });
+
+  it('marks an agent mentioner, and leaves a human mentioner byte-identical', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(agent as never);
+    const agentInsert = setupInsertChain(mockNotification);
+    await createMentionNotification('user-1', 'page-1', 'agent-1');
+    expect(insertedRow(agentInsert.valuesFn).message).toBe('PageSpace Support (AI agent) mentioned you in "My Page"');
+    expect(insertedRow(agentInsert.valuesFn).metadata?.mentionerName).toBe('PageSpace Support (AI agent)');
+
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(human as never);
+    const humanInsert = setupInsertChain(mockNotification);
+    await createMentionNotification('user-1', 'page-1', 'user-2');
+    expect(insertedRow(humanInsert.valuesFn).message).toBe('Alice mentioned you in "My Page"');
+  });
+
+  it('does not touch an agent-PAGE override (an AI reply), which is not a user name', async () => {
+    const { valuesFn } = setupInsertChain(mockNotification);
+    await createMentionNotification('user-1', 'page-1', 'agent-1', { mentionerNameOverride: 'ResearchBot' });
+    expect(insertedRow(valuesFn).message).toBe('ResearchBot mentioned you in "My Page"');
+  });
+
+  it('marks an agent assigner', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(agent as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
+    await createTaskAssignedNotification('user-1', 'task-1', 'My Task', 'page-1', 'agent-1');
+    expect(insertedRow(valuesFn).message).toBe('PageSpace Support (AI agent) assigned you to "My Task"');
+    expect(insertedRow(valuesFn).metadata?.assignerName).toBe('PageSpace Support (AI agent)');
+  });
+
+  it('marks an agent sharer in the message and the email-template names', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(agent as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
+    await createPermissionNotification('user-1', 'page-1', 'granted', { canView: true }, 'agent-1');
+    expect(insertedRow(valuesFn).message).toBe('PageSpace Support (AI agent) shared "My Page" with you (view access)');
+    expect(insertedRow(valuesFn).metadata?.sharerName).toBe('PageSpace Support (AI agent)');
+    expect(insertedRow(valuesFn).metadata?.adderName).toBe('PageSpace Support (AI agent)');
+  });
+
+  it('leaves a human sharer byte-identical', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(human as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
+    await createPermissionNotification('user-1', 'page-1', 'granted', { canView: true }, 'user-2');
+    expect(insertedRow(valuesFn).message).toBe('Alice shared "My Page" with you (view access)');
+    expect(insertedRow(valuesFn).metadata?.sharerName).toBe('Alice');
+  });
+
+  it('marks an agent that added you to a drive', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(agent as never);
+    const { valuesFn } = setupInsertChain(mockNotification);
+    await createDriveNotification('user-1', 'drive-1', 'invited', undefined, 'agent-1');
+    expect(insertedRow(valuesFn).message).toBe('PageSpace Support (AI agent) added you to the "My Drive" workspace');
+    expect(insertedRow(valuesFn).metadata?.inviterName).toBe('PageSpace Support (AI agent)');
+  });
+
+  it('marks an agent DM sender in the email-template name, and a human sender unchanged', async () => {
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(agent as never);
+    const agentInsert = setupInsertChain(mockNotification);
+    await createOrUpdateMessageNotification('user-1', 'conv-1', 'Hello!', 'agent-1');
+    expect(insertedRow(agentInsert.valuesFn).metadata?.senderName).toBe('PageSpace Support (AI agent)');
+
+    vi.mocked(db.query.users.findFirst).mockResolvedValue(human as never);
+    const humanInsert = setupInsertChain(mockNotification);
+    await createOrUpdateMessageNotification('user-1', 'conv-1', 'Hello!', 'user-2');
+    expect(insertedRow(humanInsert.valuesFn).metadata?.senderName).toBe('Alice');
   });
 });

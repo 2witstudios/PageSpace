@@ -110,6 +110,30 @@ describe('ChatInput — remoteStreamingUser lock', () => {
     expect(banner.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('given the streamer is an agent account, badges it beside the name (Agent Signup Phase 2c)', () => {
+    render(
+      <ChatInput
+        {...baseProps}
+        remoteStreamingUser={{ userId: 'u-agent', displayName: 'PageSpace Support', accountType: 'agent' }}
+      />
+    );
+
+    const banner = screen.getByRole('status');
+    expect(banner).toHaveTextContent('PageSpace Support is chatting with the AI');
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+
+  it('given a human streamer, renders no agent badge', () => {
+    render(
+      <ChatInput
+        {...baseProps}
+        remoteStreamingUser={{ userId: 'u-alice', displayName: 'Alice' }}
+      />
+    );
+
+    expect(screen.queryByLabelText('AI agent account')).toBeNull();
+  });
+
   it('given remoteStreamingUser is set, forces the textarea + footer + attach button into disabled', () => {
     render(
       <ChatInput

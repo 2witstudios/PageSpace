@@ -2,6 +2,7 @@
 
 import { useState, useRef, useMemo, useEffect } from 'react';
 import { cn } from '@/retained/lib/utils';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import {
   Popover,
   PopoverContent,
@@ -17,6 +18,8 @@ export interface Reaction {
   user: {
     id: string;
     name: string | null;
+    /** users.accountType — marks an agent reactor in the tooltip (Phase 2c). */
+    accountType?: string | null;
   };
 }
 
@@ -32,7 +35,7 @@ export interface MessageReactionsProps {
 interface GroupedReaction {
   emoji: string;
   count: number;
-  users: { id: string; name: string | null }[];
+  users: Reaction['user'][];
   hasReacted: boolean;
 }
 
@@ -143,6 +146,7 @@ function ReactionPill({
           {group.users.slice(0, 10).map((u) => (
             <div key={u.id} className="text-sm text-muted-foreground">
               {u.id === currentUserId ? 'You' : (u.name ?? 'Unknown')}
+              {u.id !== currentUserId && <AgentBadge accountType={u.accountType} className="ml-1" />}
             </div>
           ))}
           {group.users.length > 10 && (

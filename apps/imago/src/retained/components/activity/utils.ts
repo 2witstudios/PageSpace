@@ -175,6 +175,7 @@ function createGroupSummary(
   const firstActivity = activities[0];
   const actorName = getActorDisplayName(firstActivity);
   const actorImage = firstActivity.user?.image ?? null;
+  const actorAccountType = firstActivity.user?.accountType ?? null;
 
   let label: string;
 
@@ -203,6 +204,7 @@ function createGroupSummary(
     label,
     actorName,
     actorImage,
+    actorAccountType,
     timestamp: firstActivity.timestamp,
   };
 }

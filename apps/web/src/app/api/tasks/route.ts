@@ -394,19 +394,19 @@ export async function GET(request: Request) {
       where: whereCondition,
       with: {
         assignee: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         assigneeAgent: {
           columns: { id: true, title: true, type: true },
         },
         assignees: {
           with: {
-            user: { columns: { id: true, name: true, image: true } },
+            user: { columns: { id: true, name: true, image: true, accountType: true } },
             agentPage: { columns: { id: true, title: true, type: true } },
           },
         },
         user: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         page: {
           columns: { id: true, title: true, isTrashed: true, parentId: true, position: true },

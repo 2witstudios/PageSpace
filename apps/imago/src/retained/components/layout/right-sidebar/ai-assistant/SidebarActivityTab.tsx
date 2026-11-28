@@ -10,6 +10,7 @@ import { Switch } from '@/retained/components/ui/switch';
 import { fetchJSON, post } from '@/retained/lib/auth/auth-fetch';
 import { useActivitySocket } from '@/retained/hooks/useActivitySocket';
 import { cn } from '@/retained/lib/utils';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import type { RollbackToPointPreview } from '@/retained-adapters/ui-contracts';
 import type { ActivityActionPreview, ActivityActionResult } from '@/retained/types/activity-actions';
 import {
@@ -310,6 +311,7 @@ export default function SidebarActivityTab({ pageId }: { readonly pageId: string
                     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="text-sm leading-snug">
                         <strong className="font-semibold">{actorOf(version)}</strong>{' '}
+                        <AgentBadge accountType={version.actorAccountType} className="mr-1 align-middle" />
                         <span className="text-muted-foreground">{verbOf(version)}</span>
                       </span>
                       <span className="text-xs leading-snug">{summaryOf(version)}</span>

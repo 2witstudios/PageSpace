@@ -1,6 +1,7 @@
 'use client';
 
 import type { ChannelThread, DirectThread } from '../message-model/message';
+import { withAccountType } from '../message-model/account-type';
 import { useAllChannels, useDirectThreads, useDriveChannels } from '../use-messages/use-messages';
 import { useAllDrives } from '../../frame/drives/use-section-scope';
 import { useDriveNames } from '../../frame/drives/use-drive-names';
@@ -43,6 +44,7 @@ const directRow = (thread: DirectThread, selectedConversationId: string | null):
   name: thread.name || 'Unknown user',
   href: `/dm/${segment(thread.id)}`,
   avatarUrl: thread.avatarUrl,
+  ...withAccountType('accountType', thread.accountType),
   unreadCount: thread.unreadCount,
   selected: thread.id === selectedConversationId,
 });

@@ -17,6 +17,8 @@ export interface TaskUser {
   id: string;
   name: string | null;
   image: string | null;
+  /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+  accountType?: string | null;
 }
 
 export interface TaskAgent {

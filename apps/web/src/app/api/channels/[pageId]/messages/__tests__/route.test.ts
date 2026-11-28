@@ -666,6 +666,44 @@ describe('POST /api/channels/[pageId]/messages (thread reply)', () => {
     expect(mockCreateMentionNotification).not.toHaveBeenCalled();
   });
 
+  it('carries an agent sender\'s accountType on the mention channel_updated payload (Agent Signup Phase 2c)', async () => {
+    const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
+    mockInsertChannelThreadReply.mockResolvedValueOnce({
+      kind: 'ok',
+      reply: { id: 'reply-1', createdAt: replyCreatedAt },
+      mirror: null,
+      rootId: PARENT_ID,
+      replyCount: 1,
+      lastReplyAt: replyCreatedAt,
+    });
+    mockLoadChannelMessageWithRelations.mockResolvedValueOnce({
+      id: 'reply-1',
+      parentId: PARENT_ID,
+      pageId: PAGE_ID,
+      content: 'hey @[Bob](user-bob:user)',
+      createdAt: replyCreatedAt.toISOString(),
+      user: { id: USER_ID, name: 'Helper', image: null, accountType: 'agent' },
+    });
+    mockListChannelThreadFollowers.mockResolvedValueOnce([USER_ID]);
+    const dbModule = (await import('@pagespace/db/db')) as unknown as {
+      db: { query: { pages: { findFirst: ReturnType<typeof vi.fn> } } };
+    };
+    dbModule.db.query.pages.findFirst.mockResolvedValueOnce({
+      driveId: 'drive-1',
+      title: 'General',
+      drive: { ownerId: 'owner-1', name: 'Workspace', slug: 'workspace' },
+    });
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+
+    await callPost({ content: 'hey @[Bob](user-bob:user)', parentId: PARENT_ID });
+
+    const payload = mockBroadcastInboxEvent.mock.calls.find(
+      ([userId, p]) => userId === 'user-bob' && (p as { operation: string }).operation === 'channel_updated'
+    )?.[1];
+    expect(payload).toMatchObject({ lastMessageSender: 'Helper', lastMessageSenderAccountType: 'agent' });
+  });
+
   it('does NOT emit channel_updated to a mentioned user who cannot view the channel', async () => {
     const replyCreatedAt = new Date('2026-05-04T12:00:00Z');
     mockInsertChannelThreadReply.mockResolvedValueOnce({

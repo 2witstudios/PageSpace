@@ -129,6 +129,11 @@ export function useInboxSocket({ cacheKey, scope, driveId, hasLoadedRef: externa
               lastMessageAt: payload.lastMessageAt || existingItem.lastMessageAt,
               lastMessagePreview: payload.lastMessagePreview || existingItem.lastMessagePreview,
               lastMessageSender: payload.lastMessageSender || existingItem.lastMessageSender,
+              // The marker belongs to the sender it arrived with (Phase 2c):
+              // a new sender replaces both, never only the name.
+              lastMessageSenderAccountType: payload.lastMessageSender
+                ? payload.lastMessageSenderAccountType ?? null
+                : existingItem.lastMessageSenderAccountType,
               unreadCount: payload.unreadCount !== undefined
                 ? payload.unreadCount
                 : (payload.operation === 'read_status_changed' ? 0 : (existingItem.unreadCount + 1)),

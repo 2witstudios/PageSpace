@@ -13,6 +13,7 @@ import { post } from '@/retained/lib/auth/auth-fetch';
 import { operationConfig, resourceTypeIcons, defaultOperationConfig } from './constants';
 import { fieldChanges } from './field-changes';
 import { getInitials } from './utils';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import { getUserFacingModelName } from '@/retained/lib/ai/core/ai-providers-config';
 import type { ActivityLog } from './types';
 import type { ActivityActionPreview, ActivityActionResult } from '@/retained/types/activity-actions';
@@ -98,6 +99,7 @@ export function ActivityItem({ activity, context, onRollback, onRollbackToPointS
       <div className="flex-1 min-w-0 space-y-1 overflow-hidden">
         <div className="flex flex-wrap items-center gap-1 sm:gap-2">
           <span className="font-medium text-sm truncate max-w-[120px] sm:max-w-none">{actorName}</span>
+          <AgentBadge accountType={activity.user?.accountType} />
           <Badge variant={opConfig.variant} className="text-xs shrink-0">
             <OpIcon className="h-3 w-3 mr-1" />
             {opConfig.label}

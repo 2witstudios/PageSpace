@@ -112,3 +112,54 @@ describe('postsFrom()', () => {
     });
   });
 });
+
+describe('agent marker (Agent Signup Phase 2c)', () => {
+  test('an agent account’s post and reaction', () => {
+    const [post] = postsFrom(
+      [
+        channelMessage('m1', {
+          user: { id: 'u3', name: 'PageSpace Support', image: null, accountType: 'agent' },
+          reactions: [channelReaction('r1', '👍', { id: 'u3', name: 'PageSpace Support', accountType: 'agent' })],
+        }),
+      ],
+      'u1',
+    );
+    assert({
+      given: 'a post and a reaction by an agent account',
+      should: 'carry the author account type and mark the reactor in the plain-text names',
+      actual: { name: post?.authorName, type: post?.authorAccountType, names: post?.reactions[0]?.names },
+      expected: { name: 'PageSpace Support', type: 'agent', names: ['PageSpace Support (AI agent)'] },
+    });
+  });
+
+  test('an AI page posting as an agent account', () => {
+    const [post] = postsFrom(
+      [
+        channelMessage('m1', {
+          user: { id: 'u3', name: 'Helper', image: null, accountType: 'agent' },
+          aiMeta: { senderType: 'agent', senderName: 'Triage Agent', agentPageId: 'p1' },
+        }),
+      ],
+      'u1',
+    );
+    assert({
+      given: 'an AI page persona posting under an agent account',
+      should: 'not carry the account type: the persona is not a user account',
+      actual: post !== undefined && 'authorAccountType' in post,
+      expected: false,
+    });
+  });
+
+  test('a person’s reaction', () => {
+    const [post] = postsFrom(
+      [channelMessage('m1', { reactions: [channelReaction('r1', '👍', { ...grace, accountType: 'human' })] })],
+      'u1',
+    );
+    assert({
+      given: 'a reaction by a human account',
+      should: 'name them unchanged',
+      actual: post?.reactions[0]?.names,
+      expected: ['Grace Hopper'],
+    });
+  });
+});

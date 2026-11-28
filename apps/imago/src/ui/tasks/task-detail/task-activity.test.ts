@@ -62,9 +62,25 @@ describe('activityRows', () => {
         NOW,
       ),
       expected: [
-        { id: 'ai', actor: 'Imago', action: 'set due date', time: '2m', byImago: true },
-        { id: 'h', actor: 'Dana', action: 'created this task', time: '2h', byImago: false },
+        { id: 'ai', actor: 'Imago', action: 'set due date', time: '2m', byImago: true, accountType: null },
+        { id: 'h', actor: 'Dana', action: 'created this task', time: '2h', byImago: false, accountType: null },
       ],
+    });
+  });
+
+  test('carries the actor live accountType so an agent can be marked (Agent Signup Phase 2c)', () => {
+    assert({
+      given: 'a change by an agent account, one by a human, and an AI change',
+      should: 'carry the agent and human account types, and none for Imago’s own work',
+      actual: activityRows(
+        [
+          activity({ id: 'agent', actorDisplayName: 'Helper', user: { name: 'Helper', accountType: 'agent' } }),
+          activity({ id: 'human', user: { name: 'Dana', accountType: 'human' } }),
+          activity({ id: 'ai', isAiGenerated: true, user: { name: 'Helper', accountType: 'agent' } }),
+        ],
+        NOW,
+      ).map((row) => [row.actor, row.accountType]),
+      expected: [['Helper', 'agent'], ['Dana', 'human'], ['Imago', null]],
     });
   });
 });

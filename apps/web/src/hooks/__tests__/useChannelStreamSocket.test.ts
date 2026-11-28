@@ -260,6 +260,37 @@ describe('whose stream is this — a USER question', () => {
     expect(openStreamSession).toHaveBeenCalledWith(expect.objectContaining({ isOwn: false }));
   });
 
+  it('given an agent account\'s stream, carries the agent marker onto the session (Agent Signup Phase 2c)', async () => {
+    mount();
+    await act(async () => {
+      mockSocket._trigger(
+        'chat:stream_start',
+        startPayload({
+          triggeredBy: {
+            userId: OTHER_USER_ID,
+            displayName: 'PageSpace Support',
+            browserSessionId: OTHER_SESSION,
+            accountType: 'agent',
+          },
+        }),
+      );
+    });
+
+    expect(openStreamSession).toHaveBeenCalledWith(expect.objectContaining({
+      triggeredBy: { userId: OTHER_USER_ID, displayName: 'PageSpace Support', accountType: 'agent' },
+    }));
+  });
+
+  it('given a human\'s stream, the session triggeredBy has no accountType key', async () => {
+    mount();
+    await act(async () => {
+      mockSocket._trigger('chat:stream_start', startPayload());
+    });
+
+    const descriptor = vi.mocked(openStreamSession).mock.calls[0][0];
+    expect(descriptor.triggeredBy).toStrictEqual({ userId: LOCAL_USER_ID, displayName: 'Ada' });
+  });
+
   it('given auth has not hydrated yet, fails closed rather than claiming the stream', async () => {
     // Read at EVENT time, not captured at effect time — a value captured on a fresh load would
     // be undefined for the first events and would classify the user's own stream as a
@@ -328,6 +359,39 @@ describe('echo dedup is a TAB question', () => {
 });
 
 describe('bootstrap', () => {
+  it('carries an agent streamer\'s marker from the active-streams row (Agent Signup Phase 2c)', async () => {
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        streams: [
+          {
+            messageId: 'msg-agent',
+            conversationId: 'conv-boot',
+            startedAt: '2026-08-14T09:00:00.000Z',
+            parts: [],
+            triggeredBy: {
+              userId: OTHER_USER_ID,
+              displayName: 'PageSpace Support',
+              browserSessionId: OTHER_SESSION,
+              accountType: 'agent',
+            },
+          },
+        ],
+      }),
+    });
+
+    mount();
+
+    await waitFor(() =>
+      expect(openStreamSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messageId: 'msg-agent',
+          triggeredBy: { userId: OTHER_USER_ID, displayName: 'PageSpace Support', accountType: 'agent' },
+        }),
+      ),
+    );
+  });
+
   it('opens a session per in-flight row, seeded with its persisted snapshot', async () => {
     mockFetchWithAuth.mockResolvedValue({
       ok: true,

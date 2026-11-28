@@ -7,6 +7,8 @@ import { getActorInfo, logMessageActivity } from '@pagespace/lib/monitoring/acti
 import { db } from '@pagespace/db/db'
 import { eq, and } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
+import { users } from '@pagespace/db/schema/auth';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import { channelMessages, channelReadStatus } from '@pagespace/db/schema/chat';
 import { channelMessageRepository } from '@pagespace/lib/services/channel-message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
@@ -23,13 +25,21 @@ const channelLogger = loggers.ai.child({ module: 'channel-tools' });
  *
  * Global assistant: uses the user's display name + 'global_assistant' type
  * Page agent: uses "agent title (user display name)" + 'agent' type
+ *
+ * The name is stored in `aiMeta.senderName` and rendered without a lookup, so
+ * an acting user who is an agent ACCOUNT is marked at write time — "Name (AI
+ * agent)" — from `users.accountType`, never from the name (Agent Signup Phase
+ * 2c). A human's sender name is unchanged.
  */
 const resolveSenderIdentity = async (
   context: ToolExecutionContext
 ): Promise<{ senderType: 'global_assistant' | 'agent'; senderName: string; agentPageId?: string }> => {
   const { chatSource } = context;
-  const actorInfo = await getActorInfo(context.userId);
-  const actorDisplayName = actorInfo.actorDisplayName ?? 'User';
+  const [actorInfo, actorAccount] = await Promise.all([
+    getActorInfo(context.userId),
+    db.query.users.findFirst({ where: eq(users.id, context.userId), columns: { accountType: true } }),
+  ]);
+  const actorDisplayName = withAgentMarker(actorInfo.actorDisplayName ?? 'User', actorAccount?.accountType);
 
   if (chatSource?.type === 'page' && chatSource.agentTitle) {
     return {

@@ -515,6 +515,28 @@ describe('fetchAssignable()', () => {
       ],
     });
   });
+
+  test('account type', async () => {
+    const web = fakeWeb({
+      'GET /api/drives/d1/assignees': () =>
+        Response.json({
+          assignees: [
+            { id: 'u-1', type: 'user', name: 'Helper', image: null, accountType: 'agent' },
+            { id: 'u-2', type: 'user', name: 'Ada', image: null, accountType: 'human' },
+          ],
+        }),
+    });
+
+    assert({
+      given: 'members whose users.accountType the route sent',
+      should: 'carry it, so an AI agent account can be marked',
+      actual: await fetchAssignable(web.client, 'd1'),
+      expected: [
+        { type: 'user', id: 'u-1', name: 'Helper', accountType: 'agent' },
+        { type: 'user', id: 'u-2', name: 'Ada', accountType: 'human' },
+      ],
+    });
+  });
 });
 
 describe('fetchPageTrail()', () => {

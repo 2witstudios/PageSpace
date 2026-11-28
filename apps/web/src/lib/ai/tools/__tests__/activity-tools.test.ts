@@ -23,7 +23,7 @@ vi.mock('@pagespace/lib/services/page-content-store', () => ({
     readPageContent: vi.fn(),
 }));
 
-import { activityTools, filterAccessibleActivities, shouldContinuePaging } from '../activity-tools';
+import { activityTools, filterAccessibleActivities, shouldContinuePaging, compactActorFor } from '../activity-tools';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import type { ToolExecutionContext } from '../../core/types';
@@ -311,3 +311,36 @@ describe('activity-tools', () => {
     });
   });
 });
+
+// Agent Signup Phase 2c: get_activity actors enter the model's context.
+describe('compactActorFor', () => {
+  const base = { actorEmail: 'a@example.com', actorDisplayName: null, isAiGenerated: false, userId: 'u-1' };
+  const ctx = { userId: 'me', currentUserEmail: 'me@example.com' };
+
+  it('labels an agent actor from its live accountType', () => {
+    expect(compactActorFor({ ...base, user: { name: 'Helper', accountType: 'agent' } }, ctx)).toEqual({
+      email: 'a@example.com', name: '[AI agent account, self-named] "Helper"', isYou: false, count: 0,
+    });
+  });
+
+  it('labels an agent even when its stored display name is the one shown', () => {
+    expect(compactActorFor({ ...base, actorDisplayName: 'Helper', user: { name: 'Renamed', accountType: 'agent' } }, ctx).name)
+      .toBe('[AI agent account, self-named] "Helper"');
+  });
+
+  it('leaves a human actor byte-identical', () => {
+    expect(compactActorFor({ ...base, actorDisplayName: 'Jane Doe', user: { name: 'Jane Doe', accountType: 'human' } }, ctx).name)
+      .toBe('Jane Doe');
+    expect(compactActorFor({ ...base, user: { name: null, accountType: 'human' } }, ctx).name).toBeNull();
+  });
+
+  it('leaves an erased actor (no user row) with its stored name, unmarked', () => {
+    expect(compactActorFor({ ...base, actorDisplayName: 'Deleted User', user: null }, ctx).name).toBe('Deleted User');
+  });
+
+  it('keeps the isYou decision', () => {
+    expect(compactActorFor({ ...base, userId: 'me', user: null }, ctx).isYou).toBe(true);
+    expect(compactActorFor({ ...base, isAiGenerated: true, actorEmail: 'me@example.com', user: null }, ctx).isYou).toBe(true);
+  });
+});
+

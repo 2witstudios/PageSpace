@@ -22,12 +22,15 @@ import { Button } from '@/components/ui/button';
 import { User, Check, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { TaskAssigneeData } from './task-list-types';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 interface Assignee {
   id: string;
   type: 'user' | 'agent';
   name: string;
   image: string | null;
+  /** `users.accountType` of a user assignee (absent for AI agent pages). */
+  accountType?: string | null;
 }
 
 interface MultiAssigneeSelectProps {
@@ -144,6 +147,9 @@ export function MultiAssigneeSelect({
                   {totalCount > 1 && ` +${totalCount - 1}`}
                 </span>
               )}
+              {totalCount <= 2 && userAssignees[0] && (
+                <AgentBadge accountType={userAssignees[0].accountType} />
+              )}
             </div>
           ) : (
             <span className="text-muted-foreground text-sm flex items-center gap-1">
@@ -189,6 +195,7 @@ export function MultiAssigneeSelect({
                           </AvatarFallback>
                         </Avatar>
                         <span className="truncate">{member.name}</span>
+                        <AgentBadge accountType={member.accountType} className="ml-1" />
                         {isSelected && <Check className="ml-auto h-4 w-4" />}
                       </CommandItem>
                     );

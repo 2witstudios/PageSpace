@@ -127,6 +127,14 @@ export interface InboxItem {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   lastMessageSender: string | null;
+  /**
+   * Agent marker (Agent Signup Phase 2c): `users.accountType` of the DM's
+   * other participant (`accountType`) and of a channel's last sender when that
+   * sender is a user (`lastMessageSenderAccountType`). The marker comes from
+   * these, never from the name.
+   */
+  accountType?: string | null;
+  lastMessageSenderAccountType?: string | null;
   unreadCount: number;
   driveId?: string;
   driveName?: string;

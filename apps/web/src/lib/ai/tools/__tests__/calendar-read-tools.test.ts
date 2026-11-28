@@ -611,6 +611,42 @@ describe('calendar-read-tools', () => {
       });
     });
 
+    it('labels an AI agent account creator/attendee for the model and leaves a human byte-identical (Agent Signup 2c)', async () => {
+      const event = createMockEvent({
+        createdById: 'user-123',
+        createdBy: { id: 'user-123', name: 'Test User', image: null, accountType: 'human' },
+        attendees: [
+          { id: 'att-1', status: 'ACCEPTED', isOrganizer: true, isOptional: false, user: { id: 'user-123', name: 'Test User', image: null, accountType: 'human' } },
+          { id: 'att-2', status: 'PENDING', isOrganizer: false, isOptional: false, user: { id: 'agent-1', name: 'Helper', image: null, accountType: 'agent' } },
+        ],
+      });
+      const findFirst = vi.fn().mockResolvedValue(event);
+      mockDb.query.calendarEvents.findFirst = findFirst;
+
+      const result = await calendarReadTools.get_calendar_event.execute!(
+        { eventId: 'event-1', includeAttendees: true },
+        createAuthContext()
+      );
+      const data = (result as { data: { event: { createdBy: { name: string }; attendees: { name: string }[] } } }).data;
+
+      assert({
+        given: 'a human creator and a human + an agent-account attendee',
+        should: 'leave human names byte-identical and label the agent account as quoted data',
+        actual: [data.event.createdBy.name, ...data.event.attendees.map((a) => a.name)],
+        expected: ['Test User', 'Test User', '[AI agent account, self-named] "Helper"'],
+      });
+
+      const query = findFirst.mock.calls[0][0] as {
+        with: { createdBy: { columns: Record<string, boolean> }; attendees: { with: { user: { columns: Record<string, boolean> } } } };
+      };
+      assert({
+        given: 'the event query',
+        should: 'select accountType for the creator and attendee users',
+        actual: [query.with.createdBy.columns.accountType, query.with.attendees.with.user.columns.accountType],
+        expected: [true, true],
+      });
+    });
+
     it('returns event when user is an attendee', async () => {
       const event = createMockEvent({
         createdById: 'other-user',

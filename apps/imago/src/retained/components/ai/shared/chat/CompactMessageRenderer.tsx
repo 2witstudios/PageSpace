@@ -15,12 +15,15 @@ import { SpendFallbackNotice } from '@/retained/components/messages/SpendFallbac
 import { CommandExecutionIndicator } from '@/retained/components/messages/CommandExecutionIndicator';
 import { ImageMessageContent } from './ImageMessageContent';
 import { SpokenTurnGlyph, isSpokenTurn } from './SpokenTurnGlyph';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import styles from './CompactMessageRenderer.module.css';
 
 interface CompactTextBlockProps {
   parts: TextPart[];
   role: 'user' | 'assistant' | 'system';
   senderName?: string;
+  /** `users.accountType` of the sender; an agent gets an AgentBadge. */
+  senderAccountType?: string | null;
   createdAt?: Date;
   editedAt?: Date | null;
   onEdit?: () => void;
@@ -46,6 +49,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   parts,
   role,
   senderName,
+  senderAccountType,
   createdAt,
   editedAt,
   onEdit,
@@ -75,6 +79,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
           <div className="text-xs font-medium text-primary dark:text-primary">
             {senderName}
           </div>
+          <AgentBadge accountType={senderAccountType} className="ml-1.5" />
         </div>
       )}
 
@@ -268,6 +273,7 @@ export const CompactMessageRenderer: React.FC<CompactMessageRendererProps> = Rea
                 parts={group.parts}
                 role={message.role as 'user' | 'assistant' | 'system'}
                 senderName={message.userName ?? user?.name ?? 'Unknown'}
+                senderAccountType={message.userName ? message.userAccountType : undefined}
                 createdAt={isLastTextBlock ? createdAt : undefined}
                 editedAt={isLastTextBlock ? editedAt : undefined}
                 onEdit={onEdit ? () => setIsEditing(true) : undefined}

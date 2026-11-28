@@ -52,6 +52,7 @@ import {
   boardSubtasksClass,
   boardToolbarClass,
 } from './board-view-class';
+import { assigneeLabel } from '../task-model/assignee-label';
 
 export type BoardRenderProps = {
   /** The board's accessible name. */
@@ -679,7 +680,7 @@ export function renderBoardCard({
           {due(task, today, done)}
           <span className={boardAssigneesClass}>
             {renderAvatarGroup({
-              names: task.assignees.map((entry) => entry.name),
+              names: task.assignees.map(assigneeLabel),
               agents: task.assignees.filter((entry) => entry.type === 'agent').map((entry) => entry.name),
               label: 'Assigned to',
             })}

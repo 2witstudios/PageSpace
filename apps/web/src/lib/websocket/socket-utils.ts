@@ -113,6 +113,8 @@ export interface InboxEventPayload {
   lastMessageAt?: string;
   lastMessagePreview?: string;
   lastMessageSender?: string;
+  /** users.accountType of a user sender; absent for an AI page sender (Agent Signup Phase 2c). */
+  lastMessageSenderAccountType?: string | null;
   unreadCount?: number;
   attachmentMeta?: AttachmentMeta | null;
   // thread_updated-only fields. Added inline (rather than as a discriminated
@@ -691,7 +693,12 @@ export interface AiStreamStartPayload {
    * The server remains the authority either way (see stream-subscription-authz.ts).
    */
   isShared?: boolean;
-  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+  /**
+   * `accountType` is present only for an agent account (Agent Signup Phase 2c),
+   * so a human's payload is unchanged and an absent field reads as human. The
+   * "X is chatting with the AI" line badges an agent from it, never from the name.
+   */
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string; accountType?: 'agent' };
 }
 
 export interface AiStreamCompletePayload {

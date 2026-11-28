@@ -130,6 +130,22 @@ describe('GET /api/calendar/events (context=user) — scoped token + personal ev
     expect(body.events.map((e: { id: string }) => e.id)).toContain('evt-personal');
   });
 
+  it('selects accountType with the creator and every attendee user, so an agent can be marked (Agent Signup 2c)', async () => {
+    (authenticateRequestWithOptions as Mock).mockResolvedValue(mockScopedMcpAuth(CREATOR_ID));
+
+    await GET(makeGetRequest());
+
+    type Cols = { columns: Record<string, boolean> };
+    const queries = (db.query.calendarEvents.findMany as Mock).mock.calls
+      .map(([args]) => args as { with?: { createdBy: Cols; attendees: { with: { user: Cols } } } })
+      .filter((args) => args?.with);
+    expect(queries.length).toBeGreaterThan(0);
+    for (const q of queries) {
+      expect(q.with?.createdBy.columns.accountType).toBe(true);
+      expect(q.with?.attendees.with.user.columns.accountType).toBe(true);
+    }
+  });
+
   it('does not leak a personal event created by a different user to a scoped MCP token', async () => {
     // The event fixture is fixed to CREATOR_ID; a different caller querying
     // under a scoped token must not see it even if it somehow surfaced

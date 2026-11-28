@@ -4,6 +4,7 @@ import React, { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { motion, useReducedMotion } from 'motion/react';
 import { ArrowUp, X, FileIcon, ImageIcon, FileText, CornerUpLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { InputCard } from '@/components/ui/floating-input';
 import { ChatTextarea, type ChatTextareaRef } from '@/components/ai/chat/input/ChatTextarea';
 import { ChannelInputFooter } from './ChannelInputFooter';
@@ -49,7 +50,8 @@ export interface ChannelInputProps {
   editingSessionKey?: string;
   /** Author + snippet for the quote-reply chip rendered above the input row.
       Parent owns the active quoted message id; this prop only drives the chip UI. */
-  quotedPreview?: { authorName: string; snippet: string } | null;
+  /** `authorAccountType` marks an agent author on the chip (Agent Signup Phase 2c). */
+  quotedPreview?: { authorName: string; snippet: string; authorAccountType?: string | null } | null;
   /** Dismiss the active quote — invoked when the user clicks the chip's X. */
   onClearQuote?: () => void;
   /** Additional class names */
@@ -303,6 +305,7 @@ export const ChannelInput = forwardRef<ChannelInputRef, ChannelInputProps>(
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-medium truncate">
                     Replying to {quotedPreview.authorName}
+                    <AgentBadge accountType={quotedPreview.authorAccountType} className="ml-1" />
                   </p>
                   <p className="text-xs text-muted-foreground truncate">
                     {quotedPreview.snippet}

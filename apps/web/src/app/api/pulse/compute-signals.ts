@@ -20,6 +20,7 @@ import { pageVersions } from '@pagespace/db/schema/versioning';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { users } from '@pagespace/db/schema/auth';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import type { Signal } from '@pagespace/lib/home-signals/types';
 
 const DASHBOARD_HOME_DAYS_BACK = 60; // recency window for "drives you use"
@@ -94,7 +95,7 @@ export async function computeMentionSignal(
   let subject: Signal['subject'];
   if (total === 1) {
     const [row] = await db
-      .select({ actorName: users.name, pageTitle: pages.title, pageId: pages.id })
+      .select({ actorName: users.name, actorAccountType: users.accountType, pageTitle: pages.title, pageId: pages.id })
       .from(notifications)
       .leftJoin(users, eq(users.id, notifications.triggeredByUserId))
       .leftJoin(pages, eq(pages.id, notifications.pageId))
@@ -105,7 +106,9 @@ export async function computeMentionSignal(
     // decryptField is a no-op on plaintext (checks looksEncrypted first), so
     // it's always safe to call — matching how pulse/generate/route.ts already
     // decrypts every actor name it reads.
-    const actorName = row?.actorName ? await decryptField(row.actorName) : null;
+    // A plain-text line built from another user's name: an agent is marked
+    // "Name (AI agent)" from its live accountType (Agent Signup Phase 2c).
+    const actorName = row?.actorName ? withAgentMarker(await decryptField(row.actorName), row.actorAccountType) : null;
     if (actorName && row?.pageTitle) {
       leadText = `${actorName} is waiting on you in ${row.pageTitle}`;
       shortText = `${actorName} in ${row.pageTitle}`;
@@ -391,7 +394,7 @@ export async function computePagesChangedSignal(
   let subject: Signal['subject'];
   if (total === 1) {
     const [row] = await db
-      .select({ pageId: pageVersions.pageId, pageTitle: pages.title, actorName: users.name })
+      .select({ pageId: pageVersions.pageId, pageTitle: pages.title, actorName: users.name, actorAccountType: users.accountType })
       .from(pageVersions)
       .innerJoin(pages, eq(pages.id, pageVersions.pageId))
       .leftJoin(users, eq(users.id, pageVersions.createdBy))
@@ -401,7 +404,7 @@ export async function computePagesChangedSignal(
     if (row) {
       // users.name may be field-level encrypted — see the matching comment
       // in computeMentionSignal.
-      const actorName = row.actorName ? await decryptField(row.actorName) : null;
+      const actorName = row.actorName ? withAgentMarker(await decryptField(row.actorName), row.actorAccountType) : null;
       leadText = actorName ? `${row.pageTitle} changed by ${actorName}` : `${row.pageTitle} changed`;
       shortText = row.pageTitle;
       subject = { type: 'page', id: row.pageId, title: row.pageTitle };

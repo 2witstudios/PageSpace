@@ -199,7 +199,11 @@ function ChannelView({ page }: ChannelViewProps) {
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
   const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
   const quotedPreview = activeQuotedSnapshot
-    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    ? {
+        authorName: activeQuotedSnapshot.authorName ?? 'Member',
+        snippet: activeQuotedSnapshot.contentSnippet,
+        authorAccountType: activeQuotedSnapshot.authorAccountType,
+      }
     : null;
 
   // Close any open thread when navigating between channels — `useThreadPanelStore`
@@ -329,6 +333,8 @@ function ChannelView({ page }: ChannelViewProps) {
       id: m.id,
       authorId: m.user?.id ?? m.userId ?? null,
       authorName: m.aiMeta?.senderName || m.user?.name || 'Member',
+      // An AI-page persona is not a user account, so it carries no marker.
+      authorAccountType: m.aiMeta?.senderName ? null : m.user?.accountType ?? null,
       authorImage: m.user?.image ?? null,
       contentSnippet: buildThreadPreview(m.content),
       createdAt: m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt),

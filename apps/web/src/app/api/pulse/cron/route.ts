@@ -43,6 +43,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { modelContextName } from '@/lib/ai/core/model-context-name';
 import { errorLogFields } from '@pagespace/lib/logging/error-cause';
 import { HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 
@@ -271,6 +272,7 @@ async function buildAndPersistPulse(
       driveId: driveMembers.driveId,
       userName: users.name,
       userEmail: users.email,
+      userAccountType: users.accountType,
     })
     .from(driveMembers)
     .leftJoin(users, eq(users.id, driveMembers.userId))
@@ -294,7 +296,8 @@ async function buildAndPersistPulse(
 
   const teamByDrive = teamMembers.reduce((acc, m) => {
     if (!acc[m.driveId]) acc[m.driveId] = [];
-    acc[m.driveId].push(m.userName || m.userEmail?.split('@')[0] || 'Unknown');
+    // Names entering the prompt: an agent is labelled (Agent Signup Phase 2c).
+    acc[m.driveId].push(modelContextName(m.userName || m.userEmail?.split('@')[0] || 'Unknown', m.userAccountType));
     return acc;
   }, {} as Record<string, string[]>);
 
@@ -319,8 +322,11 @@ async function buildAndPersistPulse(
       isAiGenerated: activityLogs.isAiGenerated,
       contentRef: activityLogs.contentRef,
       contentSnapshot: activityLogs.contentSnapshot,
+      // Live account type of the actor; null once the actor is erased.
+      actorAccountType: users.accountType,
     })
     .from(activityLogs)
+    .leftJoin(users, eq(users.id, activityLogs.userId))
     .where(
       and(
         inArray(activityLogs.driveId, driveIds),
@@ -362,7 +368,7 @@ async function buildAndPersistPulse(
       aiConversationId: activity.aiConversationId,
       isAiGenerated: activity.isAiGenerated,
       actorEmail: activity.actorEmail,
-      actorDisplayName: activity.actorName,
+      actorDisplayName: modelContextName(activity.actorName, activity.actorAccountType),
       content: activity.contentSnapshot ?? null,
       driveId: activity.driveId,
     });
@@ -463,8 +469,10 @@ async function buildAndPersistPulse(
       resourceTitle: activityLogs.resourceTitle,
       driveId: activityLogs.driveId,
       timestamp: activityLogs.timestamp,
+      actorAccountType: users.accountType,
     })
     .from(activityLogs)
+    .leftJoin(users, eq(users.id, activityLogs.userId))
     .where(
       and(
         inArray(activityLogs.driveId, driveIds),
@@ -491,7 +499,7 @@ async function buildAndPersistPulse(
 
     if (!activityByPersonPage[key]) {
       activityByPersonPage[key] = {
-        person: a.actorName ?? a.actorEmail,
+        person: modelContextName(a.actorName ?? a.actorEmail, a.actorAccountType),
         pageId: a.resourceId,
         pageTitle: a.resourceTitle || 'Untitled',
         driveName,
@@ -536,6 +544,7 @@ async function buildAndPersistPulse(
       .select({
         senderName: users.name,
         senderEmail: users.email,
+        senderAccountType: users.accountType,
         content: directMessages.content,
         createdAt: directMessages.createdAt,
       })
@@ -563,7 +572,7 @@ async function buildAndPersistPulse(
       unreadMessagesList.flatMap((m) => [m.senderName, m.senderName ? null : m.senderEmail])
     );
     unreadDMs = unreadMessagesList.map((m) => ({
-      from: lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone',
+      from: modelContextName(lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone', m.senderAccountType),
       content: m.content || '',
       sentAt: m.createdAt,
     }));
@@ -584,6 +593,7 @@ async function buildAndPersistPulse(
       pageTitle: pages.title,
       senderName: users.name,
       senderEmail: users.email,
+      senderAccountType: users.accountType,
       content: messages.content,
       role: messages.role,
       createdAt: messages.createdAt,
@@ -626,7 +636,7 @@ async function buildAndPersistPulse(
       };
     }
     acc[key].messages.push({
-      from: chat.senderName || chat.senderEmail?.split('@')[0] || 'Someone',
+      from: modelContextName(chat.senderName || chat.senderEmail?.split('@')[0] || 'Someone', chat.senderAccountType),
       content: chat.content?.substring(0, 500) || '',
       sentAt: chat.createdAt,
     });
@@ -639,6 +649,7 @@ async function buildAndPersistPulse(
   const recentMentionsRaw = await db
     .select({
       mentionedByName: users.name,
+      mentionedByAccountType: users.accountType,
       pageTitle: pages.title,
       createdAt: userMentions.createdAt,
     })
@@ -668,6 +679,7 @@ async function buildAndPersistPulse(
       pageTitle: pages.title,
       pageContent: pages.content,
       sharedByName: users.name,
+      sharedByAccountType: users.accountType,
       grantedAt: pagePermissions.grantedAt,
     })
     .from(pagePermissions)
@@ -827,14 +839,14 @@ async function buildAndPersistPulse(
     })),
 
     mentions: recentMentions.map(m => ({
-      by: m.mentionedByName || 'Someone',
+      by: modelContextName(m.mentionedByName || 'Someone', m.mentionedByAccountType),
       inPage: m.pageTitle || 'a page',
       when: m.createdAt.toISOString(),
     })),
 
     sharedWithYou: recentShares.map(s => ({
       page: s.pageTitle || 'a page',
-      by: s.sharedByName || 'Someone',
+      by: modelContextName(s.sharedByName || 'Someone', s.sharedByAccountType),
       preview: s.pageContent?.substring(0, 500) || '',
       when: s.grantedAt?.toISOString(),
     })),

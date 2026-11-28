@@ -394,3 +394,67 @@ describe('GET /api/inbox channel candidates (B7c)', () => {
     expect(__values).toContainEqual({ __param: ['drive_member'] });
   });
 });
+
+describe('GET /api/inbox agent marker (Agent Signup Phase 2c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const queries = () =>
+    vi.mocked(db.execute).mock.calls.map(([arg]) => (arg as unknown as { __sqlText: string }).__sqlText);
+
+  const mockRows = (dmRows: unknown[], channelRows: unknown[]) => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockImplementation(async (arg: unknown) => {
+      if (isDmQuery(arg)) return { rows: dmRows };
+      if (isChannelQuery(arg)) return { rows: channelRows };
+      return { rows: [] };
+    });
+    (getBatchPagePermissions as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Map([['ch_1', { canView: true, canEdit: false, canShare: false, canDelete: false }]])
+    );
+  };
+
+  it('selects the other DM user\'s accountType and the channel sender\'s accountType (users only, never an AI page sender)', async () => {
+    mockRows([dmRow], [channelRow]);
+    await GET(new Request('http://localhost/api/inbox'));
+    await GET(new Request('http://localhost/api/inbox?driveId=drv_1'));
+
+    const [dmSql, channelSql, driveChannelSql] = queries();
+    expect(dmSql).toContain('u."accountType" as other_user_account_type');
+    for (const text of [channelSql, driveChannelSql]) {
+      expect(text).toContain(`CASE WHEN cm."aiMeta"->>'senderName' IS NULL THEN u."accountType" END as sender_account_type`);
+      expect(text).toContain('clm.sender_account_type');
+    }
+  });
+
+  it('returns the account types next to the names, which stay unchanged', async () => {
+    mockRows(
+      [{ ...dmRow, other_user_account_type: 'agent' }],
+      [{ ...channelRow, sender_account_type: 'agent' }]
+    );
+    const body = await (await GET(new Request('http://localhost/api/inbox'))).json();
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+
+    expect(dm).toMatchObject({ name: 'Alice', accountType: 'agent' });
+    expect(channel).toMatchObject({ lastMessageSender: 'Bob', lastMessageSenderAccountType: 'agent' });
+  });
+
+  it('returns the channel sender account type in the drive-scoped inbox too', async () => {
+    mockRows([], [{ ...channelRow, sender_account_type: 'agent' }]);
+    const body = await (await GET(new Request('http://localhost/api/inbox?driveId=drv_1'))).json();
+
+    expect(body.items[0]).toMatchObject({ lastMessageSender: 'Bob', lastMessageSenderAccountType: 'agent' });
+  });
+
+  it('returns null account types when the row carries none (erased user, AI page sender)', async () => {
+    mockRows([dmRow], [channelRow]);
+    const body = await (await GET(new Request('http://localhost/api/inbox'))).json();
+    const dm = body.items.find((i: { type: string }) => i.type === 'dm');
+    const channel = body.items.find((i: { type: string }) => i.type === 'channel');
+
+    expect(dm.accountType).toBeNull();
+    expect(channel.lastMessageSenderAccountType).toBeNull();
+  });
+});

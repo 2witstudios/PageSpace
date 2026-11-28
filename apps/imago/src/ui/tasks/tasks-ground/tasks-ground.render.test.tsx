@@ -116,3 +116,31 @@ describe('renderTasksGround()', () => {
     });
   });
 });
+
+describe('renderTasksGround() — AI agent accounts (Agent Signup 2c)', () => {
+  test('person tooltips', () => {
+    const markup = html({
+      state: {
+        kind: 'ready',
+        sections: groundSections(
+          [
+            row('t', {
+              dueDate: '2020-01-01T12:00:00',
+              assignees: [
+                { id: 'a1', taskId: 't', userId: 'u-ada', agentPageId: null, user: { id: 'u-ada', name: 'Ada', image: null, accountType: 'human' } },
+                { id: 'a2', taskId: 't', userId: 'u-bot', agentPageId: null, user: { id: 'u-bot', name: 'Helper', image: null, accountType: 'agent' } },
+              ],
+            }),
+          ],
+          '2026-10-12',
+        ),
+      },
+    });
+    assert({
+      given: 'a row with a person and an AI agent account on it',
+      should: 'mark only the agent account in its face\'s tooltip',
+      actual: [markup.includes('title="Ada"'), markup.includes('title="Helper (AI agent)"'), markup.includes('title="Helper"')],
+      expected: [true, true, false],
+    });
+  });
+});

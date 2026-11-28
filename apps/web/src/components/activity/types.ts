@@ -5,6 +5,8 @@ export interface ActivityUser {
   name: string;
   email: string;
   image: string | null;
+  /** Live `users.accountType`; marks an agent actor at render (Agent Signup Phase 2c). */
+  accountType?: string | null;
 }
 
 export interface ActivityLog {
@@ -42,6 +44,8 @@ export interface ActivityGroupSummary {
   label: string;
   actorName: string;
   actorImage: string | null;
+  /** The first actor's live accountType; null for an erased actor (no user row). */
+  actorAccountType: string | null;
   timestamp: string;
 }
 
@@ -70,6 +74,8 @@ export interface Actor {
   name: string | null;
   email: string;
   image: string | null;
+  /** Null for an erased actor (no user row). */
+  accountType?: string | null;
 }
 
 export interface Pagination {

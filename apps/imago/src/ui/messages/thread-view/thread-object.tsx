@@ -5,12 +5,15 @@ import type { Post } from '../message-model/post';
 import type { ThreadState } from '../thread/thread-state';
 import type { SendResult } from '../thread/use-thread';
 import { groupPosts } from '../post-groups/post-groups';
+import { withAccountType } from '../message-model/account-type';
 import { renderThreadView, type ThreadViewKind } from './thread-view.render';
 
 export type ThreadObjectProps = {
   readonly kind: ThreadViewKind;
   readonly name: string;
   readonly image?: string | null;
+  /** The other person's `users.accountType` in a DM (Agent Signup Phase 2c). */
+  readonly accountType?: string;
   readonly viewerId: string;
   readonly state: ThreadState;
   /** Every post to draw, oldest first: the thread's stored and sending posts. */
@@ -33,7 +36,7 @@ const blank = { draft: '', error: null };
  * begins, keeps a draft per thread, and sends it. A send that fails gives the
  * text back with why, unless the viewer has typed anew since.
  */
-export function ThreadObject({ kind, name, image, viewerId, state, posts, loadOlder, send, canPost, today }: ThreadObjectProps) {
+export function ThreadObject({ kind, name, image, accountType, viewerId, state, posts, loadOlder, send, canPost, today }: ThreadObjectProps) {
   const { threadId } = state;
   const [drafts, setDrafts] = useState<Drafts>({});
   const { draft, error } = drafts[threadId] ?? blank;
@@ -78,6 +81,7 @@ export function ThreadObject({ kind, name, image, viewerId, state, posts, loadOl
         kind,
         name,
         image,
+        ...withAccountType('accountType', accountType),
         viewerId,
         // Its parent draws a not-found thread itself and never mounts this for it.
         status: state.status === 'not-found' ? 'error' : state.status,
