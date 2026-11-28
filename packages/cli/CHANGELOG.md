@@ -11,6 +11,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   its own access key, which becomes this machine's active key — so `pagespace drives list` and
   `pagespace mcp` work as the agent immediately. The agent's secret goes to the OS keychain and
   is printed only with `--show-secret`.
+- **`PAGESPACE_NO_KEYCHAIN=1`** stores credentials in `~/.pagespace/credentials.json` without
+  trying the OS keychain, for machines that have none (containers, CI, agent sandboxes). Without
+  it, the keychain-unavailable notice now prints once per command, on one line.
 - **`pagespace login --agent`** signs an existing agent in with its secret, read from stdin or a
   prompt (never from an argument).
 - **`pagespace agent claim`** prints a link and code for a human to approve and waits; once
