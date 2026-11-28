@@ -27,7 +27,7 @@ import { orgLegStatus } from '../organizations/status-core';
 import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
-import { spendableCentsFor } from './credit-balance';
+import { readSpendableCents, spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, walletChainStatus, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   orgEntitlementTier,
@@ -547,8 +547,9 @@ export async function listSpendChoices(userId: string, driveId: string | null): 
   // owner's tier — the wallet the gate charges, so the choice never shows an agent's empty wallet.
   const payer = await resolveOwnCreditsPayer({ userId, tier: await tierOf(userId) });
   const personalId = await ensurePersonalRootWalletId(db, payer.payerId);
-  const personal = await personalRootOf(payer.payerId);
-  const ownRemaining = Math.max(0, spendableCentsFor(personal, payer.tier));
+  // The account-aware read (the same one the credit balance shows): a starter grant the gate
+  // will never write — an agent's (ADR 0008 Decision 9) — is never displayed as spendable.
+  const ownRemaining = Math.max(0, await readSpendableCents(payer.payerId, payer.tier));
   const billedToName = payer.viaAgentOwner ? await readUserDisplayName(payer.payerId) : null;
   const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number | null): SpendChoice => ({
     source,
