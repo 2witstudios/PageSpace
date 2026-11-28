@@ -56,3 +56,20 @@ export function planPlaneMigrations({
   if (stray !== undefined) return { ok: false, reason: 'out_of_order', name: sorted[firstPending]!.name };
   return { ok: true, pending: rest.map((migration) => migration.name) };
 }
+
+/**
+ * The connection string the migration one-shot uses. On Fly the one-shot runs
+ * in the plane's app and inherits its runtime PLANE_METADATA_DATABASE_URL (a
+ * login that cannot run DDL; an app secret beats a same-named --env), so the
+ * owner URL travels as PLANE_METADATA_DATABASE_URL_MIGRATE and wins when set.
+ * Blank counts as unset. Local dev and CI set only the runtime name.
+ */
+export function selectPlaneMigrationUrl(env: {
+  readonly PLANE_METADATA_DATABASE_URL_MIGRATE?: string | undefined;
+  readonly PLANE_METADATA_DATABASE_URL?: string | undefined;
+}): string | null {
+  const owner = env.PLANE_METADATA_DATABASE_URL_MIGRATE?.trim() ?? '';
+  if (owner.length > 0) return owner;
+  const runtime = env.PLANE_METADATA_DATABASE_URL?.trim() ?? '';
+  return runtime.length > 0 ? runtime : null;
+}
