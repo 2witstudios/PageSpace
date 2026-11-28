@@ -41,17 +41,21 @@ import { pendingPageInvites } from '@pagespace/db/schema/pending-page-invites';
 const mail = vi.hoisted(() => ({ inviteUrls: new Map<string, string>(), magicLinks: new Map<string, string>() }));
 vi.mock('@pagespace/lib/services/notification-email-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/services/notification-email-service')>()),
+  // The handlers read the send outcome (a suppressed send is rolled back like a failed one): report a delivery.
   sendPendingDriveInvitationEmail: vi.fn(async (input: { recipientEmail: string; inviteUrl: string }) => {
     mail.inviteUrls.set(input.recipientEmail, input.inviteUrl);
+    return { status: 'sent' as const };
   }),
   sendPendingPageShareInvitationEmail: vi.fn(async (input: { recipientEmail: string; inviteUrl: string }) => {
     mail.inviteUrls.set(input.recipientEmail, input.inviteUrl);
+    return { status: 'sent' as const };
   }),
 }));
 vi.mock('@pagespace/lib/services/email-service', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@pagespace/lib/services/email-service')>()),
   sendEmail: vi.fn(async (input: { to: string; react: { props: { magicLinkUrl?: string } } }) => {
     if (input.react.props.magicLinkUrl) mail.magicLinks.set(input.to, input.react.props.magicLinkUrl);
+    return { status: 'sent' as const };
   }),
 }));
 
@@ -93,6 +97,9 @@ beforeAll(async () => {
     requireDb('guests-policy-matrix.integration.test.ts', error);
   }
   vi.stubEnv('WEB_APP_URL', 'http://localhost');
+  // Each sign-up comes from its own x-forwarded-for address, through one declared proxy: off Fly that header is
+  // ignored unless TRUSTED_PROXY_HOPS is set (client-ip.ts), and every sign-up would share one magic-link IP bucket.
+  vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
 });
 
 afterAll(() => {
