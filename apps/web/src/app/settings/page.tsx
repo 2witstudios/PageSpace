@@ -7,7 +7,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
-import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound } from "lucide-react";
+import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkles, Eye, Cable, Calendar, Scale, HardDrive, SlashSquare, Coins, Cookie, FileText, Lock, KeyRound, Bot } from "lucide-react";
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { MarketingLink } from "@/components/ui/MarketingLink";
 import { filterSettingsItems } from "./settings-visibility";
@@ -122,6 +122,15 @@ export default function SettingsPage() {
           href: "/settings/ai",
           available: true,
         },
+        // ADR 0008 Phase 4: AI agents with their own accounts that this person claimed and pays
+        // for. Only a person can own an agent, so an agent's own settings never list it.
+        ...(user?.accountType === 'agent' ? [] : [{
+          title: "Agents",
+          description: "AI agents you have claimed — revoke, rotate secrets, or claim a new one",
+          icon: Bot,
+          href: "/settings/agents",
+          available: true,
+        }]),
       ]),
     },
     {

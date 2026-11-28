@@ -159,6 +159,11 @@
       "import": "./dist/services/agent-identities.js",
       "require": "./dist/services/agent-identities.js"
     },
+    "./services/agent-ownership": {
+      "types": "./dist/services/agent-ownership.d.ts",
+      "import": "./dist/services/agent-ownership.js",
+      "require": "./dist/services/agent-ownership.js"
+    },
     "./organizations/api-error-codes": {
       "types": "./dist/organizations/api-error-codes.d.ts",
       "import": "./dist/organizations/api-error-codes.js",

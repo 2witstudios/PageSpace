@@ -1187,6 +1187,15 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Settings → Agents (Phase 4): an owner listing, revoking or unlinking their
+  // agents, keyed per signed-in user. Generous for a person clicking around;
+  // a loop is a stolen session, and revoke/unlink are irreversible.
+  AGENT_OWNER_MANAGE: {
+    maxAttempts: 30,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
   // Per-webhook cap on posted channel messages (key: `page-webhook:{webhookId}`).
   // Meant to blunt abuse/runaway senders, not throttle legitimate bursty use —
   // matches Discord's own per-webhook limit (30 posts/min). A flooding caller

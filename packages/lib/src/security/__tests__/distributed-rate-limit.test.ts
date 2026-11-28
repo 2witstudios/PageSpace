@@ -955,6 +955,10 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.AGENT_CLAIM_INIT).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
     });
 
+    it('AGENT_OWNER_MANAGE allows an owner 30 agent-management requests per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_OWNER_MANAGE).toEqual({ maxAttempts: 30, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
     it('EMAIL_RESEND has 3 attempts per hour', () => {
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.maxAttempts).toBe(3);
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.windowMs).toBe(60 * 60 * 1000);
