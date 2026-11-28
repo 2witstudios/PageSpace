@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import { actorFromAuth } from '@/lib/auth/request-actor';
 import { codeChallengeOf, codeVerifierFor, createEnrollmentState, ENROLLMENT_COOKIE, ENROLLMENT_TTL_MS, googleAuthorizeUrl, googleRedirectUri } from '@/lib/agent-accounts/google-enrollment-flow';
@@ -44,7 +45,10 @@ export async function POST(request: Request) {
   const { owner, returnTo, ...input } = parsed.data;
   try {
     const prepared = await authority.prepareOAuthEnrollment({ actor: actorFromAuth(auth), owner, input });
-    if (!prepared.ok) return NextResponse.json({ error: prepared.reason }, { status: REFUSAL_STATUS[prepared.reason] ?? 400 });
+    if (!prepared.ok) {
+      if (prepared.reason === 'forbidden') auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'agent_account', details: { change: 'connect', provider: 'google', reason: prepared.reason } });
+      return NextResponse.json({ error: prepared.reason }, { status: REFUSAL_STATUS[prepared.reason] ?? 400 });
+    }
     const { state, nonce } = createEnrollmentState({ secret, userId: auth.userId, owner, input, returnTo, now: Date.now() });
     const authorizeUrl = googleAuthorizeUrl({ clientId, redirectUri: googleRedirectUri(), scopes: prepared.requestedScopes, state, codeChallenge: codeChallengeOf(codeVerifierFor(secret, nonce)) });
     const response = NextResponse.json({ authorizeUrl });
