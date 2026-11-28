@@ -31,6 +31,9 @@ process.env.INTERNAL_REALTIME_URL = process.env.INTERNAL_REALTIME_URL || 'http:/
 // globalThis is shared across files: a file that swaps global.fetch for a mock
 // leaks it into whichever file runs next, and the order shifts as files change.
 // Capture the real fetch on the first file and hand it back to every file.
-const fetchStore = globalThis as typeof globalThis & { __pagespaceRealFetch?: typeof fetch };
-fetchStore.__pagespaceRealFetch ??= globalThis.fetch;
-globalThis.fetch = fetchStore.__pagespaceRealFetch;
+// (A block: this file is a global script, so its names must not leak.)
+{
+  const fetchStore = globalThis as typeof globalThis & { __pagespaceRealFetch?: typeof fetch };
+  fetchStore.__pagespaceRealFetch ??= globalThis.fetch;
+  globalThis.fetch = fetchStore.__pagespaceRealFetch;
+}
