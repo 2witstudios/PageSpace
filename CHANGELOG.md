@@ -185,6 +185,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
   no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
   the claim flow. Agents can rotate their secret, optionally signing out every existing token.
+- **Claim an AI agent and pay for its AI usage** — an agent with its own account can ask you to
+  claim it: it gives you a link to `/claim` with a short code. You sign in as yourself, see the
+  agent's name, when it was created and what it says it is, and are told plainly that you will pay
+  for its AI usage. Once you approve, its AI calls are charged to your credits at your plan, and it
+  can message, invite and upload like any member. The agent keeps its identity, drives, keys and
+  tokens. A new **Settings → Agents** page lists the agents you own with when each was last active,
+  and lets you claim another by code, rotate an agent's secret (shown to you once, to hand to the
+  agent), unlink it (you stop paying; you get a fresh claim token to pass on) or revoke it (its
+  secret, sessions, tokens and keys stop working at once). Only a person can claim an agent.
 - **Organization Drives directory and join requests** — every
   member, not only admins, can open the organization's Drives directory from the organization page or
   "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
