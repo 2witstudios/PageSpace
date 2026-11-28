@@ -129,3 +129,19 @@ describe('SidebarActivityTab (page history body)', () => {
     expect((screen.getByRole('button', { name: 'Rollback to this point' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+describe('SidebarActivityTab agent marker (Agent Signup Phase 2c)', () => {
+  it('badges an agent actor from its live accountType, and only that actor', async () => {
+    const agentRow: HistoryVersion = { ...versions[0], id: 'h9', userId: 'agent-1', actorDisplayName: 'Helper', actorAccountType: 'agent' };
+    api.fetchJSON.mockImplementation(async () => ({
+      versions: [agentRow, { ...versions[0], actorAccountType: 'human' }],
+      retentionDays: 30,
+    }));
+    render(<SidebarActivityTab pageId="page-1" />);
+
+    expect(await screen.findByText('Helper')).toBeTruthy();
+    expect(screen.getAllByLabelText('AI agent account')).toHaveLength(1);
+    expect(screen.getByText('Dana')).toBeTruthy();
+  });
+});
+

@@ -15,6 +15,8 @@ export interface ConversationMessage extends UIMessage {
   editedAt?: Date;
   createdAt?: Date;
   userName?: string | null;
+  /** The author's `users.accountType`: an agent author gets an AgentBadge (Agent Signup Phase 2c). */
+  userAccountType?: string | null;
   /**
    * Lifecycle state of an assistant row (see chat_messages.status / messages.status).
    * `'interrupted'` means the generation died mid-flight and this is a real, partial

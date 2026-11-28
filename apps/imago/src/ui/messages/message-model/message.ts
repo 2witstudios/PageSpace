@@ -18,6 +18,8 @@ export type ConversationUserResponse = {
   readonly username: string | null;
   readonly displayName: string | null;
   readonly avatarUrl: string | null;
+  /** `users.accountType`: `agent` marks a self-named AI agent account (Agent Signup Phase 2c). */
+  readonly accountType?: string | null;
 };
 
 /** One of the viewer's DM conversations from GET /api/messages/conversations. */
@@ -77,6 +79,8 @@ export type DirectThread = {
   readonly username?: string | null;
   readonly avatarUrl: string | null;
   readonly otherUserId: string | null;
+  /** The other person's `users.accountType`, when the server sent it: marks an agent. */
+  readonly accountType?: string;
   readonly lastMessageAt: string | null;
   readonly lastMessagePreview: string | null;
   /** UTC ISO: the viewer has read the conversation up to here. */

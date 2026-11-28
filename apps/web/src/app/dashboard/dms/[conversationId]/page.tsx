@@ -139,7 +139,11 @@ export default function InboxDMPage() {
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
   const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
   const quotedPreview = activeQuotedSnapshot
-    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    ? {
+        authorName: activeQuotedSnapshot.authorName ?? 'Member',
+        snippet: activeQuotedSnapshot.contentSnippet,
+        authorAccountType: activeQuotedSnapshot.authorAccountType,
+      }
     : null;
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
@@ -411,6 +415,7 @@ export default function InboxDMPage() {
       id: m.id,
       authorId: m.senderId,
       authorName,
+      authorAccountType: isOwn ? null : conversation?.otherUser?.accountType ?? null,
       authorImage,
       contentSnippet: buildThreadPreview(m.content),
       createdAt: typeof m.createdAt === 'string' ? new Date(m.createdAt) : m.createdAt,

@@ -17,6 +17,7 @@ import { consumePendingAbort } from '@/lib/ai/core/pending-abort-intents';
 import { decideCheckpoint, CHECKPOINT_DIRTY_FLUSH_INTERVAL_MS } from '@/lib/ai/core/checkpoint-scheduler';
 import { isDurabilityBoundary } from '@/lib/ai/core/durability-boundary';
 import { startFrameLogWriter, releaseFramesForMessage } from '@/lib/ai/core/frame-log-writer';
+import { isAgentAccount } from '@pagespace/lib/auth/agent/display-name';
 
 export interface StreamLifecycleParams {
   messageId: string;
@@ -24,6 +25,8 @@ export interface StreamLifecycleParams {
   conversationId: string;
   userId: string;
   displayName: string;
+  /** The generating user's `users.accountType`; an agent is marked on the stream-start broadcast. */
+  accountType?: string | null;
   browserSessionId: string;
   /**
    * The abort registry's key for this generation. Persisted on the row so that an abort landing
@@ -187,7 +190,7 @@ const MAX_FOLD_BYTES = 24 * 1024 * 1024;
 export const createStreamLifecycle = async (
   params: StreamLifecycleParams,
 ): Promise<StreamLifecycleHandle> => {
-  const { messageId, channelId, conversationId, userId, displayName, browserSessionId, isShared, streamId } = params;
+  const { messageId, channelId, conversationId, userId, displayName, accountType, browserSessionId, isShared, streamId } = params;
 
   // Lazily started, and it stops itself when this instance owns no more streams. An instance that
   // never generates never polls.
@@ -357,7 +360,13 @@ export const createStreamLifecycle = async (
     conversationId,
     startedAt: startedAt.toISOString(),
     isShared: isShared === true,
-    triggeredBy: { userId, displayName, browserSessionId },
+    triggeredBy: {
+      userId,
+      displayName,
+      browserSessionId,
+      // Agent only, so a human's payload stays byte-identical (Agent Signup Phase 2c).
+      ...(isAgentAccount(accountType) ? { accountType: 'agent' as const } : {}),
+    },
   };
   broadcastAiStreamStart(streamStartPayload).catch(() => {});
   // Transitional conv-room mirror (Agent-Session SSoT epic, Phase 2): the

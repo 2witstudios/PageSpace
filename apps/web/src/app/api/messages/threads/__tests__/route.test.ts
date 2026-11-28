@@ -161,6 +161,20 @@ describe('GET /api/messages/threads PII decryption dedup', () => {
     expect(body.dms[0].otherUser.email).toBe('other@example.com');
   });
 
+  it('selects the counterpart accountType and returns it beside the unchanged name (Agent Signup Phase 2c)', async () => {
+    mockExecute([dmRow({ other_user_account_type: 'agent' }), dmRow({ id: 'conv_2' })], []);
+
+    const response = await GET(new Request('http://localhost/api/messages/threads'));
+    const body = await response.json();
+
+    const dmSql = vi.mocked(db.execute).mock.calls
+      .map(([arg]) => (arg as unknown as { __sqlText: string }).__sqlText)
+      .find((text) => text.includes('dm_conversations'));
+    expect(dmSql).toContain('u."accountType" as other_user_account_type');
+    expect(body.dms[0].otherUser).toMatchObject({ name: 'Other', accountType: 'agent' });
+    expect(body.dms[1].otherUser).toMatchObject({ name: 'Other', accountType: null });
+  });
+
   it('does not crash when a counterpart user row is gone (deleted user)', async () => {
     mockExecute([dmRow({ other_user_id: null, other_user_name: null, other_user_email: null })], []);
 

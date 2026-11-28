@@ -6,6 +6,8 @@ export interface UserInfo {
   name: string | null;
   email: string;
   image?: string | null;
+  /** `users.accountType`, joined at read time so an agent actor is badged (Agent Signup Phase 2c). */
+  accountType?: 'human' | 'agent' | null;
 }
 
 export interface DriveInfo {

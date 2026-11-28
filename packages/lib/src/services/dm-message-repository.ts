@@ -88,6 +88,8 @@ const dmMessageWith = {
         columns: {
           id: true,
           name: true,
+          // The reactions tooltip marks an agent reactor (Phase 2c).
+          accountType: true,
         },
       },
     },
@@ -1169,6 +1171,7 @@ async function loadDmReactionWithUser(reactionId: string) {
         columns: {
           id: true,
           name: true,
+          accountType: true,
         },
       },
     },

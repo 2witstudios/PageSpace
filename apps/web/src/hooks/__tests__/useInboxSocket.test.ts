@@ -428,4 +428,46 @@ describe('useInboxSocket', () => {
       expect(mockMutate).not.toHaveBeenCalled();
     });
   });
+
+  // Agent Signup Phase 2c: the sender's account type travels with the sender
+  // name, so a live update never leaves the previous sender's marker on a new
+  // sender's name.
+  describe('last-sender agent marker', () => {
+    const seed = (lastMessageSenderAccountType: string | null): InboxResponse => ({
+      items: [{
+        id: 'ch-1', type: 'channel', name: 'general', avatarUrl: null,
+        lastMessageAt: '2026-07-28T11:00:00.000Z', lastMessagePreview: 'old',
+        lastMessageSender: 'Old Sender', lastMessageSenderAccountType, unreadCount: 0,
+      }],
+      pagination: { hasMore: false, nextCursor: null },
+    });
+
+    const applyChannelUpdate = (payload: InboxEventPayload, current: InboxResponse) => {
+      const rendered = renderInboxSocket();
+      mockMutate.mockClear();
+      act(() => { mockSocket._trigger('inbox:channel_updated', payload); });
+      const updater = mockMutate.mock.calls[0][1] as (data: InboxResponse) => InboxResponse;
+      const next = updater(current);
+      rendered.unmount();
+      return next.items[0];
+    };
+
+    it('takes the payload sender account type along with the payload sender', () => {
+      const item = applyChannelUpdate(
+        channelPayload({ lastMessageSender: 'Helper', lastMessageSenderAccountType: 'agent' }),
+        seed(null),
+      );
+      expect(item).toMatchObject({ lastMessageSender: 'Helper', lastMessageSenderAccountType: 'agent' });
+    });
+
+    it('clears a previous agent marker when a new sender arrives without an account type', () => {
+      const item = applyChannelUpdate(channelPayload({ lastMessageSender: 'Ada' }), seed('agent'));
+      expect(item).toMatchObject({ lastMessageSender: 'Ada', lastMessageSenderAccountType: null });
+    });
+
+    it('keeps the existing sender and marker when the payload names no sender', () => {
+      const item = applyChannelUpdate(channelPayload({ lastMessageSender: undefined }), seed('agent'));
+      expect(item).toMatchObject({ lastMessageSender: 'Old Sender', lastMessageSenderAccountType: 'agent' });
+    });
+  });
 });

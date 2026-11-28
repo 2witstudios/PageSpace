@@ -142,12 +142,12 @@ export async function GET(
       ),
       with: {
         createdBy: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         attendees: {
           with: {
             user: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
           },
         },
@@ -374,12 +374,12 @@ export async function PATCH(
       where: eq(calendarEvents.id, eventId),
       with: {
         createdBy: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         attendees: {
           with: {
             user: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
           },
         },

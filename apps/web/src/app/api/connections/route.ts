@@ -11,6 +11,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createNotification } from '@pagespace/lib/notifications/notifications';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -200,6 +201,7 @@ export async function POST(request: Request) {
       .select({
         name: users.name,
         displayName: userProfiles.displayName,
+        accountType: users.accountType,
       })
       .from(users)
       .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
@@ -208,7 +210,8 @@ export async function POST(request: Request) {
 
     // Decrypt the sender's name PII at the edge (GDPR #965) — it is embedded in
     // the notification message + email metadata (legacy plaintext passes through).
-    const senderName = sender?.displayName || (await decryptField(sender?.name)) || 'Someone';
+    // An agent sender is marked in the stored text (Agent Signup Phase 2c).
+    const senderName = withAgentMarker(sender?.displayName || (await decryptField(sender?.name)) || 'Someone', sender?.accountType);
 
     // Send notification to target user (broadcasts via Socket.IO)
     await createNotification({

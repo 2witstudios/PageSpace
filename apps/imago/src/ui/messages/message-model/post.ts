@@ -19,7 +19,8 @@ export type ChannelReactionResponse = {
   readonly userId: string;
   readonly emoji: string;
   readonly createdAt: string;
-  readonly user: { readonly id: string; readonly name: string | null };
+  /** `accountType` marks an agent reactor (Agent Signup Phase 2c). */
+  readonly user: { readonly id: string; readonly name: string | null; readonly accountType?: string | null };
 };
 
 export type ChannelMessageResponse = {
@@ -33,7 +34,12 @@ export type ChannelMessageResponse = {
   readonly aiMeta: ChannelMessageAiMetaResponse | null;
   readonly parentId: string | null;
   readonly replyCount: number;
-  readonly user: { readonly id: string; readonly name: string | null; readonly image: string | null };
+  readonly user: {
+    readonly id: string;
+    readonly name: string | null;
+    readonly image: string | null;
+    readonly accountType?: string | null;
+  };
   readonly reactions: readonly ChannelReactionResponse[];
   /**
    * What the sender's POST carried, echoed on its response and broadcast so
@@ -67,6 +73,12 @@ export type Post = {
   readonly authorKey: string;
   readonly authorName: string;
   readonly authorImage: string | null;
+  /**
+   * The author's `users.accountType` when the server sent it (Agent Signup
+   * Phase 2c): `agent` marks a self-named AI agent account. Never set for an
+   * AI-page persona (`agent` below), which is not a user account.
+   */
+  readonly authorAccountType?: string;
   /** Posted by an agent or webhook rather than typed by a person. */
   readonly agent: boolean;
   /** Whether apps/web counts this post toward the viewer's unread. */

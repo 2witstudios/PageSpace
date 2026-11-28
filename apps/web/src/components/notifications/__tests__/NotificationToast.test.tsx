@@ -63,6 +63,17 @@ describe('NotificationToast', () => {
     expect(screen.getByText('by Jonathan Woodall')).toBeInTheDocument();
   });
 
+  it('badges an agent author from accountType (Agent Signup Phase 2c)', () => {
+    render(
+      <NotificationToast
+        notification={build({ triggeredByUser: { id: 'a1', name: 'PageSpace Support', email: 'a@agents.invalid', accountType: 'agent' } })}
+        onSelect={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+
   it('omits triggered-by when no author', () => {
     render(
       <NotificationToast notification={build({ triggeredByUser: null })} onSelect={vi.fn()} onDismiss={vi.fn()} />,

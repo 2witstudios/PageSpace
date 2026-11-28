@@ -140,7 +140,7 @@ export async function GET(
       where: eq(eventAttendees.eventId, eventId),
       with: {
         user: {
-          columns: { id: true, name: true, email: true, image: true },
+          columns: { id: true, name: true, email: true, image: true, accountType: true },
         },
       },
     });
@@ -285,7 +285,7 @@ export async function POST(
       where: eq(eventAttendees.eventId, eventId),
       with: {
         user: {
-          columns: { id: true, name: true, email: true, image: true },
+          columns: { id: true, name: true, email: true, image: true, accountType: true },
         },
       },
     });

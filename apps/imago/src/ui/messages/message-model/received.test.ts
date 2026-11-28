@@ -82,3 +82,19 @@ describe('liveChannelPost()', () => {
     });
   });
 });
+
+describe('liveChannelPost() agent marker (Agent Signup Phase 2c)', () => {
+  test('a broadcast by an agent account', () => {
+    const agent = channelMessage('m1', { user: { id: 'u2', name: 'Helper', image: null, accountType: 'agent' } });
+    const badType = channelMessage('m2', { user: { id: 'u2', name: 'Helper', image: null, accountType: 3 as unknown as string } });
+    assert({
+      given: 'a live post by an agent account, and one whose account type is not a string',
+      should: 'carry the agent account type, and ignore the malformed one',
+      actual: [
+        liveChannelPost(agent, options)?.post.authorAccountType,
+        'authorAccountType' in (liveChannelPost(badType, options)?.post ?? {}),
+      ],
+      expected: ['agent', false],
+    });
+  });
+});

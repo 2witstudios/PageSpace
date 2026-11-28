@@ -111,6 +111,13 @@ describe('GET /api/calendar/events/[eventId] — canAccessEvent for scoped token
 
     const response = await GET(createGetRequest(), createContext());
     expect(response.status).toBe(200);
+
+    // The creator and attendee users carry accountType (Agent Signup 2c).
+    const query = (db.query.calendarEvents.findFirst as Mock).mock.calls[0][0] as {
+      with: { createdBy: { columns: Record<string, boolean> }; attendees: { with: { user: { columns: Record<string, boolean> } } } };
+    };
+    expect(query.with.createdBy.columns.accountType).toBe(true);
+    expect(query.with.attendees.with.user.columns.accountType).toBe(true);
   });
 
   it('returns 403 when a scoped MCP token tries to read a personal event created by someone else', async () => {

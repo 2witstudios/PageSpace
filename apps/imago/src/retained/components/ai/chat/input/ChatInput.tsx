@@ -15,6 +15,7 @@ import { isImageGenerationAllowed } from '@/retained/lib/ai/core/image-gen-acces
 import { useSpeechRecognition } from '@/retained/hooks/useSpeechRecognition';
 import { useMobileKeyboard } from '@/retained/hooks/useMobileKeyboard';
 import type { ImageAttachment } from '@/retained/lib/ai/shared/hooks/useImageAttachments';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 
 /**
  * Two ESC presses inside this window are a STRONGER interrupt (issue #2676):
@@ -102,8 +103,9 @@ export interface ChatInputProps {
   /** When set, another user (or another tab/device for the same user) is currently
    * streaming an AI reply on this surface. Locks the textarea + send button and
    * shows a banner naming the active streamer. The Stop button is gated separately
-   * on `isStreaming` so observers never see a Stop button. */
-  remoteStreamingUser?: { userId: string; displayName: string } | null;
+   * on `isStreaming` so observers never see a Stop button. `accountType` is set
+   * only for an agent account, which gets an AgentBadge (Agent Signup Phase 2c). */
+  remoteStreamingUser?: { userId: string; displayName: string; accountType?: 'agent' } | null;
   /**
    * The conversation's queued messages (issue #2676), in dispatch order — the
    * tray above the composer renders this list. Absent = the queue is not
@@ -373,6 +375,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             <span className="truncate">
               {remoteStreamingUser.displayName} is chatting with the AI…
             </span>
+            <AgentBadge accountType={remoteStreamingUser.accountType} />
           </div>
         )}
 

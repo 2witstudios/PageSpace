@@ -9,6 +9,7 @@ import { Search, Hash, ChevronRight } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -223,7 +224,11 @@ export default function ChannelsCenterList({ driveId }: ChannelsCenterListProps)
                     item.unreadCount > 0 ? 'text-foreground/80' : 'text-muted-foreground'
                   )}>
                     {item.lastMessageSender && (
-                      <span className="font-medium">{item.lastMessageSender}: </span>
+                      <span className="font-medium">
+                        {item.lastMessageSender}
+                        <AgentBadge accountType={item.lastMessageSenderAccountType} className="ml-1" />
+                        {': '}
+                      </span>
                     )}
                     {item.lastMessagePreview}
                   </p>

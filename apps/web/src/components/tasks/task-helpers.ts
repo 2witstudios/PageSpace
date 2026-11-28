@@ -1,5 +1,6 @@
 import { DEFAULT_STATUS_CONFIG, type TaskStatusGroup } from '@/lib/task-status-config';
 import { STATUS_ORDER } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import type { Task, StatusConfigsByTaskList } from './types';
 
 export type { StatusConfigsByTaskList };
@@ -58,9 +59,14 @@ export function aggregateStatuses(
   return [...seen.values()].sort((a, b) => a.position - b.position);
 }
 
+/** A user assignee's name, plain-text-marked when it belongs to an AI agent account (Agent Signup 2c). */
+function userAssigneeName(user: { name: string | null; accountType?: string | null } | null | undefined): string | null {
+  return user?.name ? withAgentMarker(user.name, user.accountType) : null;
+}
+
 export function getAssigneeText(task: Task): string | null {
   if (task.assignees && task.assignees.length > 0) {
-    return task.assignees.map(a => a.user?.name || a.agentPage?.title).filter(Boolean).join(', ') || null;
+    return task.assignees.map(a => userAssigneeName(a.user) || a.agentPage?.title).filter(Boolean).join(', ') || null;
   }
-  return task.assignee?.name || task.assigneeAgent?.title || null;
+  return userAssigneeName(task.assignee) || task.assigneeAgent?.title || null;
 }

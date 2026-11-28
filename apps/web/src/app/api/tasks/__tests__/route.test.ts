@@ -434,6 +434,33 @@ describe('GET /api/tasks', () => {
         statusColor: 'bg-slate-100 text-slate-700',
       });
     });
+
+    it('selects accountType on every user relation and returns it, so an agent assignee can be marked', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        createPageFixture({ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }),
+      ]);
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue([
+        createTaskFixture({ id: 'task_1', assignee: { id: 'agent_1', name: 'Helper', image: null, accountType: 'agent' } }),
+      ]);
+      mockDbSelect({
+        listPages: [{ id: 'page_tasklist', driveId: 'drive_1', title: 'My Task List' }],
+      });
+
+      const response = await GET(new Request('https://example.com/api/tasks?context=user'));
+      const body = await response.json();
+
+      const query = vi.mocked(db.query.taskItems.findMany).mock.calls[0][0] as unknown as {
+        with: {
+          assignee: { columns: Record<string, boolean> };
+          user: { columns: Record<string, boolean> };
+          assignees: { with: { user: { columns: Record<string, boolean> } } };
+        };
+      };
+      expect(query.with.assignee.columns.accountType).toBe(true);
+      expect(query.with.user.columns.accountType).toBe(true);
+      expect(query.with.assignees.with.user.columns.accountType).toBe(true);
+      expect(body.tasks[0].assignee).toMatchObject({ name: 'Helper', accountType: 'agent' });
+    });
   });
 
   describe('sub-task counts', () => {

@@ -25,7 +25,13 @@ export type TaskStatusConfigResponse = {
   readonly updatedAt: string;
 };
 
-type UserRef = { readonly id: string; readonly name: string | null; readonly image: string | null };
+type UserRef = {
+  readonly id: string;
+  readonly name: string | null;
+  readonly image: string | null;
+  /** users.accountType: an AI agent account is marked beside its self-chosen name. */
+  readonly accountType?: string | null;
+};
 type AgentRef = { readonly id: string; readonly title: string | null; readonly type: string };
 
 /** One task_assignees row: a person or an agent page, never both. */
@@ -109,6 +115,8 @@ export type AssignableResponse = {
   readonly type: 'user' | 'agent';
   readonly name: string;
   readonly image: string | null;
+  /** A member's users.accountType; absent for an agent page. */
+  readonly accountType?: 'human' | 'agent';
   readonly agentTitle?: string;
 };
 
@@ -153,6 +161,12 @@ export type Assignee = {
   readonly id: string;
   /** The person's name or the agent page's title; empty when unknown. */
   readonly name: string;
+  /**
+   * A person's users.accountType, when the API sent it. An AI agent ACCOUNT
+   * (a person-type assignee that is an agent) is marked from this, never from
+   * the name it chose. Distinct from `type: 'agent'`, an agent page.
+   */
+  readonly accountType?: string;
 };
 
 /** A task, and the subtasks under it once they are loaded. */
@@ -256,7 +270,8 @@ export type ActivityResponse = {
   readonly actorDisplayName: string | null;
   readonly isAiGenerated: boolean;
   readonly updatedFields: readonly string[] | null;
-  readonly user?: { readonly name: string | null } | null;
+  /** The actor's live user row; `accountType` marks an agent (Agent Signup Phase 2c). */
+  readonly user?: { readonly name: string | null; readonly accountType?: string | null } | null;
 };
 
 /** GET /api/activities. */

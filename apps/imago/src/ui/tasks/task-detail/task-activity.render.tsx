@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
+import { isAgentAccount } from '@pagespace/lib/auth/agent/display-name';
 import { Icon } from '../../components/icon/icon';
+import { renderAgentMark } from '../../components/agent-mark/agent-mark.render';
 import type { ActivityRow } from './task-activity';
 import {
   taskActivityListClass,
@@ -21,7 +23,15 @@ export function renderTaskActivity(rows: readonly ActivityRow[]): ReactNode {
           <li key={row.id} className={taskActivityRowClass}>
             {row.byImago ? <Icon name="sparkle" size={12} /> : null}
             <span className={taskActivityTextClass}>
-              {row.actor} {row.action}
+              {isAgentAccount(row.accountType) ? (
+                <>
+                  {row.actor} {renderAgentMark({ accountType: row.accountType })} {row.action}
+                </>
+              ) : (
+                <>
+                  {row.actor} {row.action}
+                </>
+              )}
             </span>
             <span className={taskActivityTimeClass}>{row.time}</span>
           </li>

@@ -1,5 +1,6 @@
 // apps/web's messaging answers, mapped into imago's messages model.
 
+import { withAccountType } from './account-type';
 import type { ChannelThread, ConversationResponse, DirectThread, InboxItem, MessageThread } from './message';
 
 /**
@@ -32,6 +33,7 @@ export const directThreadsFrom = (conversations: readonly ConversationResponse[]
     username: otherUser.username,
     avatarUrl: otherUser.image || otherUser.avatarUrl,
     otherUserId: otherUser.id,
+    ...withAccountType('accountType', otherUser.accountType),
     lastMessageAt,
     lastMessagePreview,
     lastReadAt: lastRead,
@@ -59,6 +61,7 @@ export const inboxThreadsFrom = (items: readonly InboxItem[]): readonly MessageT
           name: item.name,
           avatarUrl: item.avatarUrl,
           otherUserId: null,
+          ...withAccountType('accountType', item.accountType),
           lastMessageAt: item.lastMessageAt,
           lastMessagePreview: item.lastMessagePreview,
           lastReadAt: null,

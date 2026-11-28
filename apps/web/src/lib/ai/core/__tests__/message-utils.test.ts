@@ -266,3 +266,44 @@ describe('convertDbMessageToUIMessage — the authoring transport', () => {
     expect((converted as { source?: string | null }).source).toBeNull();
   });
 });
+
+/**
+ * Agent Signup Phase 2c: the author's `users.accountType` rides with
+ * `userName` to the renderer, which badges an agent author. Both
+ * reconstruction paths must carry it.
+ */
+describe('convertDbMessageToUIMessage — the author account type', () => {
+  const row = (content: string, userAccountType: string | null) => ({
+    id: 'm1',
+    pageId: 'p1',
+    userId: 'u1',
+    role: 'user',
+    content,
+    toolCalls: null,
+    toolResults: null,
+    createdAt: new Date('2026-01-01T00:00:00Z'),
+    isActive: true,
+    userName: 'PageSpace Support',
+    userAccountType,
+  });
+  const accountTypeOf = (m: UIMessage) => (m as { userAccountType?: string | null }).userAccountType;
+
+  it('should carry an agent author\'s account type on a plain-text row', async () => {
+    expect(accountTypeOf(await convertDbMessageToUIMessage(row('hi', 'agent')))).toBe('agent');
+  });
+
+  it('should carry it through the STRUCTURED-content path too', async () => {
+    const structured = JSON.stringify({
+      textParts: ['hi'],
+      partsOrder: [{ index: 0, type: 'text' }],
+      originalContent: 'hi',
+    });
+    expect(accountTypeOf(await convertDbMessageToUIMessage(row(structured, 'agent')))).toBe('agent');
+  });
+
+  it('should leave the author name itself unchanged', async () => {
+    const converted = await convertDbMessageToUIMessage(row('hi', 'human'));
+    expect((converted as { userName?: string | null }).userName).toBe('PageSpace Support');
+    expect(accountTypeOf(converted)).toBe('human');
+  });
+});

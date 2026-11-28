@@ -106,3 +106,21 @@ describe('AssigneeAvatars', () => {
     });
   });
 });
+
+describe('assigneeAvatars() — AI agent accounts (Agent Signup 2c)', () => {
+  test('marks an agent account person and leaves a human unchanged', () => {
+    const rows: TaskAssigneeData[] = [
+      { ...userRow('1', 'Ada'), user: { id: 'user-1', name: 'Ada', image: null, accountType: 'human' } },
+      { ...userRow('2', 'Helper'), user: { id: 'user-2', name: 'Helper', image: null, accountType: 'agent' } },
+    ];
+    assert({
+      given: 'a human and an AI agent account on a task, in rows and as the legacy assignee',
+      should: 'mark only the agent account\'s name',
+      actual: [
+        assigneeAvatars({ assignees: rows, assignee: null, assigneeAgent: null }).map((entry) => entry.name),
+        assigneeAvatars({ assignees: [], assignee: { id: 'u', name: 'Helper', image: null, accountType: 'agent' }, assigneeAgent: null }).map((entry) => entry.name),
+      ],
+      expected: [['Ada', 'Helper (AI agent)'], ['Helper (AI agent)']],
+    });
+  });
+});

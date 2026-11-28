@@ -91,7 +91,10 @@ export async function GET(request: Request) {
             cm."pageId",
             cm.content as last_message,
             cm."createdAt" as last_message_at,
-            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
+            COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name,
+            -- Agent marker (Phase 2c): only a user sender has an account type;
+            -- an AI page sender (aiMeta.senderName) is not a user account.
+            CASE WHEN cm."aiMeta"->>'senderName' IS NULL THEN u."accountType" END as sender_account_type
           FROM channel_messages cm
           INNER JOIN drive_channels dc ON dc.id = cm."pageId"
           LEFT JOIN users u ON u.id = cm."userId"
@@ -118,6 +121,7 @@ export async function GET(request: Request) {
           clm.last_message,
           clm.last_message_at,
           clm.sender_name,
+          clm.sender_account_type,
           COALESCE(cu.unread_count, 0) as unread_count
         FROM drive_channels dc
         LEFT JOIN channel_last_messages clm ON clm."pageId" = dc.id
@@ -164,6 +168,7 @@ export async function GET(request: Request) {
           lastMessageAt: toISOTimestamp(row.last_message_at),
           lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
           lastMessageSender: lookupSenderName(row.sender_name),
+          lastMessageSenderAccountType: row.sender_account_type ?? null,
           unreadCount: parseInt(row.unread_count) || 0,
           driveId: row.drive_id,
           driveName: row.drive_name,
@@ -224,6 +229,7 @@ export async function GET(request: Request) {
             dd."lastMessageAt" as last_message_at,
             dd."lastMessagePreview" as last_message,
             u.name as other_user_name,
+            u."accountType" as other_user_account_type,
             u.image as other_user_image,
             up."displayName" as other_user_display_name,
             up."avatarUrl" as other_user_avatar_url,
@@ -277,7 +283,10 @@ export async function GET(request: Request) {
               cm."pageId",
               cm.content as last_message,
               cm."createdAt" as last_message_at,
-              COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name
+              COALESCE(cm."aiMeta"->>'senderName', u.name) as sender_name,
+              -- Agent marker (Phase 2c): only a user sender has an account type;
+              -- an AI page sender (aiMeta.senderName) is not a user account.
+              CASE WHEN cm."aiMeta"->>'senderName' IS NULL THEN u."accountType" END as sender_account_type
             FROM channel_messages cm
             INNER JOIN user_channels uc ON uc.id = cm."pageId"
             LEFT JOIN users u ON u.id = cm."userId"
@@ -304,6 +313,7 @@ export async function GET(request: Request) {
             clm.last_message,
             clm.last_message_at,
             clm.sender_name,
+            clm.sender_account_type,
             COALESCE(cu.unread_count, 0) as unread_count
           FROM user_channels uc
           LEFT JOIN channel_last_messages clm ON clm."pageId" = uc.id
@@ -379,6 +389,7 @@ export async function GET(request: Request) {
             id: row.id,
             type: 'dm',
             name: (row.other_user_display_name || lookupName(row.other_user_name)) ?? '',
+            accountType: row.other_user_account_type ?? null,
             avatarUrl: row.other_user_image || row.other_user_avatar_url,
             lastMessageAt: pending.lastMessageAt,
             lastMessagePreview: row.last_message,
@@ -395,6 +406,7 @@ export async function GET(request: Request) {
             lastMessageAt: pending.lastMessageAt,
             lastMessagePreview: row.last_message ? row.last_message.substring(0, 100) : null,
             lastMessageSender: lookupName(row.sender_name),
+            lastMessageSenderAccountType: row.sender_account_type ?? null,
             unreadCount: parseInt(row.unread_count) || 0,
             driveId: row.drive_id,
             driveName: row.drive_name,

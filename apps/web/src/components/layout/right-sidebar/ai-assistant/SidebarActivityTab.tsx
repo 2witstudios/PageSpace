@@ -40,6 +40,7 @@ import { useActivitySocket, type ActivityContext } from '@/hooks/useActivitySock
 import type { ActivityActionPreview, ActivityActionResult } from '@/types/activity-actions';
 import type { ActivityLog, ActivityGroup } from '@/components/activity/types';
 import { groupConsecutiveActivities } from '@/components/activity/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 // Exported for unit testing
 export interface ActivityUser {
@@ -47,6 +48,8 @@ export interface ActivityUser {
   name: string | null;
   email: string;
   image: string | null;
+  /** Live `users.accountType`; marks an agent actor at render (Agent Signup Phase 2c). */
+  accountType?: string | null;
 }
 
 // Exported for unit testing
@@ -446,6 +449,7 @@ export default function SidebarActivityTab() {
                               ? `${getActorDisplayName(activity)} (via AI)`
                               : getActorDisplayName(activity)}
                           </span>
+                          <AgentBadge accountType={activity.user?.accountType} />
                         </div>
 
                         {/* Operation and resource */}
@@ -552,6 +556,7 @@ export default function SidebarActivityTab() {
                         {/* Actor and timestamp */}
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground mt-0.5">
                           <span>{group.summary.actorName}</span>
+                          <AgentBadge accountType={group.summary.actorAccountType} />
                           <span className="text-muted-foreground/60">•</span>
                           <span>
                             {formatDistanceToNow(new Date(group.summary.timestamp), {

@@ -4,6 +4,7 @@ import React from 'react';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
 import { cn } from '@/retained/lib/utils';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import { RichText, addHardLineBreaks } from './RichText';
 import type { QuotedMessageSnapshot } from '@pagespace/lib/services/quote-enrichment';
 
@@ -82,6 +83,7 @@ const MessageQuoteBlock: React.FC<MessageQuoteBlockProps> = ({
         <span className="font-medium text-foreground">
           {quoted.authorName ?? 'Unknown'}
         </span>
+        <AgentBadge accountType={quoted.authorAccountType} />
         <span className="text-muted-foreground">
           {formatDistanceToNow(createdAt, { addSuffix: true })}
         </span>

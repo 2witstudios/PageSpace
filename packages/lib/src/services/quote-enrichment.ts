@@ -25,6 +25,11 @@ export interface QuotedMessageSnapshot {
   id: string;
   authorId: string | null;
   authorName: string | null;
+  /**
+   * `users.accountType` of a user author (Agent Signup Phase 2c), so the quote
+   * block can mark an agent. Null for an AI-page persona and when unknown.
+   */
+  authorAccountType?: string | null;
   authorImage: string | null;
   contentSnippet: string;
   createdAt: Date;
@@ -46,12 +51,12 @@ interface QuoteSourceRow {
   // author for messages posted by AI tools); DM rows expose `sender`. The
   // resolver below prefers aiMeta first so AI-authored channel quotes keep
   // the agent label rather than falling back to the triggering human's name.
-  user?: { id: string; name: string | null; image: string | null } | null;
-  sender?: { id: string; name: string | null; image: string | null } | null;
+  user?: { id: string; name: string | null; image: string | null; accountType?: string | null } | null;
+  sender?: { id: string; name: string | null; image: string | null; accountType?: string | null } | null;
   aiMeta?: ChannelAiMeta | null;
 }
 
-const userColumns = { id: true, name: true, image: true } as const;
+const userColumns = { id: true, name: true, image: true, accountType: true } as const;
 
 function snapshotFromRow(row: QuoteSourceRow): QuotedMessageSnapshot {
   const human = row.user ?? row.sender ?? null;
@@ -60,6 +65,7 @@ function snapshotFromRow(row: QuoteSourceRow): QuotedMessageSnapshot {
     id: row.id,
     authorId: isAi ? row.aiMeta?.agentPageId ?? null : human?.id ?? null,
     authorName: isAi ? row.aiMeta?.senderName ?? null : human?.name ?? null,
+    authorAccountType: isAi ? null : human?.accountType ?? null,
     // AI-authored messages don't carry a per-message avatar; fall back to null
     // so the renderer can show its initials placeholder consistently.
     authorImage: isAi ? null : human?.image ?? null,

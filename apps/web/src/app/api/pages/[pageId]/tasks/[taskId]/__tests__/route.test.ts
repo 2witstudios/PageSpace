@@ -467,6 +467,33 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(response.status).toBe(200);
   });
 
+  it('selects accountType on every user relation of the returned task (Agent Signup 2c)', async () => {
+    setupAuth();
+    setupCanEdit(true);
+    const existingTask = { ...baseTask, status: 'pending' };
+    vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+    vi.mocked(db.query.taskItems.findFirst)
+      .mockResolvedValueOnce(existingTask as never)
+      .mockResolvedValueOnce({
+        ...existingTask, assigneeAgent: null, user: null, assignees: [],
+        assignee: { id: 'agent-1', name: 'Helper', image: null, accountType: 'agent' },
+      } as never);
+    vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+    setupTransaction(existingTask);
+
+    const response = await PATCH(createPatchRequest({ status: 'pending' }), context);
+    const body = await response.json();
+
+    type Cols = { columns: Record<string, boolean> };
+    const withRelations = vi.mocked(db.query.taskItems.findFirst).mock.calls
+      .map(([args]) => args as unknown as { with?: { assignee?: Cols; user: Cols; assignees: { with: { user: Cols } } } })
+      .find((args) => args?.with?.assignee);
+    expect(withRelations?.with?.assignee?.columns.accountType).toBe(true);
+    expect(withRelations?.with?.user.columns.accountType).toBe(true);
+    expect(withRelations?.with?.assignees.with.user.columns.accountType).toBe(true);
+    expect(JSON.stringify(body)).toContain('"accountType":"agent"');
+  });
+
   it('returns 400 for invalid fallback status (no custom configs)', async () => {
     setupAuth();
     setupCanEdit(true);

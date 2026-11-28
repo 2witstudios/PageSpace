@@ -428,6 +428,34 @@ beforeEach(() => {
       expect(body.tasks).toHaveLength(2);
     });
 
+    it('selects accountType on every user relation and returns it, so an agent assignee can be marked', async () => {
+      const mockTasks = [
+        {
+          id: 'task-1', status: 'pending',
+          assignee: { id: 'agent-1', name: 'Helper', image: null, accountType: 'agent' },
+          page: { id: 'p-1', title: 'Task 1', isTrashed: false, position: 0 },
+        },
+      ];
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+      vi.mocked(canUserViewPage).mockResolvedValue(true);
+      vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(
+        { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() } as never,
+      );
+      vi.mocked(db.query.taskItems.findMany).mockResolvedValue(mockTasks as never);
+
+      const response = await GET(createRequest(), { params: mockParams });
+      const body = await response.json();
+
+      type Cols = { columns: Record<string, boolean> };
+      const hydration = vi.mocked(db.query.taskItems.findMany).mock.calls
+        .map(([args]) => args as unknown as { with?: { assignee: Cols; user: Cols; assignees: { with: { user: Cols } } } })
+        .find((args) => args?.with);
+      expect(hydration?.with?.assignee.columns.accountType).toBe(true);
+      expect(hydration?.with?.user.columns.accountType).toBe(true);
+      expect(hydration?.with?.assignees.with.user.columns.accountType).toBe(true);
+      expect(body.tasks[0].assignee).toMatchObject({ name: 'Helper', accountType: 'agent' });
+    });
+
     it('creates task list if it does not exist', async () => {
       const mockInsertedTaskList = { id: 'new-tasklist', title: 'Task List', status: 'pending', updatedAt: new Date() };
 
@@ -1022,6 +1050,15 @@ beforeEach(() => {
       expect(eventArg.type).toBe('task_added');
       expect(eventArg.taskId).toBe('new-task');
       expect(eventArg.pageId).toBe(mockPageId);
+
+      // The returned task's user relations carry accountType (Agent Signup 2c).
+      type Cols = { columns: Record<string, boolean> };
+      const withRelations = vi.mocked(db.query.taskItems.findFirst).mock.calls
+        .map(([args]) => args as unknown as { with?: { assignee: Cols; user: Cols; assignees: { with: { user: Cols } } } })
+        .find((args) => args?.with?.assignee);
+      expect(withRelations?.with?.assignee.columns.accountType).toBe(true);
+      expect(withRelations?.with?.user.columns.accountType).toBe(true);
+      expect(withRelations?.with?.assignees.with.user.columns.accountType).toBe(true);
     });
 
     it('returns 404 when task list page not found', async () => {

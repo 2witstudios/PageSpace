@@ -2,6 +2,7 @@
 // viewer's own send, or a new_message broadcast from realtime.
 
 import type { ChannelMessageResponse, Post } from './post';
+import { withAccountType } from './account-type';
 import { postsFrom } from './posts-from-api';
 
 export type ReceivedPost = {
@@ -37,6 +38,8 @@ const asChannelMessage = (payload: unknown): ChannelMessageResponse | null => {
       id: isString(user.id) ? user.id : userId,
       name: isString(user.name) ? user.name : null,
       image: isString(user.image) ? user.image : null,
+      // Marks an agent account's live post (Agent Signup Phase 2c).
+      ...withAccountType('accountType', isString(user.accountType) ? user.accountType : null),
     },
     reactions: Array.isArray(reactions) ? (reactions as ChannelMessageResponse['reactions']) : [],
   };

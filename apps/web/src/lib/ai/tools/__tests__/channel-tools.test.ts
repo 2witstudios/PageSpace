@@ -19,6 +19,7 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       channelMessages: { findFirst: vi.fn() },
       pages: { findFirst: vi.fn() },
+      users: { findFirst: vi.fn() },
       driveMembers: { findMany: vi.fn() },
     },
     insert: vi.fn().mockReturnValue({
@@ -361,6 +362,62 @@ describe('channel-tools', () => {
       expect(result.success).toBe(true);
       expect(result.senderName).toBe('Budget Analyst (Test User)');
       expect(result.senderType).toBe('agent');
+    });
+
+    it('marks an acting AGENT ACCOUNT in both sender-name shapes (Agent Signup Phase 2c)', async () => {
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1', title: 'General', type: 'CHANNEL', content: '', driveId: 'drive-1', parentId: null,
+        position: 1, isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockGetActorInfo.mockResolvedValue({ actorEmail: 'agent@agents.invalid', actorDisplayName: 'PageSpace Support' });
+      (db.query.users.findFirst as unknown as Mock).mockResolvedValue({ accountType: 'agent' });
+
+      const asPageAgent = await executeToolAs(
+        { channelId: 'ch-1', content: 'hi' },
+        {
+          toolCallId: '1', messages: [],
+          experimental_context: {
+            userId: 'agent-1', accessActor: credentialActor('agent-1', null),
+            chatSource: { type: 'page', agentPageId: 'agent-page-1', agentTitle: 'Budget Analyst' },
+          } as ToolExecutionContext,
+        },
+      );
+      expect(asPageAgent.senderName).toBe('Budget Analyst (PageSpace Support (AI agent))');
+
+      const asGlobal = await executeToolAs(
+        { channelId: 'ch-1', content: 'hi' },
+        {
+          toolCallId: '2', messages: [],
+          experimental_context: {
+            userId: 'agent-1', accessActor: credentialActor('agent-1', null),
+            chatSource: { type: 'global' },
+          } as ToolExecutionContext,
+        },
+      );
+      expect(asGlobal.senderName).toBe('PageSpace Support (AI agent)');
+    });
+
+    it('leaves a human acting user\'s sender name byte-identical', async () => {
+      mockPagesFindFirst.mockResolvedValue({
+        id: 'ch-1', title: 'General', type: 'CHANNEL', content: '', driveId: 'drive-1', parentId: null,
+        position: 1, isTrashed: false, trashedAt: null, revision: 1, stateHash: null,
+      });
+      mockCanActorEditPage.mockResolvedValue(true);
+      mockGetActorInfo.mockResolvedValue({ actorEmail: 'alice@example.com', actorDisplayName: 'Alice' });
+      (db.query.users.findFirst as unknown as Mock).mockResolvedValue({ accountType: 'human' });
+
+      const result = await executeToolAs(
+        { channelId: 'ch-1', content: 'hi' },
+        {
+          toolCallId: '1', messages: [],
+          experimental_context: {
+            userId: 'user-123', accessActor: credentialActor('user-123', null),
+            chatSource: { type: 'page', agentPageId: 'agent-1', agentTitle: 'Budget Analyst' },
+          } as ToolExecutionContext,
+        },
+      );
+      expect(result.senderName).toBe('Budget Analyst (Alice)');
     });
 
     it('marks global assistant messages as read and skips sender inbox broadcast', async () => {

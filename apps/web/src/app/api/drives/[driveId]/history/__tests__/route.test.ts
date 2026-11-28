@@ -39,6 +39,13 @@ vi.mock('@/services/api', () => ({
   getUserRetentionDays: vi.fn(),
 }));
 
+// Agent Signup Phase 2c: the actor's live accountType is joined at read time.
+const accountTypes = vi.hoisted(() => new Map<string, string>());
+vi.mock('@/lib/activities/actor-account-types', () => ({
+  withActorAccountTypes: vi.fn(async (rows: { userId?: string | null }[]) =>
+    rows.map((row) => ({ ...row, actorAccountType: (row.userId && accountTypes.get(row.userId)) || null }))),
+}));
+
 vi.mock('@pagespace/lib/permissions/rollback-permissions', () => ({
   isActivityEligibleForRollback: vi.fn(),
 }));
@@ -301,6 +308,22 @@ describe('GET /api/drives/[driveId]/history', () => {
   });
 
   describe('response contract', () => {
+    it('should return each version with its actor live accountType (Agent Signup Phase 2c)', async () => {
+      accountTypes.clear();
+      accountTypes.set('agent-1', 'agent');
+      const activities = [
+        { id: 'act_1', operation: 'update', resourceType: 'page', userId: 'agent-1' },
+        { id: 'act_2', operation: 'update', resourceType: 'page', userId: null },
+      ];
+      vi.mocked(getDriveVersionHistory).mockResolvedValue({ activities, total: 2 } as never);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/history`);
+      const response = await GET(request, createContext(mockDriveId));
+      const body = await response.json();
+
+      expect(body.versions.map((v: { actorAccountType: string | null }) => v.actorAccountType)).toEqual(['agent', null]);
+    });
+
     it('should return versions with rollback eligibility', async () => {
       const activities = [
         { id: 'act_1', operation: 'create', resourceType: 'page' },

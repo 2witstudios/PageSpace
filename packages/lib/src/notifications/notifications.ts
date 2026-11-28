@@ -9,6 +9,7 @@ import { createSignedBroadcastHeaders } from '../auth/broadcast-auth';
 import { sendPushNotification, type PushNotificationPayload } from './push-notifications';
 import { decryptUserRow } from '../auth/user-repository';
 import { decryptField } from '../encryption/field-crypto';
+import { withAgentMarker } from '../auth/agent/display-name';
 
 // Export types and guards
 export * from './types';
@@ -107,6 +108,9 @@ export async function getUserNotifications(userId: string, limit = 50) {
         name: users.name,
         email: users.email,
         image: users.image,
+        // Joined live (Agent Signup Phase 2c): the "by <name>" line badges an
+        // agent actor from the account row, never from the name.
+        accountType: users.accountType,
       },
       drive: {
         id: drives.id,
@@ -316,6 +320,8 @@ export async function createPermissionNotification(
     where: eq(users.id, triggeredByUserId),
   });
   const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
+  // An agent actor is marked in the stored text (Agent Signup Phase 2c); a human's is unchanged.
+  const sharerName = withAgentMarker(triggeredByUser?.name || 'Someone', triggeredByUser?.accountType);
 
   const permissionList = [];
   if (permissions.canView) permissionList.push('view');
@@ -331,7 +337,7 @@ export async function createPermissionNotification(
     case 'granted':
       notificationType = 'PAGE_SHARED';
       title = `Page shared with you`;
-      message = `${triggeredByUser?.name || 'Someone'} shared "${page.title}" with you (${permissionList.join(', ')} access)`;
+      message = `${sharerName} shared "${page.title}" with you (${permissionList.join(', ')} access)`;
       break;
     case 'updated':
       notificationType = 'PERMISSION_UPDATED';
@@ -358,8 +364,8 @@ export async function createPermissionNotification(
       pageId, // For email templates
       driveName: page.drive?.name,
       driveId: page.driveId, // For email templates
-      sharerName: triggeredByUser?.name || 'Someone', // For email templates
-      adderName: triggeredByUser?.name || 'Someone', // For email templates
+      sharerName, // For email templates
+      adderName: sharerName, // For email templates
     },
     pageId,
     driveId: page.driveId,
@@ -386,6 +392,8 @@ export async function createDriveNotification(
     where: eq(users.id, triggeredByUserId),
   }) : null;
   const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
+  // An agent actor is marked in the stored text (Agent Signup Phase 2c); a human's is unchanged.
+  const inviterName = withAgentMarker(triggeredByUser?.name || 'Someone', triggeredByUser?.accountType);
 
   let notificationType: NotificationType;
   let title: string;
@@ -395,7 +403,7 @@ export async function createDriveNotification(
     case 'invited':
       notificationType = 'DRIVE_INVITED';
       title = `Added to workspace`;
-      message = `${triggeredByUser?.name || 'Someone'} added you to the "${drive.name}" workspace`;
+      message = `${inviterName} added you to the "${drive.name}" workspace`;
       break;
     case 'joined':
       notificationType = 'DRIVE_JOINED';
@@ -418,7 +426,7 @@ export async function createDriveNotification(
       driveName: drive.name,
       driveId, // For email templates
       role,
-      inviterName: triggeredByUser?.name || 'Someone', // For email templates
+      inviterName, // For email templates
     },
     driveId,
     triggeredByUserId,
@@ -439,7 +447,8 @@ export async function createOrUpdateMessageNotification(
     const sender = await db.query.users.findFirst({
       where: eq(users.id, triggeredByUserId),
     });
-    senderName = (await decryptField(sender?.name)) || 'Someone';
+    // An agent sender is marked in the stored/pushed text (Agent Signup Phase 2c).
+    senderName = withAgentMarker((await decryptField(sender?.name)) || 'Someone', sender?.accountType);
   }
 
   // Check if there's an existing unread notification for this specific conversation
@@ -538,7 +547,11 @@ export async function createMentionNotification(
       });
   const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
-  const mentionerName = options?.mentionerNameOverride || triggeredByUser?.name || 'Someone';
+  // An override is an agent PAGE's title (an AI reply), not a user name. A user
+  // mentioner who is an agent account is marked in the stored text (Agent Signup
+  // Phase 2c); a human's is unchanged.
+  const mentionerName = options?.mentionerNameOverride
+    || withAgentMarker(triggeredByUser?.name || 'Someone', triggeredByUser?.accountType);
 
   return createNotification({
     userId: targetUserId,
@@ -587,7 +600,8 @@ export async function createTaskAssignedNotification(
   });
   const triggeredByUser = triggeredByUserRow ? await decryptUserRow(triggeredByUserRow) : null;
 
-  const assignerName = triggeredByUser?.name || 'Someone';
+  // An agent assigner is marked in the stored text (Agent Signup Phase 2c).
+  const assignerName = withAgentMarker(triggeredByUser?.name || 'Someone', triggeredByUser?.accountType);
 
   return createNotification({
     userId: targetUserId,

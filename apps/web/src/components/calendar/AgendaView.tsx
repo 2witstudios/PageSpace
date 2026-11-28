@@ -15,6 +15,7 @@ import { MapPin, Clock, Users, ExternalLink, Calendar, Zap } from 'lucide-react'
 import Link from 'next/link';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import {
   CalendarEvent,
   CalendarHandlers,
@@ -248,7 +249,7 @@ function EventCard({
               <Avatar
                 key={attendee.id}
                 className="w-6 h-6 border-2 border-background"
-                title={`${attendee.user.name} - ${ATTENDEE_STATUS_CONFIG[attendee.status].label}`}
+                title={`${attendee.user.name === null ? attendee.user.name : withAgentMarker(attendee.user.name, attendee.user.accountType)} - ${ATTENDEE_STATUS_CONFIG[attendee.status].label}`}
               >
                 <AvatarImage src={attendee.user.image ?? undefined} />
                 <AvatarFallback className="text-[10px]">

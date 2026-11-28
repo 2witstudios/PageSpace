@@ -31,3 +31,30 @@ describe('DmHead', () => {
     });
   });
 });
+
+describe('DmHead agent marker (Agent Signup Phase 2c)', () => {
+  test('a conversation with an agent', () => {
+    const html = renderToStaticMarkup(<DmHead title="PageSpace Support" accountType="agent" />);
+    assert({
+      given: 'the other person is an agent account',
+      should: 'mark the unchanged title as an agent',
+      actual: {
+        current: html.includes('aria-current="page">PageSpace Support</span>'),
+        marked: html.includes('aria-label="AI agent account"'),
+      },
+      expected: { current: true, marked: true },
+    });
+  });
+
+  test('a conversation with a person', () => {
+    assert({
+      given: 'a human (or untyped) other person',
+      should: 'draw no agent marker',
+      actual: [
+        renderToStaticMarkup(<DmHead title="Dana" accountType="human" />).includes('AI agent account'),
+        renderToStaticMarkup(<DmHead title="Dana" />).includes('AI agent account'),
+      ],
+      expected: [false, false],
+    });
+  });
+});
