@@ -45,6 +45,13 @@ export interface HandlerContext {
   readonly credentialSourceEnvVarName: string | null;
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
+  /**
+   * True only when the resolved credential is an AI agent's own key on a
+   * machine where that agent is the stored login (`auth/agent-machine.ts`) —
+   * what lets `pagespace mcp` run with no credential named after
+   * `pagespace signup --agent`. Secret-free; absent means false.
+   */
+  readonly agentOwnKey?: boolean;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */
   readonly isTTY: boolean;
   /** Writes `message` and reads one line of interactive input. Never called when `isTTY` is false. */

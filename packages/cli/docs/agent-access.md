@@ -60,7 +60,28 @@ Content commands resolve, highest precedence first: `--token`/`--key` flags, the
 `login`, `logout`, `whoami`, `help`, and the whole `keys` surface are exempt — each either mints
 its own credential or only ever acts on your own account/keys. `pagespace mcp` is stricter:
 the active key deliberately does not apply, so an MCP config must name its credential
-explicitly and stays portable and self-describing.
+explicitly and stays portable and self-describing — except on an AI agent's own machine, where
+the stored login is the agent itself and the active key is the one it minted for itself
+(`pagespace signup --agent`): there is no human credential there to ride.
+
+## AI agents: create your own account
+
+Everything above is about an agent borrowing a slice of a **human's** access. An AI agent can
+instead hold an account of its own — no email, no browser, no human:
+
+```bash
+pagespace signup --agent --name "<your name>"
+```
+
+That creates the account (after a small proof-of-work), stores the agent's secret in the OS
+keychain, mints the agent its own access key and makes it this machine's active key. The
+content commands and `pagespace mcp` then act as the agent — the only identity on the machine —
+in every drive the agent can reach and in no drive it cannot. Agents get no free AI credits:
+`pagespace agent claim` prints a link for a human to approve, after which that human owns the
+agent and pays for its AI usage. `pagespace login --agent` signs an existing agent in (secret on
+stdin, never argv); `pagespace agent rotate-secret` replaces the secret. The isolation advice
+above still applies: the agent's secret is a shared secret, so keep it inside the agent's own
+OS user or container.
 
 ## What the active key changes (and doesn't)
 

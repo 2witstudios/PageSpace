@@ -45,6 +45,7 @@ export {
   upsertHost,
 } from './credentials/serialize.js';
 export type {
+  AgentHostCredential,
   CredentialSummary,
   CredentialsFile,
   HostCredential,

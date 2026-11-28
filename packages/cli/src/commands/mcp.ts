@@ -44,7 +44,10 @@ export function createMcpHandler(deps: McpHandlerDeps): CommandHandler {
     // keys use`) deliberately does NOT apply to `pagespace mcp` — an MCP
     // config must name its credential explicitly (--key/PAGESPACE_KEY or
     // --token), never ride the human's per-machine activation.
-    if (!hasExplicitCredential({ token: intent.flags.token, key: intent.flags.key }, ctx.env)) {
+    // The one exception: an AI agent's own key on a machine where that agent
+    // is the only identity (`pagespace signup --agent`) — no human credential
+    // exists to ride, so the agent's MCP config needs no credential named.
+    if (!hasExplicitCredential({ token: intent.flags.token, key: intent.flags.key }, ctx.env) && ctx.agentOwnKey !== true) {
       ctx.stderr.write(`${mcpNoExplicitCredentialMessage()}\n`);
       return EXIT_RUNTIME_ERROR;
     }

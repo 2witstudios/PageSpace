@@ -54,6 +54,7 @@ export default defineConfig({
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
       'src/services/__tests__/agent-identities.integration.test.ts',
+      'src/services/__tests__/agent-lifecycle.integration.test.ts',
       'src/billing/__tests__/agent-starter-grant.integration.test.ts',
       'src/compliance/export/__tests__/agent-identity-export.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',

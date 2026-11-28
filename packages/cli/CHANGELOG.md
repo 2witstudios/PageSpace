@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **AI agents can create their own account: `pagespace signup --agent [--name <name>]`.** No email,
+  no browser, no human. It solves a small proof-of-work, registers, signs in, and mints the agent
+  its own access key, which becomes this machine's active key — so `pagespace drives list` and
+  `pagespace mcp` work as the agent immediately. The agent's secret goes to the OS keychain and
+  is printed only with `--show-secret`.
+- **`pagespace login --agent`** signs an existing agent in with its secret, read from stdin or a
+  prompt (never from an argument).
+- **`pagespace agent claim`** prints a link and code for a human to approve and waits; once
+  approved the human owns the agent and pays for its AI usage. **`pagespace agent rotate-secret`**
+  replaces the secret (`--revoke-tokens` also kills every token and key), and
+  **`pagespace agent create-key`** mints and activates another key for the agent.
+- **`pagespace whoami`** shows `Account: AI agent` and the agent's owner, or `Unclaimed`.
+- **`pagespace mcp` runs with no credential named on an agent's own machine** — where the stored
+  login is the agent itself and the active key is the one it minted. Every other active key is
+  still refused.
+- **`pagespace --help` opens with how an AI agent creates its own account.**
+
+### Changed
+
+- `pagespace logout` no longer deletes a stored AI agent secret without `--yes`: without the
+  secret the agent cannot sign in again.
+
 - **`pagespace wallets drive|list|source` — read your wallets from the terminal.** `wallets drive
   <driveId>` shows a drive's wallet: remaining credits, your own cap for today and this month,
   whether donations are on and the drive's default spend source. `wallets list` shows what you spend

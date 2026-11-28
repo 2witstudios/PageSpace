@@ -66,6 +66,15 @@ export interface OperationConfig<
    * confirmation-gate signal, not a retry-safety one.
    */
   readonly destructive?: boolean;
+  /**
+   * The operation is called BEFORE any credential exists (an AI agent fetching
+   * a proof-of-work challenge, registering itself, or starting a claim — ADR
+   * 0008). The facade sends it with no `Authorization` header and never asks
+   * the client's `AuthProvider` for a token, so a client built with
+   * `AnonymousAuthProvider` can call it. Absent means authenticated, as every
+   * operation has always been.
+   */
+  readonly unauthenticated?: true;
   /** Mandatory: becomes the MCP tool description in Phase 6. */
   readonly description: string;
 }
@@ -108,6 +117,7 @@ export interface Operation<
   readonly expectedContentType: string | undefined;
   readonly timeoutMsOverride: number | undefined;
   readonly destructive: boolean | undefined;
+  readonly unauthenticated: true | undefined;
   readonly description: string;
 }
 
@@ -130,6 +140,7 @@ export function defineOperation<
     expectedContentType,
     timeoutMsOverride,
     destructive,
+    unauthenticated,
     description,
   } = config as OperationConfig<TPath, TInputSchema, TOutputSchema>;
 
@@ -144,6 +155,7 @@ export function defineOperation<
     expectedContentType,
     timeoutMsOverride,
     destructive,
+    unauthenticated,
     description,
   });
 }

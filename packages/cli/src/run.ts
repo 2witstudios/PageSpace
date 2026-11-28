@@ -11,7 +11,16 @@ import { credentialKindOf } from './auth/credential-kind.js';
 import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvKeyName, resolveEnvToken, LEGACY_TOKEN_ENV_VAR, LEGACY_KEY_ENV_VAR } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
-import { mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
+import { hasExplicitCredential, mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
+import { isAgentOwnActiveKey } from './auth/agent-machine.js';
+import {
+  agentClaimHandler,
+  agentCreateKeyHandler,
+  agentLoginHandler,
+  agentRotateSecretHandler,
+  signupHandler,
+} from './commands/agent.js';
+import { DEFAULT_PROFILE_NAME } from './credentials/serialize.js';
 import { resolveCredentialSource } from './auth/resolve-credential-source.js';
 import { loginHandler } from './commands/login.js';
 import { loginDeviceHandler } from './commands/login-device.js';
@@ -110,6 +119,16 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   envConnectHandler,
   envDisconnectHandler,
   envPolicyHandler,
+  // An AI agent's own account (ADR 0008): `signup --agent` and `login --agent`
+  // establish a credential from scratch, like `login`; `agent claim`,
+  // `rotate-secret` and `create-key` act on the stored agent credential itself
+  // (its account token — never a content key), exactly as the `keys` family
+  // rides the stored login.
+  signupHandler,
+  agentLoginHandler,
+  agentClaimHandler,
+  agentRotateSecretHandler,
+  agentCreateKeyHandler,
 ]);
 
 /**
@@ -175,7 +194,16 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   // drive-scoped active key doesn't carry), and `pagespace mcp` — invoked
   // unattended by an MCP client — deliberately never rides a human's
   // per-machine activation (its config must name a credential itself).
-  const activeKeyEligible = routedHandler !== null && !isAuthExempt && routedHandler !== mcpHandler;
+  //
+  // The one exception for `mcp`: on a machine whose stored login is an AI
+  // agent's own account and whose active key is the key that agent minted for
+  // itself (`pagespace signup --agent`), there is no human credential to ride —
+  // so `pagespace mcp` may use that key with nothing named (`auth/agent-machine.ts`).
+  const agentOwnKeyForMcp =
+    routedHandler === mcpHandler &&
+    !hasExplicitCredential({ token: parsed.flags.token, key: parsed.flags.key }, deps.env) &&
+    isAgentOwnActiveKey(await deps.credentialStore.get(host, DEFAULT_PROFILE_NAME), await activeKeyStore.getActiveKey(host));
+  const activeKeyEligible = routedHandler !== null && !isAuthExempt && (routedHandler !== mcpHandler || agentOwnKeyForMcp);
 
   const { source, activeKeyName, explicit } = await resolveCredentialSource({
     flags: { token: parsed.flags.token, key: parsed.flags.key },
@@ -219,6 +247,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     credentialSourceKind: source.kind,
     credentialSourceEnvVarName,
     activeKeyStore,
+    agentOwnKey: agentOwnKeyForMcp && activeKeyName !== null,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),
   };
@@ -228,6 +257,11 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   }
   if (parsed.flags.help && parsed.args.length === 0) {
     return helpHandler(ctx, parsed);
+  }
+  // `login --agent` (an AI agent signing in with its secret) is a different
+  // login altogether; `--agent` is a command flag, so it arrives in `args`.
+  if (parsed.args[0] === 'login' && parsed.args.slice(1).includes('--agent')) {
+    return agentLoginHandler(ctx, { ...parsed, args: parsed.args.slice(1) });
   }
   if (parsed.args.length === 1 && parsed.args[0] === 'login' && parsed.flags.device) {
     return loginDeviceHandler(ctx, parsed);

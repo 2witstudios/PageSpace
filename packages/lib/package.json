@@ -159,6 +159,11 @@
       "import": "./dist/services/agent-identities.js",
       "require": "./dist/services/agent-identities.js"
     },
+    "./services/agent-lifecycle": {
+      "types": "./dist/services/agent-lifecycle.d.ts",
+      "import": "./dist/services/agent-lifecycle.js",
+      "require": "./dist/services/agent-lifecycle.js"
+    },
     "./organizations/api-error-codes": {
       "types": "./dist/organizations/api-error-codes.d.ts",
       "import": "./dist/organizations/api-error-codes.js",
@@ -3422,6 +3427,9 @@
       ],
       "auth/agent/reserved-email": [
         "./dist/auth/agent/reserved-email.d.ts"
+      ],
+      "services/agent-lifecycle": [
+        "./dist/services/agent-lifecycle.d.ts"
       ],
       "billing/classify-gate-refusal": [
         "./dist/billing/classify-gate-refusal.d.ts"
