@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { ENROLLMENT_STATE_PREFIX } from '@/lib/agent-accounts/google-enrollment-flow';
+import { handleAgentAccountGoogleCallback } from '@/lib/agent-accounts/google-enrollment-callback';
 import { db } from '@pagespace/db/db'
 import { googleCalendarConnections } from '@pagespace/db/schema/calendar';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -22,6 +24,8 @@ const STATE_MAX_AGE_MS = 10 * 60 * 1000;
  * Exchanges authorization code for tokens and stores encrypted credentials.
  */
 export async function GET(req: Request) {
+  // Connecting an agent's Google account reuses this registered redirect URI; its states are `aa1.`-prefixed.
+  if (new URL(req.url).searchParams.get('state')?.startsWith(ENROLLMENT_STATE_PREFIX)) return handleAgentAccountGoogleCallback(req);
   if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const baseUrl = process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
 

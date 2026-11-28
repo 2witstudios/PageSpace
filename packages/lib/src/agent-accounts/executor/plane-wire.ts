@@ -7,8 +7,8 @@
 import { z } from 'zod';
 import type { PlaneConsenters } from '../store/store-adapter';
 
-/** The kinds the plane holds and the HTTP executor presents (`api_key`, `bearer`). */
-export const PLANE_HTTP_KINDS = ['api_key', 'bearer'] as const;
+/** The kinds the plane holds and the HTTP executor presents (`api_key`, `bearer`, `oauth2`). */
+export const PLANE_HTTP_KINDS = ['api_key', 'bearer', 'oauth2'] as const;
 export type PlaneHttpKind = (typeof PLANE_HTTP_KINDS)[number];
 
 const ref = z.object({ tenantId: z.string().min(1), accountId: z.string().min(1), kind: z.enum(PLANE_HTTP_KINDS) }).strict();
@@ -70,6 +70,26 @@ export const planeRebindBody = z
   })
   .strict();
 
+/**
+ * Connect an OAuth account: the plane exchanges the authorization code at the provider's PINNED token
+ * endpoint with ITS OAuth client, checks the id token, and stores the tokens (an ingress `put`). Web sends
+ * the code and PKCE verifier and gets back a version, the account's email and the granted scopes — never
+ * a token.
+ */
+export const planeOAuthExchangeBody = z
+  .object({
+    ref: ref.extend({ kind: z.literal('oauth2') }),
+    providerSlug: z.literal('google'),
+    code: z.string().min(1).max(4_096),
+    codeVerifier: z.string().min(43).max(128),
+    redirectUri: z.string().url().max(2_048),
+    requestedScopes: z.array(z.string().min(1).max(256)).min(1).max(20),
+    bindings: z.record(z.string(), z.unknown()),
+    scope: z.record(z.string(), z.unknown()),
+    consenters,
+  })
+  .strict();
+
 /** The policy window's counters for a ref (the plane's own usage ledger). */
 export const planeUsageBody = z.object({ ref }).strict();
 
@@ -104,6 +124,29 @@ export type PlaneExecuteBody = z.infer<typeof planeExecuteBody>;
 export type PlaneDescribeBody = z.infer<typeof planeDescribeBody>;
 export type PlaneRebindBody = z.infer<typeof planeRebindBody>;
 export type PlaneUsageBody = z.infer<typeof planeUsageBody>;
+export type PlaneOAuthExchangeBody = z.infer<typeof planeOAuthExchangeBody>;
+export type PlaneOAuthExchangeResult =
+  | { readonly ok: true; readonly version: number; readonly email: string; readonly scopes: readonly string[] }
+  | {
+      readonly ok: false;
+      readonly reason:
+        /** No OAuth client for the provider on the plane. */
+        | 'not_configured'
+        /** The provider refused the code (expired, used, or for another client). */
+        | 'exchange_refused'
+        | 'exchange_failed'
+        | 'no_refresh_token'
+        | 'no_service_granted'
+        | 'identity_invalid'
+        | 'malformed'
+        | 'store_unavailable'
+        | 'kind_mismatch'
+        | 'version_conflict'
+        | 'write_unverified'
+        | 'lock_unavailable'
+        | 'consenters_invalid'
+        | 'identity_refused';
+    };
 
 export type PlaneDescribeResult =
   | { readonly ok: true; readonly policyVersion: number; readonly consenters: PlaneConsenters; readonly revoked: boolean }
@@ -117,5 +160,6 @@ export const PLANE_ROUTES = {
   describe: '/v1/accounts/describe',
   rebind: '/v1/accounts/rebind',
   usage: '/v1/accounts/usage',
+  oauthExchange: '/v1/oauth/exchange',
   execute: '/v1/http/execute',
 } as const;

@@ -9,7 +9,7 @@ import type { SafeAccount } from '@pagespace/lib/agent-accounts/to-safe-account'
 /** The account's permissions as `GET /api/agent-accounts/[id]` returns them (never a key, never versions). */
 export type AgentAccountSettings = {
   readonly account: SafeAccount;
-  readonly autoApprove: { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null } | null;
+  readonly autoApprove: { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null; readonly classes: readonly ('read' | 'write')[] } | null;
   readonly usesThisHour: number | null;
   readonly bindings: readonly { readonly agentPageId: string; readonly title: string | null; readonly boundAt: number }[];
   readonly delegations: readonly { readonly id: string; readonly agentPageId: string | null; readonly title: string | null; readonly expiresAt: number; readonly createdAt: number }[];

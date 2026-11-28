@@ -37,6 +37,9 @@ import { createHttpRequestExecutor } from './http-request-executor';
 import { createPlaneRequestHandler } from './plane-http-adapter';
 import { sweepOrphanedRefs } from './plane-orphan-sweep-worker';
 import { hmacSha3_256 } from './plane-crypto';
+import { OAUTH_PROVIDER_ENDPOINTS } from '../refresh/oauth-provider-endpoints';
+import { AGENT_ACCOUNT_OPERATIONS } from '../registry/google-operations';
+import { createPlaneRefreshWorker } from './plane-refresh';
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
 const sha256: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -51,6 +54,7 @@ const verifyEd25519: Ed25519Verify = (message, signature, publicKey) => {
 const MAX_RELEASED_BODY_BYTES = 256 * 1024;
 const DNS_TIMEOUT_MS = 5_000;
 const ORPHAN_SWEEP_INTERVAL_MS = 30 * 60_000;
+
 
 export async function startCredentialPlane({ config }: { readonly config: PlaneConfig }): Promise<Server> {
   const metadataPool = new Pool({ connectionString: config.metadataDatabaseUrl });
@@ -72,6 +76,32 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     consentLedger: createConsentLedgerRepository({ pool: metadataPool }),
   });
   const usage = createUsageLedgerRepository({ pool: metadataPool });
+  const network = createPinnedHttpsClient({
+    // DNS gets its own deadline: the pinned client's timer starts only at connect (review HIGH-2).
+    resolveHost: async (hostname) => {
+      const answers = await Promise.race([
+        lookup(hostname, { all: true, verbatim: true }),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns timeout')), DNS_TIMEOUT_MS)),
+      ]);
+      return answers.map((answer) => ({ address: answer.address, family: answer.family === 6 ? 6 : 4 }));
+    },
+    isPublic: isPublicIp,
+    limits: DEFAULT_PINNED_HTTPS_LIMITS,
+  });
+  const refresh = createPlaneRefreshWorker({
+    store,
+    metadata,
+    advisoryLockPool: metadata.advisoryLockPool,
+    metadataPool,
+    provisioner,
+    accounts: createAgentAccountRepository({ db }),
+    network,
+    endpoints: OAUTH_PROVIDER_ENDPOINTS,
+    clientFor: (providerSlug) => config.oauthClients[providerSlug] ?? null,
+    presenterKeyId: config.presenterKeyId,
+    hash: sha3,
+    now: () => Date.now(),
+  });
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
@@ -80,19 +110,9 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     audited: createAuditedExecutor({ auditRepository: createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) }), hash: sha3 }),
     planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
     usage,
-    network: createPinnedHttpsClient({
-      // DNS gets its own deadline: the pinned client's timer starts only at connect (review HIGH-2).
-      resolveHost: async (hostname) => {
-        const answers = await Promise.race([
-          lookup(hostname, { all: true, verbatim: true }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('dns timeout')), DNS_TIMEOUT_MS)),
-        ]);
-        return answers.map((answer) => ({ address: answer.address, family: answer.family === 6 ? 6 : 4 }));
-      },
-      isPublic: isPublicIp,
-      limits: DEFAULT_PINNED_HTTPS_LIMITS,
-    }),
-    registry: [],
+    refresh,
+    network,
+    registry: AGENT_ACCOUNT_OPERATIONS,
     issuerPublicKey: config.authorityPublicKey,
     presenterKeyId: config.presenterKeyId,
     verify: verifyEd25519,
@@ -107,6 +127,7 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
       secret: config.serviceSecret,
       store,
       usage,
+      oauth: { endpoints: OAUTH_PROVIDER_ENDPOINTS, clientFor: (providerSlug) => config.oauthClients[providerSlug] ?? null, network },
       provisioner,
       executor,
       hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'),

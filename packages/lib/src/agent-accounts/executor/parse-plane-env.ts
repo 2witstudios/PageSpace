@@ -24,8 +24,10 @@ export type PlaneConfig = {
   readonly infisicalEnvironment: string;
   readonly provisioner: ProvisionerAuth;
   readonly metadataDatabaseUrl: string;
-  /** DER SPKI of the step-up consent key; null = no rebind can be consented (none is needed in this slice). */
+  /** DER SPKI of the step-up consent key; null = no widening rebind can be consented. */
   readonly consentPublicKey: Uint8Array | null;
+  /** The OAuth clients the plane exchanges codes and refreshes tokens with, by provider slug (slice 3). */
+  readonly oauthClients: Readonly<Record<string, { readonly clientId: string; readonly clientSecret: string }>>;
 };
 
 export type PlaneEnvVerdict = { readonly ok: true; readonly config: PlaneConfig } | { readonly ok: false; readonly missing: readonly string[]; readonly malformed: readonly string[] };
@@ -78,6 +80,12 @@ export function parsePlaneEnv({ env }: { readonly env: Readonly<Record<string, s
   const consentPublicKey = consentRaw.length === 0 ? null : decodeBase64(consentRaw);
   if (consentRaw.length > 0 && consentPublicKey === null) malformed.push('AGENT_ACCOUNTS_CONSENT_PUBLIC_KEY');
 
+  // Google: both or neither. Without it, `oauth2` Google accounts can be neither connected nor refreshed.
+  const googleId = env.GOOGLE_OAUTH_CLIENT_ID?.trim() ?? '';
+  const googleSecret = env.GOOGLE_OAUTH_CLIENT_SECRET?.trim() ?? '';
+  if ((googleId.length === 0) !== (googleSecret.length === 0)) malformed.push(googleId.length === 0 ? 'GOOGLE_OAUTH_CLIENT_ID' : 'GOOGLE_OAUTH_CLIENT_SECRET');
+  const oauthClients: PlaneConfig['oauthClients'] = googleId.length > 0 && googleSecret.length > 0 ? { google: { clientId: googleId, clientSecret: googleSecret } } : {};
+
   if (missing.length > 0 || malformed.length > 0) return { ok: false, missing, malformed };
   return {
     ok: true,
@@ -93,6 +101,7 @@ export function parsePlaneEnv({ env }: { readonly env: Readonly<Record<string, s
       provisioner: provisioner!,
       metadataDatabaseUrl: metadataDatabaseUrl!,
       consentPublicKey,
+      oauthClients,
     },
   };
 }

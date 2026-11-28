@@ -6,12 +6,14 @@
  * Two things are editable:
  * - the pinned sites (`allowedOrigins`): the same one-origin rule as creation,
  *   each canonical origin once, sorted, never empty;
- * - "allow without asking" — the bounded standing policy: requests to the
- *   pinned sites that no registry entry describes (`unknown/generic_request`)
- *   run without a per-call approval, up to `maxUsesPerHour`, until `until`
- *   (null = until changed). The trigger still asks for every irreversible or
- *   privileged operation, and the policy's origins are ALWAYS the pinned
- *   sites, so narrowing the sites narrows the policy with them.
+ * - "allow without asking" — the bounded standing policy, up to
+ *   `maxUsesPerHour`, until `until` (null = until changed). For a generic
+ *   account (no provider) it covers requests no registry entry describes
+ *   (`unknown/generic_request`). For a provider account (Google) it covers the
+ *   operation CLASSES the person ticks — `read`, and optionally `write` —
+ *   never `irreversible` or `privilege` (sending mail, deleting, sharing always
+ *   ask). The policy's origins are ALWAYS the pinned sites, so narrowing the
+ *   sites narrows the policy with them.
  *
  * The approver: a policy keeps its recorded approver when the edit cannot
  * widen it (the caller passes that judgement as `keepApprover`), so an admin
@@ -29,7 +31,17 @@ export const MAX_USES_PER_HOUR = 1_000;
 const MIN_POLICY_LIFETIME_MS = 5 * 60_000;
 const MAX_ALLOWED_ORIGINS = 20;
 
-export type AutoApproveEdit = { readonly enabled: false } | { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null };
+/** The classes a standing policy may cover for a provider account. */
+export type StandingClass = 'read' | 'write';
+export type AutoApproveEdit =
+  | { readonly enabled: false }
+  | {
+      readonly enabled: true;
+      readonly maxUsesPerHour: number;
+      readonly until: number | null;
+      /** Provider accounts only; absent = `['read']`. Ignored for a generic account. */
+      readonly classes?: readonly StandingClass[];
+    };
 
 export type AccountEdit = {
   readonly allowedOrigins: readonly string[];
@@ -37,7 +49,7 @@ export type AccountEdit = {
 };
 
 export type AccountEditRefusal =
-  | { readonly ok: false; readonly reason: 'origins_empty' | 'origins_too_many' | 'limit_invalid' | 'until_invalid' }
+  | { readonly ok: false; readonly reason: 'origins_empty' | 'origins_too_many' | 'limit_invalid' | 'until_invalid' | 'classes_invalid' }
   | { readonly ok: false; readonly reason: 'origin_invalid'; readonly index: number; readonly rule: Extract<NormalizeOriginVerdict, { readonly ok: false }>['reason'] };
 
 export type AccountEditVerdict =
@@ -45,13 +57,15 @@ export type AccountEditVerdict =
   | AccountEditRefusal;
 
 /** The editable view of a stored policy, or null when it is not one this editor wrote (every use asks). */
-export function autoApproveOf(policy: unknown): (AutoApproveEdit & { readonly enabled: true }) | null {
+export function autoApproveOf(policy: unknown): { readonly enabled: true; readonly maxUsesPerHour: number; readonly until: number | null; readonly classes: readonly StandingClass[] } | null {
   if (typeof policy !== 'object' || policy === null) return null;
   const candidate = policy as Partial<AccountApprovalPolicy>;
   const limit = candidate.limits?.maxUsesPerHour;
   if (typeof limit !== 'number' || !Number.isFinite(limit)) return null;
   const until = candidate.duration === null || candidate.duration === undefined ? null : candidate.duration.until;
-  return { enabled: true, maxUsesPerHour: limit, until: typeof until === 'number' ? until : null };
+  const operations = Array.isArray(candidate.scope?.operations) ? candidate.scope.operations : [];
+  const classes = (['read', 'write'] as const).filter((operationClass) => operations.some((operation) => operation.class === operationClass && operation.name === '*'));
+  return { enabled: true, maxUsesPerHour: limit, until: typeof until === 'number' ? until : null, classes };
 }
 
 export function decideAccountEdit({
@@ -59,9 +73,12 @@ export function decideAccountEdit({
   editor,
   storedApprover,
   keepApprover,
+  providerSlug,
   now,
 }: {
   readonly edit: AccountEdit;
+  /** The account's provider (`google`), or null for a generic account. */
+  readonly providerSlug: string | null;
   readonly editor: UserId;
   /** The stored policy's approver, if a policy is stored. */
   readonly storedApprover: UserId | null;
@@ -86,13 +103,18 @@ export function decideAccountEdit({
   const until = autoApprove.until;
   if (until !== null && (!Number.isInteger(until) || until < now + MIN_POLICY_LIFETIME_MS)) return { ok: false, reason: 'until_invalid' };
 
+  const classes = providerSlug === null ? [] : (autoApprove.classes ?? ['read']);
+  if (providerSlug !== null && (classes.length === 0 || !classes.every((operationClass) => operationClass === 'read' || operationClass === 'write'))) return { ok: false, reason: 'classes_invalid' };
+  const operations = providerSlug === null ? [{ ...GENERIC_REQUEST_OPERATION }] : [...new Set(classes)].sort().map((operationClass) => ({ class: operationClass, name: '*' }));
+
   const approver = keepApprover && storedApprover !== null ? storedApprover : editor;
   return {
     ok: true,
     allowedOrigins,
     approvalPolicy: {
-      scope: { origins: allowedOrigins, operations: [{ ...GENERIC_REQUEST_OPERATION }], resources: [] },
-      trigger: 'irreversible_only',
+      scope: { origins: allowedOrigins, operations, resources: [] },
+      // A provider account's unregistered requests (`unknown`) ask; a generic account's are the policy.
+      trigger: providerSlug === null ? 'irreversible_only' : 'unknown_and_irreversible',
       duration: until === null ? null : { until },
       limits: { ...GENERIC_REQUEST_LIMITS, maxUsesPerHour: limit },
       approver,

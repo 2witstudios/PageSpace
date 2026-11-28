@@ -30,6 +30,8 @@ import { Pool } from 'pg';
 import { createId } from '@paralleldrive/cuid2';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { createAccountChangeLock } from '../../account-change-lock';
+import { createPlaneRefreshWorker } from '../../executor/plane-refresh';
+import { AGENT_ACCOUNT_OPERATIONS } from '../../registry/google-operations';
 import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
@@ -82,6 +84,11 @@ const DRIVE = createId();
 const PAGE_A = createId() as AgentPageId;
 const PAGE_B = createId() as AgentPageId;
 const SECRET = randomBytes(32).toString('hex');
+const GOOGLE_CLIENT = { clientId: 'e2e-client.apps.googleusercontent.com', clientSecret: `gcs_${randomBytes(8).toString('hex')}` };
+const GOOD_CODE = `code_${randomBytes(8).toString('hex')}`;
+const STALE_ACCESS = `ya29_stale_${randomBytes(8).toString('hex')}`;
+const REFRESH_TOKEN = `1//rt_${randomBytes(8).toString('hex')}`;
+const tokenCalls: string[] = [];
 const PRESENTER = 'exec_e2e' as PresenterKeyId;
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
@@ -116,6 +123,29 @@ function startUpstream(): Promise<void> {
   ca = execFileSync('openssl', ['x509', '-in', 'ca.pem'], { cwd: certDir }).toString('utf8');
   upstream = createHttpsServer({ key: readFileSync(path.join(certDir, 'leaf.key')), cert: readFileSync(path.join(certDir, 'leaf.pem')) }, (req, res) => {
     upstreamHits.push(req.url ?? '');
+    if (req.url === '/token' && req.method === 'POST') {
+      const chunks: Buffer[] = [];
+      req.on('data', (chunk: Buffer) => chunks.push(chunk));
+      req.on('end', () => {
+        const form = new URLSearchParams(Buffer.concat(chunks).toString('utf8'));
+        tokenCalls.push(form.get('grant_type') ?? '');
+        const clientOk = form.get('client_id') === GOOGLE_CLIENT.clientId && form.get('client_secret') === GOOGLE_CLIENT.clientSecret;
+        const json = (status: number, body: unknown) => {
+          res.writeHead(status, { 'content-type': 'application/json' });
+          res.end(JSON.stringify(body));
+        };
+        if (!clientOk) return json(401, { error: 'invalid_client' });
+        if (form.get('grant_type') === 'authorization_code') {
+          if (form.get('code') !== GOOD_CODE || (form.get('code_verifier') ?? '').length < 43) return json(400, { error: 'invalid_grant' });
+          const claims = { iss: 'https://accounts.google.com', aud: GOOGLE_CLIENT.clientId, exp: Math.floor(Date.now() / 1000) + 3600, email: 'agent@e2e.example', email_verified: true };
+          // A nearly expired access token: the first use must refresh it first.
+          return json(200, { access_token: STALE_ACCESS, expires_in: 30, refresh_token: REFRESH_TOKEN, token_type: 'Bearer', scope: 'openid email https://www.googleapis.com/auth/gmail.readonly', id_token: `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.sig` });
+        }
+        if (form.get('grant_type') === 'refresh_token' && form.get('refresh_token') === REFRESH_TOKEN) return json(200, { access_token: CANARY, expires_in: 3600, token_type: 'Bearer', scope: 'openid email https://www.googleapis.com/auth/gmail.readonly' });
+        return json(400, { error: 'invalid_grant' });
+      });
+      return;
+    }
     const authorized = req.headers['x-api-key'] === CANARY || req.headers.authorization === `Bearer ${CANARY}`;
     if (!authorized) {
       res.writeHead(401, { 'content-type': 'application/json' });
@@ -158,6 +188,11 @@ function planeStore() {
 
 async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountAuditRepository) => r }: { readonly isPublic?: (ip: string) => boolean; readonly wrapAudit?: (r: AgentAccountAuditRepository) => AgentAccountAuditRepository } = {}): Promise<PlaneClient> {
   const { metadata, provisioner, store, usage } = planeStore();
+  const network = createPinnedHttpsClient({ resolveHost: async () => [{ address: '127.0.0.1', family: 4 }], isPublic, ca, limits: { totalTimeoutMs: 5_000, maxResponseBytes: 1_000_000, maxConcurrent: 8 } });
+  // Google, as the plane pins it — except that its token endpoint is this suite's TLS upstream.
+  const endpoints = { google: { issuer: 'https://accounts.google.com', tokenEndpoint: `https://${HOST}:${upstreamPort}/token`, revocationEndpoint: `https://${HOST}:${upstreamPort}/revoke`, clientAuth: 'client_secret_post' as const } };
+  const clientFor = (providerSlug: string) => (providerSlug === 'google' ? GOOGLE_CLIENT : null);
+  const refresh = createPlaneRefreshWorker({ store, metadata, advisoryLockPool: metadata.advisoryLockPool, metadataPool, provisioner, accounts: createAgentAccountRepository({ db }), network, endpoints, clientFor, presenterKeyId: PRESENTER, hash: sha3, now: () => Date.now() });
   const executor = createHttpRequestExecutor({
     store,
     provisioner,
@@ -166,8 +201,9 @@ async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountA
     audited: createAuditedExecutor({ auditRepository: wrapAudit(createAgentAccountAuditRepository({ appendPath: createSecurityAuditRepository({ db }) })), hash: sha3 }),
     planeScope: (ref) => metadata.read(ref).then((facts) => facts?.scope ?? null),
     usage,
-    network: createPinnedHttpsClient({ resolveHost: async () => [{ address: '127.0.0.1', family: 4 }], isPublic, ca, limits: { totalTimeoutMs: 5_000, maxResponseBytes: 1_000_000, maxConcurrent: 8 } }),
-    registry: [],
+    refresh,
+    network,
+    registry: AGENT_ACCOUNT_OPERATIONS,
     issuerPublicKey: keyring.current.publicKey,
     presenterKeyId: PRESENTER,
     verify: verifyEd25519,
@@ -178,7 +214,7 @@ async function startPlane({ isPublic = () => true, wrapAudit = (r: AgentAccountA
     maxReleasedBodyBytes: 64 * 1024,
   });
   const server = createHttpServer(
-    createPlaneRequestHandler({ secret: SECRET, store, usage, provisioner, executor, hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'), sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'), now: () => Date.now() }),
+    createPlaneRequestHandler({ secret: SECRET, store, usage, oauth: { endpoints, clientFor, network }, provisioner, executor, hmac: (key, text) => createHmac('sha256', key).update(text).digest('hex'), sha256: (bytes) => createHash('sha256').update(bytes).digest('hex'), now: () => Date.now() }),
   );
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
   planes.push(server);
@@ -190,7 +226,7 @@ const CONSENT_PAIR = generateKeyPairSync('ed25519');
 const CONSENT_KEY = { sign: (message: Uint8Array) => new Uint8Array(nodeSign(null, message, CONSENT_PAIR.privateKey)) };
 
 const authorityOver = (plane: PlaneClient): AccountAuthority =>
-  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
+  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
 
 const caller = (overrides: Partial<Parameters<AccountAuthority['requestOperation']>[0]['caller']> = {}) => ({
   actorUserId: OWNER,
@@ -583,7 +619,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
       narrowed: narrowed.ok ? narrowed.settings.autoApprove : narrowed.reason,
       after: after.ok ? 'ran' : after.reason,
     };
-    const expected = { before: 'approval_required', unproven: 'step_up_required', widened: { enabled: true, maxUsesPerHour: 10, until: null }, during: 200, narrowed: null, after: 'approval_required' };
+    const expected = { before: 'approval_required', unproven: 'step_up_required', widened: { enabled: true, maxUsesPerHour: 10, until: null, classes: [] }, during: 200, narrowed: null, after: 'approval_required' };
     expect(actual).toEqual(expected);
   }, 90_000);
 
@@ -713,7 +749,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     if (!created.ok) throw new Error(created.reason);
     // An authority that wrongly believes VIEWER is a drive admin signs a real consent for them: the plane, which pinned
     // only the drive's consenters at creation, still refuses it.
-    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: [], consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
+    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
     const actual = await forged.updateAccount({ actor: credentialActor(VIEWER, null), accountId: created.account.id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: STEP_UP });
     expect(actual.ok ? 'widened' : actual.reason).toEqual('not_a_consenter');
   }, 60_000);
@@ -760,6 +796,61 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const actual = await authority.bindAccount({ actor: owner, accountId: created.account.id, agentPageId: notAgent, stepUp: STEP_UP });
     expect(actual.ok ? 'bound' : actual.reason).toEqual('page_unavailable');
   }, 60_000);
+
+  // ---- Slice 3: a Google account connected through the plane, refreshed by the plane ----
+
+  const googleInput = { name: 'Agent Google', services: ['gmail.read'], ownership: 'dedicated' as const, acknowledged: false, autoApproveReads: true };
+  const VERIFIER = 'v'.repeat(43);
+
+  it('given a good authorization code, should exchange it INSIDE the plane, store the tokens and name the connected account — and return no token', async () => {
+    const authority = authorityOver(await startPlane());
+    const before = tokenCalls.length;
+    const connected = seen(await authority.completeOAuthEnrollment({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: googleInput, code: GOOD_CODE, codeVerifier: VERIFIER, redirectUri: 'https://pagespace.e2e/callback' }));
+    const text = JSON.stringify(connected);
+    const actual = {
+      ok: connected.ok,
+      kind: connected.ok ? connected.account.kind : `${connected.reason}:${'detail' in connected ? connected.detail : ''}`,
+      provider: connected.ok ? connected.account.providerSlug : null,
+      origins: connected.ok ? connected.account.allowedOrigins : null,
+      name: connected.ok ? connected.account.name : null,
+      ready: connected.ok ? connected.account.ready : null,
+      tokenCalls: tokenCalls.slice(before),
+      leaked: [STALE_ACCESS, REFRESH_TOKEN, GOOGLE_CLIENT.clientSecret].filter((secret) => text.includes(secret)),
+    };
+    expect(actual).toEqual({ ok: true, kind: 'oauth2', provider: 'google', origins: ['https://gmail.googleapis.com:443'], name: 'Agent Google (agent@e2e.example)', ready: true, tokenCalls: ['authorization_code'], leaked: [] });
+  }, 90_000);
+
+  it('given a code Google refuses, should keep no account', async () => {
+    const authority = authorityOver(await startPlane());
+    const refused = await authority.completeOAuthEnrollment({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: googleInput, code: 'stolen-or-expired', codeVerifier: VERIFIER, redirectUri: 'https://pagespace.e2e/callback' });
+    const listed = await authority.listAccounts({ actor: credentialActor(OWNER, null), owner: { kind: 'agent_page', agentPageId: PAGE_A } });
+    expect({ refused: refused.ok ? 'connected' : [refused.reason, 'detail' in refused ? refused.detail : null], kept: (listed ?? []).some((account) => account.name.startsWith('Agent Google') && account.status === 'active' && !account.ready) }).toEqual({ refused: ['provider_refused', 'exchange_refused'], kept: false });
+  }, 60_000);
+
+  it('given a connected Google account whose access token is about to expire, should refresh it in the plane before the request and send the fresh token — never the stale one, never the refresh token', async () => {
+    const authority = authorityOver(await startPlane());
+    const owner = credentialActor(OWNER, null);
+    const connected = await authority.completeOAuthEnrollment({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: googleInput, code: GOOD_CODE, codeVerifier: VERIFIER, redirectUri: 'https://pagespace.e2e/callback' });
+    if (!connected.ok) throw new Error(connected.reason);
+    const id = connected.account.id;
+    // Point the account at this suite's upstream (a consented widening); its requests there are generic, so they ask.
+    await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: { enabled: false } }, stepUp: STEP_UP });
+    const call = () => authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/echo`) });
+    const before = tokenCalls.length;
+    const asked = await call();
+    if (asked.ok || asked.reason !== 'approval_required') throw new Error(`expected approval_required, got ${JSON.stringify(asked)}`);
+    await authority.approveRequest({ actor: owner, sessionId: 'sess_e2e', accountId: id, requestDigest: asked.digest });
+    const result = seen(await call());
+    const text = JSON.stringify(result);
+    const actual = {
+      status: result.ok ? result.response.status : result.reason,
+      tokenCalls: tokenCalls.slice(before),
+      leaked: [CANARY, STALE_ACCESS, REFRESH_TOKEN].filter((secret) => text.includes(secret)),
+      row: (await createAgentAccountRepository({ db }).find(id))?.credentialVersion,
+    };
+    // 200 only if the upstream saw `Bearer <fresh token>`: it refuses the stale one.
+    expect(actual).toEqual({ status: 200, tokenCalls: ['refresh_token'], leaked: [], row: 2 });
+  }, 90_000);
 
   it('given every model-visible value this slice produced above, should never contain the canary key', () => {
     const actual = { surfaces: modelVisible.length > 10, leaks: modelVisible.filter((text) => text.includes(CANARY)).length };

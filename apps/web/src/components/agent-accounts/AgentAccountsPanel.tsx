@@ -14,6 +14,33 @@ import { refusalOf, takePendingAccountChange } from '@/hooks/useAgentAccountSett
 import { AddAgentAccountDialog } from './AddAgentAccountDialog';
 import { AgentAccountPermissionsDialog } from './AgentAccountPermissionsDialog';
 
+const CONNECT_COPY: Readonly<Record<string, string>> = {
+  cancelled: 'Google was not connected: the sign-in was cancelled.',
+  expired: 'That Google sign-in took too long or was started in another browser. Try again.',
+  no_refresh_token: 'Google did not allow ongoing access. Try again and approve every permission asked for.',
+  no_service_granted: 'Google was connected without any of the permissions chosen. Try again and leave them ticked.',
+  identity_invalid: 'Google did not confirm which account was used. Try again.',
+  not_configured: 'Connecting Google is not set up on this PageSpace deployment.',
+  forbidden: 'Only a drive owner or admin can add an account to this agent.',
+};
+
+/** The outcome Google's redirect back carried (`?agentAccount=`), shown once and then removed from the URL. */
+function useConnectOutcome(onConnected: () => void) {
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    const outcome = url.searchParams.get('agentAccount');
+    if (outcome === null) return;
+    url.searchParams.delete('agentAccount');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+    if (outcome === 'connected') {
+      toast.success('Google account connected. The agent can use it now; open Permissions to choose what it may do without asking.');
+      onConnected();
+    } else {
+      toast.error(CONNECT_COPY[outcome] ?? 'Google could not be connected.');
+    }
+  }, [onConnected]);
+}
+
 /** Resume a change parked while its magic-link step-up was in the person's inbox. */
 function useResumePendingAccountChange(onApplied: () => void) {
   useEffect(() => {
@@ -49,6 +76,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
   const [editing, setEditing] = useState<string | null>(null);
   const refresh = useCallback(() => void mutate(), [mutate]);
   useResumePendingAccountChange(refresh);
+  useConnectOutcome(refresh);
 
   const revoke = async (accountId: string, name: string) => {
     if (!window.confirm(`Stop PageSpace from using "${name}"? The key stays valid at the site until you revoke it there too.`)) return;
@@ -90,6 +118,8 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
                 <span className="font-medium truncate">{account.name}</span>
                 <Badge variant={account.status === 'active' ? 'secondary' : 'destructive'}>{account.status}</Badge>
                 {!account.ready && account.status === 'active' && <Badge variant="outline">Not ready — add it again</Badge>}
+                {account.providerSlug === 'google' && <Badge variant="outline">Google</Badge>}
+                {account.status === 'needs_reauth' && <Badge variant="destructive">Google sign-in expired — connect it again</Badge>}
                 <Badge variant="outline">{account.acknowledgment === 'personal_login_acknowledged' ? 'Personal login (acknowledged)' : 'Dedicated account'}</Badge>
                 {scope.kind === 'agent_page' && account.ownerKind === 'user' && <Badge variant="outline">Yours, attached</Badge>}
               </div>

@@ -16,7 +16,7 @@
  */
 import type { db as defaultDb } from '@pagespace/db/db';
 import { and, desc, eq, gt, gte, inArray, isNull, sql } from '@pagespace/db/operators';
-import { agentAccountApprovals, agentAccountBindings, agentAccountDelegations, agentAccounts, type AccountId, type AccountOwnerRef, type AgentAccountRecord, type TenantId } from '@pagespace/db/schema/agent-accounts';
+import { agentAccountApprovals, agentAccountBindings, agentAccountDelegations, agentAccounts, type AccountKind, type AccountId, type AccountOwnerRef, type AgentAccountRecord, type TenantId } from '@pagespace/db/schema/agent-accounts';
 import type { AgentPageId, ApprovalId, DelegationFact, DelegationId, GrantId, RequestDigest, UserId } from './grant';
 import type { AccountApprovalPolicy, ApprovalScope } from './approval';
 import type { AccountDraft } from './decide-account-creation';
@@ -58,7 +58,13 @@ function delegationFactOf(row: DelegationRow, now: number): DelegationFact {
 }
 
 export type AgentAccountRepository = {
-  readonly insert: (input: { readonly draft: AccountDraft; readonly owner: AccountOwnerRef; readonly tenantId: TenantId; readonly approvalPolicy: AccountApprovalPolicy | null }) => Promise<AgentAccountRecord>;
+  readonly insert: (input: {
+    readonly draft: Pick<AccountDraft, 'name' | 'allowedOrigins' | 'acknowledgment'> & { readonly kind: AccountKind; readonly providerSlug?: string | null };
+    readonly owner: AccountOwnerRef;
+    readonly tenantId: TenantId;
+    readonly approvalPolicy: AccountApprovalPolicy | null;
+  }) => Promise<AgentAccountRecord>;
+  readonly setName: (input: { readonly id: string; readonly name: string }) => Promise<void>;
   /** The first committed put: 0 → version. `false` when the row is gone or already provisioned. */
   readonly setCredentialVersion: (input: { readonly id: string; readonly version: number }) => Promise<boolean>;
   readonly remove: (id: string) => Promise<void>;
@@ -142,13 +148,17 @@ export function createAgentAccountRepository({ db }: { readonly db: AgentAccount
           ownerDriveId: owner.kind === 'agent_page' ? owner.driveId : null,
           tenantId,
           name: draft.name,
-          providerSlug: null,
+          providerSlug: draft.providerSlug ?? null,
           allowedOrigins: [...draft.allowedOrigins],
           approvalPolicy,
           acknowledgment: draft.acknowledgment,
         })
         .returning();
       return row!;
+    },
+
+    async setName({ id, name }) {
+      await db.update(agentAccounts).set({ name, updatedAt: new Date() }).where(eq(agentAccounts.id, id));
     },
 
     async setCredentialVersion({ id, version }) {

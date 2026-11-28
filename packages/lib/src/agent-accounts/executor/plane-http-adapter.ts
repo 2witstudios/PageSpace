@@ -16,6 +16,10 @@
  *   `OwnerConsent` from a pinned consenter, signed under the consent key and
  *   consumed single-use) — the service signature authorizes nothing here.
  * - `usage` (manage): the policy window's counters from the plane's ledger.
+ * - `oauthExchange` (ingress): connects an OAuth account — exchanges the code
+ *   at the PINNED token endpoint with the plane's own client, checks the id
+ *   token, and `put`s the tokens. The response names the account and the
+ *   granted scopes; no token ever leaves.
  * - `execute` (http-executor): hands the signed grant and the request to the
  *   HTTP executor, which verifies the grant itself — the service signature
  *   authenticates the caller, it grants nothing.
@@ -32,7 +36,13 @@ import type { TenantProvisioner } from '../store/infisical-tenant-provisioner-cl
 import type { AgentPageId, ConversationId, RunId, SessionId, UserId } from '../grant';
 import type { HttpRequestExecutor } from './http-request-executor';
 import { decidePlaneRequestSignature, PLANE_SIGNATURE_HEADER } from './plane-request-signature';
-import { PLANE_ROUTES, planeDeleteBody, planeDescribeBody, planeExecuteBody, planePutBody, planeRebindBody, planeRevokeBody, planeUsageBody, type PlaneDescribeResult, type PlaneUsageResult } from './plane-wire';
+import { PLANE_ROUTES, planeDeleteBody, planeDescribeBody, planeExecuteBody, planeOAuthExchangeBody, planePutBody, planeRebindBody, planeRevokeBody, planeUsageBody, type PlaneDescribeResult, type PlaneOAuthExchangeResult, type PlaneUsageResult } from './plane-wire';
+import type { PinnedHttpsClient } from './pinned-https-client';
+import type { OAuthEndpointRegistry } from '../refresh/decide-refresh-endpoint';
+import type { OAuthClientCredentials } from '../refresh/build-refresh-request';
+import { buildTokenEndpointRequest } from '../refresh/build-refresh-request';
+import { interpretTokenResponse } from '../refresh/interpret-token-response';
+import { planEnrolledMaterial } from '../oauth/plan-enrolled-material';
 
 const MAX_BODY_BYTES = 1_500_000;
 /** The liveness probe the image HEALTHCHECK and Fly's `[checks.health]` call. */
@@ -42,6 +52,8 @@ export type PlaneRequestHandlerDeps = {
   readonly secret: string;
   readonly store: Pick<StoreAdapter, 'put' | 'revoke' | 'delete' | 'describe' | 'rebind'>;
   readonly usage: Pick<UsageLedger, 'window'>;
+  /** Code exchange at enrollment: the pinned endpoints, the plane's OAuth clients and its pinned HTTPS client. */
+  readonly oauth: { readonly endpoints: OAuthEndpointRegistry; readonly clientFor: (providerSlug: string) => OAuthClientCredentials | null; readonly network: PinnedHttpsClient } | null;
   readonly provisioner: Pick<TenantProvisioner, 'ensureTenant' | 'identityOf'>;
   readonly executor: HttpRequestExecutor;
   readonly hmac: (key: string, text: string) => string;
@@ -162,6 +174,39 @@ export function createPlaneRequestHandler(deps: PlaneRequestHandlerDeps): (req: 
         identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'manage', blastRadius: 'tenant' },
       });
       return send(res, 200, result);
+    }
+
+    if (path === PLANE_ROUTES.oauthExchange) {
+      const parsed = planeOAuthExchangeBody.safeParse(json);
+      if (!parsed.success) return send(res, 400, { error: 'malformed' });
+      const { ref, providerSlug, code, codeVerifier, redirectUri, requestedScopes, bindings, scope, consenters } = parsed.data;
+      const refuse = (reason: Extract<PlaneOAuthExchangeResult, { readonly ok: false }>['reason']) => send(res, 200, { ok: false, reason } satisfies PlaneOAuthExchangeResult);
+      const endpoint = deps.oauth === null || !Object.prototype.hasOwnProperty.call(deps.oauth.endpoints, providerSlug) ? undefined : deps.oauth.endpoints[providerSlug];
+      const client = deps.oauth?.clientFor(providerSlug) ?? null;
+      if (deps.oauth === null || endpoint === undefined || client === null) return refuse('not_configured');
+      const built = buildTokenEndpointRequest({
+        tokenEndpoint: endpoint.tokenEndpoint,
+        clientAuth: endpoint.clientAuth,
+        client,
+        grant: [['grant_type', 'authorization_code'], ['code', code], ['code_verifier', codeVerifier], ['redirect_uri', redirectUri]],
+      });
+      if (!built.ok) return refuse('exchange_failed');
+      const reading = interpretTokenResponse({ send: await deps.oauth.network.send(built.request), now: deps.now() });
+      if (!reading.ok) return refuse(reading.failure.kind === 'status' && reading.failure.status >= 400 && reading.failure.status < 500 ? 'exchange_refused' : 'exchange_failed');
+      const planned = planEnrolledMaterial({ body: reading.body, endpoint, clientId: client.clientId, requestedScopes, now: deps.now() });
+      if (!planned.ok) return refuse(planned.reason);
+      const tenant = await deps.provisioner.ensureTenant(ref.tenantId as TenantId);
+      if (tenant === null) return refuse('store_unavailable');
+      const put = await deps.store.put({
+        ref: ref as SecretRef,
+        material: { kind: 'oauth2', material: planned.material },
+        expectedVersion: null,
+        bindings: bindings as unknown as PlaneBindings,
+        scope: scope as unknown as PlaneScope,
+        consenters: consenters as PlaneConsenters,
+        identity: { tenantId: ref.tenantId as TenantId, identityId: tenant.identityId, channel: 'ingress', blastRadius: 'tenant' },
+      });
+      return send(res, 200, (put.ok ? { ok: true, version: put.version, email: planned.email, scopes: planned.material.scopes } : { ok: false, reason: put.reason }) satisfies PlaneOAuthExchangeResult);
     }
 
     if (path === PLANE_ROUTES.usage) {

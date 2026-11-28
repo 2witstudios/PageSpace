@@ -28,7 +28,9 @@ export const updateAgentAccountBody = z
     allowedOrigins: z.array(z.string().min(1).max(2_048)).min(1).max(20),
     autoApprove: z.discriminatedUnion('enabled', [
       z.object({ enabled: z.literal(false) }).strict(),
-      z.object({ enabled: z.literal(true), maxUsesPerHour: z.number().int().min(1).max(1_000), until: z.number().int().positive().nullable() }).strict(),
+      z
+        .object({ enabled: z.literal(true), maxUsesPerHour: z.number().int().min(1).max(1_000), until: z.number().int().positive().nullable(), classes: z.array(z.enum(['read', 'write'])).min(1).max(2).optional() })
+        .strict(),
     ]),
     stepUpToken,
   })

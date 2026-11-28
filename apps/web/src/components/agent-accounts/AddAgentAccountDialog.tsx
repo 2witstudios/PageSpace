@@ -14,6 +14,18 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { agentAccountsUrl, type AgentAccountScope } from '@/hooks/useAgentAccounts';
 
 type Placement = 'bearer' | 'authorization' | 'header' | 'query';
+type Mode = 'key' | 'google';
+
+/** What a person can let the agent do with a Google account; each is one narrow Google permission. */
+const GOOGLE_SERVICE_OPTIONS: readonly { readonly id: string; readonly label: string }[] = [
+  { id: 'gmail.read', label: 'Read email' },
+  { id: 'gmail.modify', label: 'Draft, label and trash email' },
+  { id: 'gmail.send', label: 'Send email (always asks you first)' },
+  { id: 'calendar.read', label: 'Read the calendar' },
+  { id: 'calendar', label: 'Read and change the calendar' },
+  { id: 'drive.read', label: 'Read Drive files' },
+  { id: 'drive', label: 'Read and change Drive files' },
+];
 
 const REFUSAL_COPY: Readonly<Record<string, string>> = {
   acknowledgment_required: 'Confirm that this is a personal login you share with your agent.',
@@ -23,6 +35,7 @@ const REFUSAL_COPY: Readonly<Record<string, string>> = {
   key_invalid: 'The key looks empty or contains line breaks.',
   name_invalid: 'Give the account a name (up to 100 characters).',
   forbidden: 'Only a drive owner or admin can add an account to this agent.',
+  services_empty: 'Choose at least one thing the agent may do.',
   not_configured: 'Agent accounts are not set up on this PageSpace deployment.',
   plane_unavailable: 'The credential service is unavailable. Try again later.',
 };
@@ -43,6 +56,9 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
   const [acknowledged, setAcknowledged] = useState(false);
   const [allowGenericRequests, setAllowGenericRequests] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [mode, setMode] = useState<Mode>('key');
+  const [services, setServices] = useState<string[]>(['gmail.read']);
+  const [autoApproveReads, setAutoApproveReads] = useState(true);
 
   const dirty = open && (name !== '' || origin !== '' || apiKey !== '');
   useEffect(() => {
@@ -64,7 +80,30 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
   };
 
   const needsName = placement === 'header' || placement === 'query';
-  const canSubmit = name.trim() !== '' && origin.trim() !== '' && apiKey !== '' && (!needsName || placementName.trim() !== '') && (ownership === 'dedicated' || acknowledged) && !submitting;
+  const canSubmitKey = name.trim() !== '' && origin.trim() !== '' && apiKey !== '' && (!needsName || placementName.trim() !== '') && (ownership === 'dedicated' || acknowledged) && !submitting;
+  const canSubmitGoogle = name.trim() !== '' && services.length > 0 && (ownership === 'dedicated' || acknowledged) && !submitting;
+  const canSubmit = mode === 'google' ? canSubmitGoogle : canSubmitKey;
+
+  /** Off to Google's consent screen; Google brings the browser back and the account appears in the list. */
+  const connectGoogle = async () => {
+    setSubmitting(true);
+    try {
+      const { authorizeUrl } = await post<{ authorizeUrl: string }>('/api/agent-accounts/oauth/google/start', {
+        owner: scope.kind === 'user' ? { kind: 'user' } : { kind: 'agent_page', agentPageId: scope.pageId },
+        name: name.trim(),
+        services,
+        ownership,
+        acknowledged: ownership === 'personal' && acknowledged,
+        autoApproveReads,
+        returnTo: `${window.location.pathname}${window.location.search}`,
+      });
+      window.location.assign(authorizeUrl);
+    } catch (error) {
+      const reason = error instanceof ApiRequestError ? error.message : '';
+      toast.error(REFUSAL_COPY[reason] ?? 'Google could not be connected.');
+      setSubmitting(false);
+    }
+  };
 
   const submit = async () => {
     setSubmitting(true);
@@ -103,6 +142,15 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
         </DialogHeader>
 
         <div className="space-y-4">
+          <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className="grid grid-cols-2 gap-2">
+            <Label htmlFor={`${mountId}-mode-key`} className="flex items-center gap-2 rounded-md border p-3 font-normal cursor-pointer">
+              <RadioGroupItem value="key" id={`${mountId}-mode-key`} /> An API key or token
+            </Label>
+            <Label htmlFor={`${mountId}-mode-google`} className="flex items-center gap-2 rounded-md border p-3 font-normal cursor-pointer">
+              <RadioGroupItem value="google" id={`${mountId}-mode-google`} /> A Google account
+            </Label>
+          </RadioGroup>
+
           <RadioGroup value={ownership} onValueChange={(value) => setOwnership(value as 'dedicated' | 'personal')} className="space-y-2">
             <div className="flex items-start gap-2">
               <RadioGroupItem value="dedicated" id={`${mountId}-dedicated`} className="mt-0.5" />
@@ -129,8 +177,37 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
 
           <div className="space-y-1">
             <Label htmlFor={`${mountId}-name`}>Name</Label>
-            <Input id={`${mountId}-name`} value={name} onChange={(event) => setName(event.target.value)} placeholder="Weather API" maxLength={100} />
+            <Input id={`${mountId}-name`} value={name} onChange={(event) => setName(event.target.value)} placeholder={mode === 'google' ? 'Agent Google' : 'Weather API'} maxLength={100} />
           </div>
+          {mode === 'google' && (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label>What the agent may do</Label>
+                {GOOGLE_SERVICE_OPTIONS.map((option) => (
+                  <div key={option.id} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`${mountId}-svc-${option.id}`}
+                      checked={services.includes(option.id)}
+                      onCheckedChange={(value) => setServices((current) => (value === true ? [...new Set([...current, option.id])] : current.filter((id) => id !== option.id)))}
+                    />
+                    <Label htmlFor={`${mountId}-svc-${option.id}`} className="font-normal text-sm">
+                      {option.label}
+                    </Label>
+                  </div>
+                ))}
+                <p className="text-xs text-muted-foreground">Google asks only for these. Sending email, deleting for good and sharing files always ask you first.</p>
+              </div>
+              <div className="flex items-start gap-2">
+                <Checkbox id={`${mountId}-reads`} checked={autoApproveReads} onCheckedChange={(value) => setAutoApproveReads(value === true)} className="mt-0.5" />
+                <Label htmlFor={`${mountId}-reads`} className="font-normal leading-snug text-sm">
+                  Let the agent read without asking me each time (up to 60 an hour). Changes ask until you allow them in Permissions.
+                </Label>
+              </div>
+              <p className="text-xs text-muted-foreground">You&apos;ll sign in to Google next. Choose the agent&apos;s own Google account if it has one. PageSpace stores the sign-in in its credential vault; the agent never sees it.</p>
+            </div>
+          )}
+          {mode === 'key' && (
+          <>
           <div className="space-y-1">
             <Label htmlFor={`${mountId}-origin`}>Site address</Label>
             <Input id={`${mountId}-origin`} value={origin} onChange={(event) => setOrigin(event.target.value)} placeholder="https://api.example.com" />
@@ -161,14 +238,16 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
               Let the agent make requests to this site without asking me each time (up to 60 an hour). Otherwise you approve each request in the chat.
             </Label>
           </div>
+          </>
+          )}
         </div>
 
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="button" onClick={submit} disabled={!canSubmit}>
-            Add account
+          <Button type="button" onClick={mode === 'google' ? connectGoogle : submit} disabled={!canSubmit}>
+            {mode === 'google' ? 'Continue to Google' : 'Add account'}
           </Button>
         </DialogFooter>
       </DialogContent>

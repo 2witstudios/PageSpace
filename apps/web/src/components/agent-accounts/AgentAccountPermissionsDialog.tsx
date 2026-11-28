@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -73,6 +74,7 @@ export function AgentAccountPermissionsDialog({
   const [autoApprove, setAutoApprove] = useState(false);
   const [maxUsesPerHour, setMaxUsesPerHour] = useState('60');
   const [untilDate, setUntilDate] = useState('');
+  const [allowWrites, setAllowWrites] = useState(false);
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
 
@@ -83,6 +85,7 @@ export function AgentAccountPermissionsDialog({
     setAutoApprove(settings.autoApprove !== null);
     setMaxUsesPerHour(String(settings.autoApprove?.maxUsesPerHour ?? 60));
     setUntilDate(dateInputOf(settings.autoApprove?.until ?? null));
+    setAllowWrites(settings.autoApprove?.classes.includes('write') ?? false);
   }, [settings, dirty]);
 
   useEffect(() => {
@@ -126,7 +129,14 @@ export function AgentAccountPermissionsDialog({
       if (accountId === null) return;
       const body = {
         allowedOrigins: origins.map((origin) => origin.trim()).filter((origin) => origin !== ''),
-        autoApprove: autoApprove ? { enabled: true, maxUsesPerHour: Number(maxUsesPerHour), until: untilDate === dateInputOf(storedUntil) ? storedUntil : untilOf(untilDate) } : { enabled: false },
+        autoApprove: autoApprove
+          ? {
+              enabled: true,
+              maxUsesPerHour: Number(maxUsesPerHour),
+              until: untilDate === dateInputOf(storedUntil) ? storedUntil : untilOf(untilDate),
+              ...(isProviderAccount ? { classes: allowWrites ? ['read', 'write'] : ['read'] } : {}),
+            }
+          : { enabled: false },
       };
       const url = agentAccountSettingsUrl(accountId);
       const result = await sendAccountChange({ accountId, method: 'PATCH', url, body }, (payload) => patch<{ settings: AgentAccountSettings }>(url, payload));
@@ -134,6 +144,7 @@ export function AgentAccountPermissionsDialog({
     }, 'The permissions could not be saved.');
 
   const isAgentAccount = settings?.account.ownerKind === 'agent_page';
+  const isProviderAccount = (settings?.account.providerSlug ?? null) !== null;
   const { allAgents } = usePageAgents(undefined, { enabled: open && settings?.canBind === true, refreshInterval: 0 });
   const boundIds = useMemo(() => new Set(settings?.bindings.map((binding) => binding.agentPageId) ?? []), [settings]);
   const attachable = allAgents.filter((agent) => !boundIds.has(agent.id));
@@ -228,12 +239,20 @@ export function AgentAccountPermissionsDialog({
                 <div className="flex items-start gap-2">
                   <RadioGroupItem value="auto" id={`${mountId}-auto`} className="mt-0.5" />
                   <Label htmlFor={`${mountId}-auto`} className="font-normal leading-snug">
-                    <span className="font-medium">Allow requests to these sites without asking</span>, within the limits below.
+                    <span className="font-medium">{isProviderAccount ? 'Allow reading without asking' : 'Allow requests to these sites without asking'}</span>, within the limits below.
                   </Label>
                 </div>
               </RadioGroup>
               {autoApprove && (
                 <div className="grid grid-cols-2 gap-3 pl-6">
+                  {isProviderAccount && (
+                    <div className="col-span-2 flex items-start gap-2">
+                      <Checkbox id={`${mountId}-writes`} checked={allowWrites} onCheckedChange={(value) => edit(setAllowWrites)(value === true)} className="mt-0.5" />
+                      <Label htmlFor={`${mountId}-writes`} className="font-normal leading-snug text-sm">
+                        Also allow changes you can undo without asking (drafts, labels, trash, calendar events, editing files). Sending email, deleting for good and sharing always ask.
+                      </Label>
+                    </div>
+                  )}
                   <div className="space-y-1">
                     <Label htmlFor={`${mountId}-cap`}>Requests per hour</Label>
                     <Input id={`${mountId}-cap`} type="number" min={1} max={1000} value={maxUsesPerHour} onChange={(event) => edit(setMaxUsesPerHour)(event.target.value)} />

@@ -12,7 +12,7 @@
  * `revoke` report every failure as `plane_unavailable`; their callers keep the
  * state that lets the operation be reconciled or repeated.
  */
-export type PlaneRoute = 'put' | 'revoke' | 'delete' | 'describe' | 'rebind' | 'usage' | 'execute';
+export type PlaneRoute = 'put' | 'revoke' | 'delete' | 'describe' | 'rebind' | 'usage' | 'oauthExchange' | 'execute';
 
 export type PlaneCallFailure =
   | { readonly kind: 'timeout' }

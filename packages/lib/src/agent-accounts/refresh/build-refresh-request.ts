@@ -41,6 +41,24 @@ export function buildRefreshRequest({
   readonly client: OAuthClientCredentials;
   readonly refreshToken: string;
 }): RefreshRequestVerdict {
+  return buildTokenEndpointRequest({ tokenEndpoint, clientAuth, client, grant: [['grant_type', 'refresh_token'], ['refresh_token', refreshToken]] });
+}
+
+/**
+ * The token-endpoint request for any grant (refresh, or the authorization-code exchange at enrollment):
+ * `grant` is the ordered form fields; every value must be usable. Same URL, header and client-auth rules.
+ */
+export function buildTokenEndpointRequest({
+  tokenEndpoint,
+  clientAuth,
+  client,
+  grant,
+}: {
+  readonly tokenEndpoint: string;
+  readonly clientAuth: OAuthProviderEndpoints['clientAuth'];
+  readonly client: OAuthClientCredentials;
+  readonly grant: readonly (readonly [string, string])[];
+}): RefreshRequestVerdict {
   let url: URL;
   try {
     url = new URL(tokenEndpoint);
@@ -50,11 +68,11 @@ export function buildRefreshRequest({
   if (url.protocol !== 'https:' || url.username !== '' || url.password !== '' || url.search !== '' || url.hash !== '' || tokenEndpoint.includes('#')) {
     return { ok: false, reason: 'endpoint_invalid' };
   }
-  if (![refreshToken, client.clientId, client.clientSecret].every(usable)) return { ok: false, reason: 'credential_invalid' };
+  if (![...grant.map(([, value]) => value), client.clientId, client.clientSecret].every(usable)) return { ok: false, reason: 'credential_invalid' };
 
   const port = url.port === '' ? 443 : Number(url.port);
   const authority = port === 443 ? url.hostname : `${url.hostname}:${port}`;
-  const form = [`grant_type=refresh_token`, `refresh_token=${formEncode(refreshToken)}`];
+  const form = grant.map(([name, value]) => `${name}=${formEncode(value)}`);
   const headers: [string, string][] = [
     ['accept', 'application/json'],
     ['content-type', 'application/x-www-form-urlencoded'],
