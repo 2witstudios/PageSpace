@@ -83,7 +83,8 @@ export function AgentAccountPermissionsDialog({
     if (settings === null || dirty) return;
     setOrigins(settings.account.allowedOrigins.map(displayOrigin));
     setAutoApprove(settings.autoApprove !== null);
-    setMaxUsesPerHour(String(settings.autoApprove?.maxUsesPerHour ?? 60));
+    // A new standing policy starts at the account kind's own default (SSH commands: 30 an hour).
+    setMaxUsesPerHour(String(settings.autoApprove?.maxUsesPerHour ?? (settings.account.kind === 'ssh_key' ? 30 : 60)));
     setUntilDate(dateInputOf(settings.autoApprove?.until ?? null));
     setAllowWrites(settings.autoApprove?.classes.includes('write') ?? false);
   }, [settings, dirty]);

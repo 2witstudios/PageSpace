@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useId, useState } from 'react';
+import React, { useEffect, useId, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -70,7 +70,9 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
   const [sshHost, setSshHost] = useState('');
   const [sshPort, setSshPort] = useState('22');
   const [sshUser, setSshUser] = useState('');
-  const [probed, setProbed] = useState<{ readonly fingerprint: string; readonly algorithm: string } | null>(null);
+  const [probed, setProbed] = useState<{ readonly fingerprint: string; readonly algorithm: string; readonly host: string; readonly port: number | null } | null>(null);
+  /** The server the latest probe asked about; editing the server or port moves it, so a late answer is ignored. */
+  const probeTarget = useRef('');
   const [fingerprintConfirmed, setFingerprintConfirmed] = useState(false);
   const [createdPublicKey, setCreatedPublicKey] = useState<string | null>(null);
 
@@ -113,8 +115,12 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
     setProbed(null);
     setFingerprintConfirmed(false);
     try {
-      const result = await post<{ fingerprint: string; algorithm: string }>('/api/agent-accounts/ssh/probe', { owner: ownerBody(), host: sshHost.trim(), port: Number(sshPort) || null });
-      setProbed({ fingerprint: result.fingerprint, algorithm: result.algorithm });
+      const asked = { host: sshHost.trim(), port: Number(sshPort) || null };
+      probeTarget.current = `${asked.host}:${asked.port}`;
+      const result = await post<{ fingerprint: string; algorithm: string }>('/api/agent-accounts/ssh/probe', { owner: ownerBody(), ...asked });
+      // A probe for a server the person has since changed is someone else's key: dropped.
+      if (probeTarget.current !== `${asked.host}:${asked.port}`) return;
+      setProbed({ fingerprint: result.fingerprint, algorithm: result.algorithm, host: asked.host, port: asked.port });
     } catch (error) {
       toast.error(refusalCopy(error, 'The server could not be checked.'));
     } finally {
@@ -129,8 +135,9 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
       const result = await post<{ publicKey: string }>('/api/agent-accounts/ssh', {
         owner: ownerBody(),
         name: name.trim(),
-        host: sshHost.trim(),
-        port: Number(sshPort) || null,
+        // Exactly the server whose key the person confirmed.
+        host: probed.host,
+        port: probed.port,
         username: sshUser.trim(),
         hostKeySha256: probed.fingerprint,
         ownership,
@@ -221,7 +228,7 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
               <p className="text-sm font-medium">Account added. Install its key on the server:</p>
               <p className="text-xs text-muted-foreground">As <span className="font-mono">{sshUser}</span> on the server, add this line to <span className="font-mono">~/.ssh/authorized_keys</span>. This is the public half only — the private key never leaves PageSpace&apos;s credential service. You can copy it again from the account later.</p>
               <pre className="text-xs font-mono whitespace-pre-wrap break-all rounded bg-background p-2 border">{createdPublicKey}</pre>
-              <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(createdPublicKey).then(() => toast.success('Copied'))}>
+              <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(createdPublicKey).then(() => toast.success('Copied'), () => toast.error('Could not copy. Select the key above and copy it yourself.'))}>
                 Copy public key
               </Button>
             </div>
@@ -260,11 +267,11 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
               <div className="grid grid-cols-[1fr_6rem] gap-2">
                 <div className="space-y-1">
                   <Label htmlFor={`${mountId}-ssh-host`}>Server</Label>
-                  <Input id={`${mountId}-ssh-host`} value={sshHost} onChange={(event) => { setSshHost(event.target.value); setProbed(null); }} placeholder="build.example.com" />
+                  <Input id={`${mountId}-ssh-host`} value={sshHost} onChange={(event) => { setSshHost(event.target.value); setProbed(null); probeTarget.current = ''; }} placeholder="build.example.com" />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor={`${mountId}-ssh-port`}>Port</Label>
-                  <Input id={`${mountId}-ssh-port`} inputMode="numeric" value={sshPort} onChange={(event) => { setSshPort(event.target.value); setProbed(null); }} />
+                  <Input id={`${mountId}-ssh-port`} inputMode="numeric" value={sshPort} onChange={(event) => { setSshPort(event.target.value); setProbed(null); probeTarget.current = ''; }} />
                 </div>
               </div>
               <div className="space-y-1">
@@ -278,7 +285,9 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
                 </Button>
               ) : (
                 <div className="space-y-2 rounded-md border p-3">
-                  <p className="text-xs">The server presented this {probed.algorithm} host key:</p>
+                  <p className="text-xs">
+                    <span className="font-mono">{probed.host}{probed.port && probed.port !== 22 ? `:${probed.port}` : ''}</span> presented this {probed.algorithm} host key:
+                  </p>
                   <pre className="text-xs font-mono break-all">{probed.fingerprint}</pre>
                   <p className="text-xs text-muted-foreground">On the server, run <span className="font-mono">ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub</span> and check it shows the same. PageSpace will refuse to connect if the server ever presents a different key.</p>
                   <div className="flex items-start gap-2">

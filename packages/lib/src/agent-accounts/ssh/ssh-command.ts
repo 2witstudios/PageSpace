@@ -16,6 +16,7 @@
  *   shell command does cannot be classed from its text, so it is never
  *   classed as a read.
  */
+import { isIP } from 'node:net';
 import type { CanonicalOrigin, CanonicalRequest } from '../canonical-request';
 import type { HashBytes, OperationRef } from '../grant';
 import { canonicalJson } from '../canonical-json';
@@ -24,8 +25,7 @@ export const SSH_OPERATION: OperationRef = { class: 'unknown', name: 'ssh.exec' 
 export const MAX_SSH_COMMAND_BYTES = 8 * 1024;
 export const MAX_SSH_STDIN_BYTES = 256 * 1024;
 const DNS_NAME_RE = /^(?=.{1,253}$)(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$/;
-const IPV4_RE = /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/;
-const IPV6_RE = /^[0-9a-f:]+$/;
+
 /**
  * What a person could not see on the approval card: Unicode format characters (bidi overrides, zero-width
  * joiners — "Trojan Source") and control characters other than tab and newline (and carriage return in input).
@@ -37,8 +37,10 @@ export type SshTarget = { readonly target: CanonicalOrigin; readonly host: strin
 
 export function normalizeSshTarget({ host, port }: { readonly host: string; readonly port: number | null }): ({ readonly ok: true } & SshTarget) | { readonly ok: false; readonly reason: 'host_invalid' | 'port_invalid' } {
   const raw = typeof host === 'string' ? host.trim().toLowerCase().replace(/^\[|\]$/g, '') : '';
-  const isV6 = raw.includes(':');
-  if (raw.length === 0 || !(DNS_NAME_RE.test(raw) || IPV4_RE.test(raw) || (isV6 && IPV6_RE.test(raw)))) return { ok: false, reason: 'host_invalid' };
+  // Addresses are validated by node:net (one `::`, mixed IPv4 tails), names by the DNS grammar.
+  const family = isIP(raw);
+  const isV6 = family === 6;
+  if (raw.length === 0 || (family === 0 && !DNS_NAME_RE.test(raw))) return { ok: false, reason: 'host_invalid' };
   const resolvedPort = port ?? 22;
   if (!Number.isInteger(resolvedPort) || resolvedPort < 1 || resolvedPort > 65_535) return { ok: false, reason: 'port_invalid' };
   const authority = isV6 ? `[${raw}]` : raw;
@@ -47,7 +49,7 @@ export function normalizeSshTarget({ host, port }: { readonly host: string; read
 
 /** The host and port an `ssh://` target names, or null for anything else. */
 export function sshTargetOf(target: string): SshTarget | null {
-  const match = /^ssh:\/\/(\[[0-9a-f:]+\]|[a-z0-9.-]+):(\d{1,5})$/.exec(target);
+  const match = /^ssh:\/\/(\[[0-9a-f:.]+\]|[a-z0-9.-]+):(\d{1,5})$/.exec(target);
   if (match === null) return null;
   const verdict = normalizeSshTarget({ host: match[1]!, port: Number(match[2]) });
   return verdict.ok && verdict.target === target ? { target: verdict.target, host: verdict.host, port: verdict.port } : null;

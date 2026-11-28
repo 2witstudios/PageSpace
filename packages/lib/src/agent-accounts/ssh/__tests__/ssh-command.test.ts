@@ -12,6 +12,11 @@ describe('normalizeSshTarget / sshTargetOf', () => {
     expect({ targets: actual, back: actual.map((target) => sshTargetOf(target)?.port) }).toEqual({ targets: ['ssh://build.example.com:22', 'ssh://203.0.113.7:2222', 'ssh://[2001:db8::1]:22'], back: [22, 2222, 22] });
   });
 
+  it('given IPv6 literals, should accept mixed notation and refuse a second ::', () => {
+    const actual = [normalizeSshTarget({ host: '2606:4700::104.16.133.229', port: 22 }), normalizeSshTarget({ host: '2001:db8::1::2', port: 22 })].map((verdict) => (verdict.ok ? sshTargetOf(verdict.target)?.host : verdict.reason));
+    expect(actual).toEqual(['2606:4700::104.16.133.229', 'host_invalid']);
+  });
+
   it('given a URL, a user@host, a path, a bad port or another scheme, should refuse', () => {
     const actual = [normalizeSshTarget({ host: 'ssh://x.com', port: 22 }), normalizeSshTarget({ host: 'root@x.com', port: 22 }), normalizeSshTarget({ host: 'x.com/etc', port: 22 }), normalizeSshTarget({ host: 'x.com', port: 70_000 }), normalizeSshTarget({ host: '', port: 22 })].map((verdict) => (verdict.ok ? 'ok' : verdict.reason));
     expect({ normalized: actual, read: [sshTargetOf('https://x.com:22'), sshTargetOf('ssh://X.com:22'), sshTargetOf('ssh://x.com:022')] }).toEqual({ normalized: ['host_invalid', 'host_invalid', 'host_invalid', 'port_invalid', 'host_invalid'], read: [null, null, null] });

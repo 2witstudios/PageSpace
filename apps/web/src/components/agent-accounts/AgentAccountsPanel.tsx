@@ -64,7 +64,8 @@ function useResumePendingAccountChange(onApplied: () => void) {
   }, [onApplied]);
 }
 
-const hostOf = (origin: string) => origin.replace(/^https:\/\//, '').replace(/:443$/, '').replace(/^ssh:\/\//, 'ssh ').replace(/:22$/, '');
+/** An account's site as a person reads it: the scheme's OWN default port is implied (443 for https, 22 for ssh). */
+const hostOf = (origin: string) => (origin.startsWith('ssh://') ? `ssh ${origin.slice('ssh://'.length).replace(/:22$/, '')}` : origin.replace(/^https:\/\//, '').replace(/:443$/, ''));
 
 /**
  * The Accounts settings for an agent page, or for the global assistant in personal settings (G2).
@@ -133,7 +134,7 @@ export function AgentAccountsPanel({ scope }: { readonly scope: AgentAccountScop
             {account.status === 'active' && (
               <div className="flex shrink-0 gap-2">
                 {account.publicKey && (
-                  <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(account.publicKey ?? '').then(() => toast.success('Public key copied. Add it to ~/.ssh/authorized_keys on the server.'))}>
+                  <Button type="button" size="sm" variant="outline" onClick={() => void navigator.clipboard.writeText(account.publicKey ?? '').then(() => toast.success('Public key copied. Add it to ~/.ssh/authorized_keys on the server.'), () => toast.error(`Could not copy. The public key is: ${account.publicKey ?? ''}`))}>
                     Copy public key
                   </Button>
                 )}
