@@ -18,7 +18,7 @@ import { createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 
-export interface AgentBrowserSessionInput {
+interface AgentBrowserSessionInput {
   request: Request;
   userId: string;
   /** `users.tokenVersion` — the device token carries it so a revoke kills it. */

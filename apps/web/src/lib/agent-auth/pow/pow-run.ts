@@ -16,7 +16,7 @@ export type PowRunMessage =
   | { type: 'solved'; nonce: string; attempts: number }
   | { type: 'failed'; attempts: number };
 
-export const POW_CHUNK_SIZE = 20_000;
+const POW_CHUNK_SIZE = 20_000;
 
 /** 32× the mean: the chance an honest search needs more is e^-32. */
 const ATTEMPT_BUDGET_MULTIPLIER = 32;

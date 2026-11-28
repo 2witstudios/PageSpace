@@ -22,7 +22,7 @@ import { AgentIdentityStoreError } from '@pagespace/lib/services/agent-identitie
 import { redactDbError } from '@pagespace/lib/logging/db-error-redaction';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
-export type StartSessionClaimResult =
+type StartSessionClaimResult =
   | { ok: true; userCode: string; expiresAt: Date }
   | { ok: false; error: 'already_claimed' | 'not_claimable' };
 

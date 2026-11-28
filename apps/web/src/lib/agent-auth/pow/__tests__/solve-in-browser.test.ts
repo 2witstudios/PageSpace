@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { verifyPowSolution } from '@pagespace/lib/auth/agent/pow';
-import { solvePowInBrowser, PowSearchFailed } from '../solve-in-browser';
+import { solvePowInBrowser } from '../solve-in-browser';
 
 const CHALLENGE = 'ps_pow_abcdefghijklmnopqrstuvwxyz012345';
 
@@ -56,12 +56,12 @@ describe('solvePowInBrowser', () => {
       }
     }
     vi.stubGlobal('Worker', GivingUpWorker);
-    await expect(solvePowInBrowser({ challenge: CHALLENGE, difficultyBits: 20, onProgress: vi.fn() })).rejects.toBeInstanceOf(PowSearchFailed);
+    await expect(solvePowInBrowser({ challenge: CHALLENGE, difficultyBits: 20, onProgress: vi.fn() })).rejects.toThrow();
   });
 
   it('given an already aborted signal, should reject without starting', async () => {
     const controller = new AbortController();
     controller.abort();
-    await expect(solvePowInBrowser({ challenge: CHALLENGE, difficultyBits: 20, onProgress: vi.fn(), signal: controller.signal })).rejects.toBeInstanceOf(PowSearchFailed);
+    await expect(solvePowInBrowser({ challenge: CHALLENGE, difficultyBits: 20, onProgress: vi.fn(), signal: controller.signal })).rejects.toThrow();
   });
 });

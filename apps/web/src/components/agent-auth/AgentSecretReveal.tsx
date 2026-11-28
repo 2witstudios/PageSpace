@@ -9,7 +9,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { CopyValueButton } from './CopyValueButton';
 import { AgentClaimLink } from './AgentClaimLink';
 
-export interface AgentSecretRevealProps {
+interface AgentSecretRevealProps {
   agentId: string;
   secret: string;
   claimToken: string;

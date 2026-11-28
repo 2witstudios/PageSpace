@@ -26,11 +26,11 @@ function leadingZeroBits(digest: Uint8Array): number {
 }
 
 /** Leading zero bits of SHA3-256(`${challenge}:${nonce}`). */
-export function browserPowZeroBits(challenge: string, nonce: string): number {
+function browserPowZeroBits(challenge: string, nonce: string): number {
   return leadingZeroBits(sha3_256(encoder.encode(`${challenge}:${nonce}`)));
 }
 
-export interface PowSearch {
+interface PowSearch {
   challenge: string;
   difficultyBits: number;
   /** First nonce to try. */

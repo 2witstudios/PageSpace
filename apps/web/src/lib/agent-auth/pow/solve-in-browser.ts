@@ -5,12 +5,12 @@
  */
 import { runPowSearch, type PowRunMessage, type PowRunRequest } from './pow-run';
 
-export interface SolveInBrowserInput extends PowRunRequest {
+interface SolveInBrowserInput extends PowRunRequest {
   onProgress: (attempts: number, expected: number) => void;
   signal?: AbortSignal;
 }
 
-export class PowSearchFailed extends Error {
+class PowSearchFailed extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PowSearchFailed';

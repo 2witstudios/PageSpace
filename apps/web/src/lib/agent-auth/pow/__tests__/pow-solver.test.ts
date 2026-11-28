@@ -4,15 +4,16 @@
  * Node's SHA3-256), or a browser agent solves puzzles the server rejects.
  */
 import { describe, it, expect } from 'vitest';
-import { powLeadingZeroBits, verifyPowSolution } from '@pagespace/lib/auth/agent/pow';
-import { browserPowZeroBits, expectedPowAttempts, searchPowNonce } from '../pow-solver';
+import { powLeadingZeroBits, solvePow, verifyPowSolution } from '@pagespace/lib/auth/agent/pow';
+import { expectedPowAttempts, searchPowNonce } from '../pow-solver';
 
 const CHALLENGE = 'ps_pow_abcdefghijklmnopqrstuvwxyz012345';
 
-describe('browserPowZeroBits', () => {
-  it('should match the server digest count for a spread of nonces', () => {
-    for (let i = 0; i < 300; i += 1) {
-      expect(browserPowZeroBits(CHALLENGE, String(i))).toBe(powLeadingZeroBits(CHALLENGE, String(i)));
+describe('the browser digest agrees with the server (bit for bit)', () => {
+  it.each([1, 3, 5, 8, 11])('at %i bits, should find exactly the nonce the server-side solver finds', (bits) => {
+    for (const challenge of [CHALLENGE, 'ps_pow_0000000000000000000000000000000z', 'ps_pow_x']) {
+      const browser = searchPowNonce({ challenge, difficultyBits: bits, start: 0, count: 1_000_000 });
+      expect(browser.nonce).toBe(solvePow(challenge, bits));
     }
   });
 });

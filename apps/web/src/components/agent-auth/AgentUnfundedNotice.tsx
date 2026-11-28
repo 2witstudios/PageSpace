@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
-export const AGENT_UNFUNDED_COPY = 'This agent has no AI credits — share your claim link to get funded';
+const AGENT_UNFUNDED_COPY = 'This agent has no AI credits — share your claim link to get funded';
 
 /**
  * Shown in an UNCLAIMED agent's session where a human sees "Verify Email"

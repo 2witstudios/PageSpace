@@ -27,7 +27,8 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({
   post: mocks.claimPost,
 }));
 
-import { AgentAuthClient, describeAgentAuthError } from '../AgentAuthClient';
+import { AgentAuthClient } from '../AgentAuthClient';
+import { describeAgentAuthError } from '../agent-auth-copy';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
