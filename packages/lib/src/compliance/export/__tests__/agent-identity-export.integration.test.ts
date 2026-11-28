@@ -85,10 +85,13 @@ describe('collectUserAgentIdentity (real Postgres)', () => {
     const data = {
       profile, drives: [], pages: [], sheets: [], messages: [], files: [], activity: [], systemLogs: [],
       apiMetrics: [], errorLogs: [], aiUsage: [], tasks: [], sessions: [], notifications: [],
-      displayPreferences: [], settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [] },
-      personalization: null, personalizationCandidates: [], agentWorkspaces: [],
+      displayPreferences: [],
+      settings: { hotkeys: [], automation: null, toastNotifications: null, emailNotifications: [], imagoDriveAccess: [] },
+      personalization: null, personalizationCandidates: [], pulseSummaries: [], withheld: [], agentWorkspaces: [],
       agentAccounts: { accounts: [], approvalsGiven: [], bindingsMade: [], delegationsGiven: [] }, streamState: [], contentTags: [],
-      localEnvironments: [], agentIdentity,
+      localEnvironments: [], agentIdentity, organizations: [],
+      orgMembership: { memberships: [], departures: [], joinRequests: [], guestHolds: [] },
+      wallet: { wallet: null, fundingLegs: [], spendOverrides: [] },
     } satisfies AllUserData;
 
     const native = buildNativeExportFiles(data);

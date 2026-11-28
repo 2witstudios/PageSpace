@@ -64,6 +64,10 @@ describe('the sign-in seam', () => {
     // verified when the passkey was registered (auth/signup-passkey ran the join then); it
     // provisions nothing new, so a verified-domain join has nothing to act on here.
     'auth/passkey/authenticate/route.ts': 'authenticates an existing passkey account; the address was verified and the join ran at signup-passkey',
+    // The agent jwt-bearer grant (ADR 0008) retries the agent's Home-drive provisioning on sign-in. An agent
+    // account's address is synthetic and undeliverable (agents.pagespace.invalid, isAgentReservedEmail), never
+    // verified, and in a domain no org can verify, so a verified-domain join has nothing to act on.
+    'oauth/token/route.ts': "provisions an AGENT account's Home drive at its jwt-bearer sign-in; its synthetic reserved address never joins an org by domain",
     // Agent Signup Phase 3: an AI agent's address is the reserved agent-<id>@agents.pagespace.invalid
     // (RFC 2606), which can never be an org's verified domain, so a verified-domain join never applies.
     'auth/agent/signin/route.ts': 'signs in an AI agent account, whose reserved .invalid address can never match a verified org domain',

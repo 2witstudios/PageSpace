@@ -41,7 +41,7 @@ describe('InvitePage v3 branch', () => {
     vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', 'true');
     vi.mocked(resolveInviteContext).mockResolvedValue({
       ok: true,
-      data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', role: 'MEMBER', email: 'a@b.c', isExistingUser: true },
+      data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', inviterAccountType: 'human', role: 'MEMBER', email: 'a@b.c', isExistingUser: true },
     });
 
     await renderPage();
@@ -65,7 +65,7 @@ describe('InvitePage v3 branch', () => {
     vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', undefined);
     vi.mocked(resolveInviteContext).mockResolvedValue({
       ok: true,
-      data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', role: 'MEMBER', email: 'a@b.c', isExistingUser: false },
+      data: { kind: 'drive', driveName: 'Studio', inviterName: 'Jono', inviterAccountType: 'human', role: 'MEMBER', email: 'a@b.c', isExistingUser: false },
     });
 
     await renderPage();
@@ -78,7 +78,7 @@ describe('InvitePage v3 branch', () => {
     vi.stubEnv('NEXT_PUBLIC_IMAGO_V3_AUTH', enabled);
     vi.mocked(resolveInviteContext).mockResolvedValue({ ok: false, error: 'NOT_FOUND' });
     vi.mocked(loadOrgInvitePage).mockResolvedValue({
-      view: 'sign_in', orgName: 'Northwind Labs', inviterName: 'Jono', role: 'MEMBER', invitedEmail: 'a@b.c',
+      view: 'sign_in', orgName: 'Northwind Labs', inviterName: 'Jono', inviterAccountType: 'human', role: 'MEMBER', invitedEmail: 'a@b.c',
     });
 
     await renderPage();

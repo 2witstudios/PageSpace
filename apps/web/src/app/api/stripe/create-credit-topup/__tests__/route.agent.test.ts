@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 
 import { POST } from '../route';
-import { CREDIT_PACKS } from '@pagespace/lib/billing/credit-pricing';
+import { CREDIT_PACKS } from '@pagespace/lib/billing/money-model';
 
 const PACK = Object.values(CREDIT_PACKS)[0];
 const req = () =>
