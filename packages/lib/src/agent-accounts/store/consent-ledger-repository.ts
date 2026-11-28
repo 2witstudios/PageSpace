@@ -1,7 +1,7 @@
 /**
  * The single-use ledger for `OwnerConsent.consentId` (ADR 0005 §2.2 `rebind`;
  * G1c E2) — I/O only, in the PLANE's own metadata store
- * (`infisical-dev/plane-metadata.sql`, `agent_account_consent_ledger`).
+ * (`plane-metadata/*.sql`, `agent_account_consent_ledger`).
  *
  * Why the plane and not the main DB (G2 ruling 3, 2026-09-21): consumption is
  * what stops a consent from being applied twice, and the main-DB writer is

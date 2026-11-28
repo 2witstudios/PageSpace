@@ -55,6 +55,7 @@ const EXPECTED_SERVICES: Record<string, { dockerfile: string; context: string }>
   admin: { dockerfile: 'apps/admin/Dockerfile', context: '.' },
   marketing: { dockerfile: 'apps/marketing/Dockerfile', context: '.' },
   imago: { dockerfile: 'apps/imago/Dockerfile', context: '.' },
+  'credential-plane': { dockerfile: 'apps/web/Dockerfile.credential-plane', context: '.' },
 };
 
 describe('Docker Images CI workflow', () => {

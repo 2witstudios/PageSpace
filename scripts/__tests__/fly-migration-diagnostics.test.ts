@@ -37,4 +37,26 @@ describe('migration diagnostics', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  // The credential-plane migration one-shot runs in pagespace-credential-plane, not pagespace-web.
+  it('given MIGRATION_APP, should read logs from and destroy the machine in that app (default pagespace-web)', () => {
+    const run = (extraEnv: Record<string, string>) => {
+      const dir = mkdtempSync(join(tmpdir(), 'fly-diagnostics-app-'));
+      try {
+        spawnSync('bash', ['-c', `
+          source "$HELPER"
+          flyctl() { echo "$*" >> "$ORDER"; }
+          timeout() { shift; "$@"; }
+          trap capture_migration_diagnostics EXIT
+          exit 0
+        `], { encoding: 'utf8', env: { ...process.env, HELPER: resolve('fly-migration-diagnostics.sh'), MACHINE_JSON: join(dir, 'absent.json'), MACHINE_ID: '83d593c7662698', DIAGNOSTICS_DIR: join(dir, 'safe'), ORDER: join(dir, 'order'), ...extraEnv } });
+        return readFileSync(join(dir, 'order'), 'utf8').trim().split('\n').map((line) => line.match(/--app (\S+)/)?.[1]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    expect({ default: run({}), plane: run({ MIGRATION_APP: 'pagespace-credential-plane' }) }).toEqual({
+      default: ['pagespace-web', 'pagespace-web'],
+      plane: ['pagespace-credential-plane', 'pagespace-credential-plane'],
+    });
+  });
 });

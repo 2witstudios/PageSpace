@@ -185,7 +185,7 @@ export type AgentAccountGrantNonceRow = {
 // trust: a main-DB writer who owned those rows could un-revoke a credential or
 // reopen a rotation grace. The row, the plane's bindings row and their DDL
 // live in the plane's own metadata store
-// (`packages/lib/src/agent-accounts/store/infisical-dev/plane-metadata.sql`).
+// (`packages/lib/src/agent-accounts/store/plane-metadata/*.sql`).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

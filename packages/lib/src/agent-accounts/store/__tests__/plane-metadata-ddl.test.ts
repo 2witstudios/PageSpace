@@ -1,21 +1,21 @@
 /**
- * Drift guard between the plane metadata DDL (`infisical-dev/plane-metadata.sql`,
+ * Drift guard between the plane metadata DDL (the ordered files in `plane-metadata/`,
  * the one owner of this shape per Control Board §1) and
  * `plane-metadata-repository.ts`, the only code that reads/writes that table.
  * A column the repository references but the DDL does not declare would
  * otherwise surface only as a runtime Postgres error against a real instance.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
-const SQL_PATH = path.join(__dirname, '../infisical-dev/plane-metadata.sql');
+const MIGRATIONS_DIR = path.join(__dirname, '../plane-metadata');
 const REPOSITORY_PATH = path.join(__dirname, '../plane-metadata-repository.ts');
 
 /** Every column declared across every CREATE TABLE block in the file. */
 function ddlColumns(sql: string): readonly string[] {
   const blocks = [...sql.matchAll(/CREATE TABLE[^(]*\(([\s\S]*?)\n\);/g)];
-  if (blocks.length === 0) throw new Error('plane-metadata.sql: could not find a CREATE TABLE(...) block to parse');
+  if (blocks.length === 0) throw new Error('plane-metadata.sql: could not find a CREATE TABLE(...) block in plane-metadata/*.sql');
   return blocks.flatMap((block) =>
     block[1]!
       .split('\n')
@@ -26,11 +26,12 @@ function ddlColumns(sql: string): readonly string[] {
 }
 
 describe('plane metadata DDL matches the repository that reads/writes it', () => {
-  const sql = readFileSync(SQL_PATH, 'utf8');
+  // Every migration, in order: the schema the runner leaves is the union of them.
+  const sql = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith('.sql')).sort().map((name) => readFileSync(path.join(MIGRATIONS_DIR, name), 'utf8')).join('\n');
   const repositorySource = readFileSync(REPOSITORY_PATH, 'utf8');
   const columns = ddlColumns(sql);
 
-  it('given plane-metadata.sql, should declare the secret versions table and the bindings row table (G1c R4)', () => {
+  it('given the plane-metadata migrations, should declare the secret versions table and the bindings row table (G1c R4)', () => {
     const actual = ['agent_account_secret_versions', 'agent_account_plane_bindings'].map((table) => sql.includes(`CREATE TABLE IF NOT EXISTS ${table}`));
     expect(actual).toEqual([true, true]);
   });
@@ -56,7 +57,7 @@ describe('plane metadata DDL matches the repository that reads/writes it', () =>
     'consenters',
     'policy_version',
   ] as const)(
-    'given the repository reads/writes column %s, should exist in plane-metadata.sql',
+    'given the repository reads/writes column %s, should exist in the plane-metadata migrations',
     (column) => {
       expect(repositorySource).toContain(column);
       expect(columns).toContain(column);

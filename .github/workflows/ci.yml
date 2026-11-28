@@ -336,13 +336,27 @@ jobs:
             docker compose logs
             exit 1
           }
-          # plane-metadata.sql (the ONE owner of this DDL, Control Board §1) is mounted into
-          # the metadata service's /docker-entrypoint-initdb.d/, so postgres's own entrypoint
-          # already ran it against a fresh volume above — this just confirms that happened
-          # rather than assuming it silently.
+          # The plane metadata schema comes from the same one-shot prod runs before a deploy
+          # (store/plane-metadata/*.sql, the ONE owner of this DDL, Control Board §1). Run it
+          # twice: the second run must be a no-op, then confirm the tables exist.
+          for i in $(seq 1 30); do
+            docker exec infisical-dev-metadata pg_isready -U plane_metadata -h 127.0.0.1 >/dev/null 2>&1 && break
+            sleep 2
+          done
+          export PLANE_METADATA_DATABASE_URL=postgresql://plane_metadata:plane_metadata@127.0.0.1:55433/plane_metadata
+          (cd "$GITHUB_WORKSPACE" && bun run --filter @pagespace/lib credential-plane:migrate) || {
+            echo "::error::credential-plane:migrate failed against the fresh metadata DB"
+            exit 1
+          }
+          second=$(cd "$GITHUB_WORKSPACE" && bun run --filter @pagespace/lib credential-plane:migrate 2>&1)
+          echo "$second"
+          echo "$second" | grep -q "credential-plane:migrate: up to date" || {
+            echo "::error::a second credential-plane:migrate run was not a no-op"
+            exit 1
+          }
           docker exec -i infisical-dev-metadata psql -U plane_metadata -d plane_metadata -c \
             "SELECT 1 FROM agent_account_secret_versions LIMIT 0; SELECT 1 FROM agent_account_consent_ledger LIMIT 0" || {
-            echo "::error::agent_account_secret_versions / agent_account_consent_ledger were not created by plane-metadata.sql's initdb mount"
+            echo "::error::agent_account_secret_versions / agent_account_consent_ledger were not created by credential-plane:migrate"
             exit 1
           }
 
