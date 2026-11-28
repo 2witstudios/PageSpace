@@ -4,7 +4,6 @@ import { useEffect } from 'react';
 import useSWR from 'swr';
 import { useSocketStore } from '@/retained/stores/useSocketStore';
 import type { CreditsEventPayload } from '@/retained-adapters/ui-contracts';
-import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
 import type { SubscriptionTier } from '@/retained/lib/subscription/plans';
 
 /**
@@ -27,14 +26,6 @@ export interface CreditBalance {
   reserved: number;
   subscriptionTier: SubscriptionTier;
 }
-
-const fetcher = async (url: string): Promise<CreditBalance> => {
-  const response = await fetchWithAuth(url);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch: ${response.status}`);
-  }
-  return response.json();
-};
 
 /**
  * Pure: fold an authoritative `credits:updated` payload into the cached balance. The
@@ -73,9 +64,10 @@ export function useCreditBalance() {
   const connect = useSocketStore((state) => state.connect);
   const socket = useSocketStore((state) => state.socket);
 
+  // No fetcher of its own (Imago maintained edit): ImagoSWRProvider's, the one every '/api/credits'
+  // reader shares. It throws imago's ApiError, so a 4xx is not retried and a 401 goes to sign-in.
   const { data, error, isLoading, mutate } = useSWR<CreditBalance>(
     '/api/credits',
-    fetcher,
     {
       refreshInterval: 0, // rely on Socket.IO for live updates
       revalidateOnFocus: false,

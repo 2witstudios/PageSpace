@@ -19,7 +19,7 @@ vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
 vi.mock('@/ui/components/text-size-switcher/text-size-switcher', () => ({
   TextSizeSwitcher: () => h('div', { role: 'group', 'aria-label': 'Text size' }),
 }));
-// The live balance (retained useCreditBalance): /api/credits through fetchWithAuth, then the
+// The live balance (retained useCreditBalance): /api/credits through the SWR provider, then the
 // realtime socket's credits:updated pushes. A stand-in socket lets a test push a new balance.
 const live = vi.hoisted(() => {
   const handlers = new Map<string, Set<(payload: unknown) => void>>();
@@ -35,13 +35,11 @@ const live = vi.hoisted(() => {
   return {
     store,
     emit: (event: string, payload: unknown) => handlers.get(event)?.forEach((handler) => handler(payload)),
-    fetchWithAuth: vi.fn(async (_url: string) => Response.json({})),
   };
 });
 vi.mock('@/retained/stores/useSocketStore', () => ({
   useSocketStore: (select: (store: typeof live.store) => unknown) => select(live.store),
 }));
-vi.mock('@/retained/lib/auth/auth-fetch', () => ({ fetchWithAuth: live.fetchWithAuth }));
 
 const { AvatarMenu, ME, profileFrom } = await import('./avatar-menu');
 
@@ -61,6 +59,7 @@ const CREDITS_BODY = {
 const web = (verified: boolean) =>
   fakeWeb({
     [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', image: '/api/avatar/user-1.png', emailVerified: verified }),
+    'GET /api/credits': () => Response.json(CREDITS_BODY),
   });
 
 const rowsOf = (container: HTMLElement) =>
@@ -68,8 +67,6 @@ const rowsOf = (container: HTMLElement) =>
 
 beforeEach(() => {
   signOut.mockClear();
-  live.fetchWithAuth.mockReset();
-  live.fetchWithAuth.mockImplementation(async (url: string) => (url === '/api/credits' ? Response.json(CREDITS_BODY) : new Response('{}', { status: 404 })));
 });
 
 afterEach(() => {
@@ -93,7 +90,7 @@ describe('AvatarMenu', () => {
       should: 'load each once, draw the avatar from its same-origin picture, show the total and the next grant, and list the account rows',
       actual: [
         fake.count(`GET ${ME}`),
-        live.fetchWithAuth.mock.calls.filter(([url]) => url === '/api/credits').length,
+        fake.count('GET /api/credits'),
         container.querySelector('summary img')?.getAttribute('src'),
         container.textContent?.includes('ada@example.com'),
         container.textContent?.includes('612 credits900 more on Nov 3'),
@@ -107,6 +104,7 @@ describe('AvatarMenu', () => {
   test('Verify Email resends the verification mail and closes the menu', async () => {
     const fake = fakeWeb({
       [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', emailVerified: false }),
+      'GET /api/credits': () => Response.json(CREDITS_BODY),
       'POST /api/auth/resend-verification': () => Response.json({ message: 'sent' }),
     });
     const container = mount(
@@ -149,8 +147,9 @@ describe('AvatarMenu', () => {
   });
 
   test('a credits:updated push updates the card', async () => {
+    const fake = web(true);
     const container = mount(
-      <ImagoSWRProvider client={web(true).client}>
+      <ImagoSWRProvider client={fake.client}>
         <AvatarMenu />
       </ImagoSWRProvider>,
     );
@@ -176,7 +175,7 @@ describe('AvatarMenu', () => {
     assert({
       given: 'a credits:updated push after a turn',
       should: 'show the pushed total on the card, keep the plan, and not refetch the balance',
-      actual: [card, live.fetchWithAuth.mock.calls.filter(([url]) => url === '/api/credits').length],
+      actual: [card, fake.count('GET /api/credits')],
       expected: ['CreditsPro598 credits900 more on Nov 3Buy credits', 1],
     });
   });
