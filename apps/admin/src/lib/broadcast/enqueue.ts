@@ -1,4 +1,5 @@
 import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Enqueue a durable email-broadcast job on the processor.
@@ -56,8 +57,8 @@ export class BroadcastEnqueueUnconfirmedError extends Error {
 export interface EnqueueBroadcastParams {
   /** The email_broadcasts row id the worker will send against. */
   broadcastId: string;
-  /** The authenticated admin minting the token. */
-  callerUserId: string;
+  /** The admin enqueuing, as the credential the processor token is minted from. */
+  caller: AccessActor;
 }
 
 export interface EnqueueBroadcastResult {
@@ -145,7 +146,7 @@ export async function enqueueBroadcast(params: EnqueueBroadcastParams): Promise<
   // failure that is unambiguous by construction.
   let token: string;
   try {
-    ({ token } = await createUserServiceToken(params.callerUserId, ['broadcast:enqueue'], '2m'));
+    ({ token } = await createUserServiceToken(params.caller, ['broadcast:enqueue'], '2m'));
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new BroadcastNotEnqueuedError(`service token minting failed: ${detail}`);

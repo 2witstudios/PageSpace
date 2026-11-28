@@ -352,6 +352,58 @@ describe('MCP Documents API — read parity (#1762)', () => {
       expect(data.fileMetadata.originalFileName).toBe('notes.txt');
       expect(data.content).toContain('extracted text');
     });
+
+    it('returns the full text of a completed PDF with rendered blank pages (the blank-separator report)', async () => {
+      mockFindFirstPage.mockResolvedValue({
+        ...BASE_PAGE,
+        type: 'FILE',
+        content: 'Section 1: quarterly figures\nSection 8: outlook',
+        processingStatus: 'completed',
+        mimeType: 'application/pdf',
+        extractionMethod: 'text',
+        extractionMetadata: { pageCount: 10, renderedPages: [5, 10] },
+      });
+
+      const { POST } = await import('../route');
+      const data = await (await POST(makeRequest({ operation: 'read', pageId: 'page_123' }))).json();
+
+      expect(data.content).toContain('Section 8: outlook');
+    });
+
+    it('returns the text layer of a visual PDF instead of dropping it', async () => {
+      mockFindFirstPage.mockResolvedValue({
+        ...BASE_PAGE,
+        type: 'FILE',
+        content: 'EXHIBIT 4\nSurvey of the north boundary',
+        processingStatus: 'visual',
+        mimeType: 'application/pdf',
+        extractionMethod: 'visual',
+        extractionMetadata: { pageCount: 3, renderedPages: [1, 2, 3] },
+      });
+
+      const { POST } = await import('../route');
+      const data = await (await POST(makeRequest({ operation: 'read', pageId: 'page_123' }))).json();
+
+      expect(data.content).toContain('Survey of the north boundary');
+      expect(data.fileMetadata.processingStatus).toBe('visual');
+      expect(data.note).toMatch(/images/);
+    });
+
+    it('still reports a visual file with no text as needing vision', async () => {
+      mockFindFirstPage.mockResolvedValue({
+        ...BASE_PAGE,
+        type: 'FILE',
+        content: '',
+        processingStatus: 'visual',
+        mimeType: 'image/png',
+      });
+
+      const { POST } = await import('../route');
+      const data = await (await POST(makeRequest({ operation: 'read', pageId: 'page_123' }))).json();
+
+      expect(data.status).toBe('visual');
+      expect(data.message).toMatch(/visual file/);
+    });
   });
 
   describe('4. TASK_LIST sub-task counts and parent list', () => {

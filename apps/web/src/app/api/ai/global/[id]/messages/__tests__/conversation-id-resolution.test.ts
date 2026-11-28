@@ -77,6 +77,9 @@ vi.mock('@/lib/auth', () => ({
   // Session auth = unscoped, which is all this route accepts. Stubbed because
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -85,6 +88,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
       info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn(),
       child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })),
     },
+    ai: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() },
   },
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
   logPerformance: vi.fn(),
@@ -282,6 +286,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
   DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({

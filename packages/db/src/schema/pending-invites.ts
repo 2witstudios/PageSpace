@@ -3,14 +3,14 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives } from './core';
-import { driveRoles, memberRole } from './members';
+import { driveRoles, memberRole, type GrantableMemberRole } from './members';
 
 export const pendingInvites = pgTable('pending_invites', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   tokenHash: text('token_hash').unique().notNull(),
   email: text('email').notNull(),
   driveId: text('drive_id').notNull().references(() => drives.id, { onDelete: 'cascade' }),
-  role: memberRole('role').notNull(),
+  role: memberRole('role').$type<GrantableMemberRole>().notNull(),
   customRoleId: text('custom_role_id').references(() => driveRoles.id, { onDelete: 'set null' }),
   invitedBy: text('invited_by').notNull().references(() => users.id, { onDelete: 'cascade' }),
   expiresAt: timestamp('expires_at', { mode: 'date' }),

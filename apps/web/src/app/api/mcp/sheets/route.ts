@@ -28,6 +28,7 @@ import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAcces
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * Structured access to sheet rows, for agents.
@@ -192,7 +193,7 @@ export async function POST(req: NextRequest) {
       loggers.api.warn('MCP sheet access denied - no view permission', {
         userId, pageId, hasAccessLevel: !!accessLevel, canView: accessLevel?.canView ?? false,
       });
-      return new NextResponse('Forbidden', { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse('Forbidden', { status: 403 }));
     }
 
     if (WRITE_OPERATIONS.has(operation) && !accessLevel.canEdit) {

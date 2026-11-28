@@ -23,6 +23,7 @@
  * module-level mutable state.
  */
 
+import type { SpendFallbackNotice } from '../billing/spend-fallback';
 import { z } from 'zod';
 
 /**
@@ -241,11 +242,28 @@ export type VoiceAssistant = z.infer<typeof voiceAssistantSchema>;
  * handed the realtime default persona on a call the UI presents as talking to
  * a specific assistant. Both are optional because an unbound call is a real,
  * supported state — it has no assistant to be.
+ *
+ * `spendDriveId` is the drive the call spends in (SPEND-1): the drive of the page agent the
+ * bound conversation belongs to, resolved web-side from that same authorized read, the way a
+ * typed turn on that page spends in the page's drive. Never taken from the browser. Absent
+ * for an unbound or Global Assistant call, which spends the caller's personal credits
+ * (SPEND-8). The realtime server meters every window on it (call-metering.ts).
  */
+/**
+ * The calling credential's ceremony evidence (SEC-2/3, D-OW-45): taken from the session that started the call,
+ * carried unchanged on every hop, re-parsed by the web tier, which authorizes tools and transcript writes through it.
+ * Null or absent when that credential carried none, which every org sign-in policy refuses.
+ */
+export const voiceCallAuthenticationSchema = z.object({
+  authenticatedAtMs: z.number().int().nonnegative(),
+  assurance: z.enum(['single_factor', 'user_verified_passkey']),
+}).nullable().optional();
+
 export const realtimeAttachPayloadSchema = z.object({
   callId: realtimeCallIdSchema,
   secret: ephemeralSecretSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1).optional(),
   tools: z.array(realtimeToolSchema).default([]),
   model: z.string().min(1),
@@ -255,6 +273,7 @@ export const realtimeAttachPayloadSchema = z.object({
   seed: z.array(realtimeSeedEventSchema).default([]),
   instructions: z.string().min(1).optional(),
   assistant: voiceAssistantSchema.optional(),
+  spendDriveId: z.string().min(1).optional(),
 });
 
 export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
@@ -282,16 +301,34 @@ export type RealtimeAttachPayload = z.infer<typeof realtimeAttachPayloadSchema>;
  * bound agent instead of as the person who started the call — see
  * `voiceAssistantSchema` for why echoing it is not a new trust assumption.
  */
+/**
+ * The source a call spends, echoed on each tool dispatch so a tool that gates its own model
+ * call (generate_image) spends where the call does (SPEND-1): the drive the web tier resolved
+ * for the call, and the source its opening hold pinned. Absent for a call on the caller's
+ * personal credits. It rides the same HMAC as `userId`, so echoing it adds no trust
+ * assumption.
+ */
+export const voiceToolSpendSchema = z.object({
+  driveId: z.string().min(1),
+  chosen: z.enum(['drive_wallet', 'seat_allowance', 'own_credits']).nullable(),
+  /** The call's fallback origin (WAL-6b), so a tool's own hold lands overshoot where the chosen source would. */
+  fallbackFromWalletId: z.string().min(1).optional(),
+});
+
+export type VoiceToolSpend = z.infer<typeof voiceToolSpendSchema>;
+
 export const voiceToolDispatchSchema = z.object({
   kind: z.literal('tool'),
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1).optional(),
   name: z.string().min(1),
   argumentsJson: z.string(),
   timezone: z.string().min(1).optional(),
   locationContext: voiceLocationContextSchema.optional(),
   assistant: voiceAssistantSchema.optional(),
+  spend: voiceToolSpendSchema.optional(),
 });
 
 /**
@@ -305,6 +342,7 @@ export const voiceTranscriptSchema = z.object({
   kind: z.literal('transcript'),
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1),
   role: z.enum(['user', 'assistant']),
   text: z.string().min(1),
@@ -332,6 +370,7 @@ export const voiceTranscriptSchema = z.object({
 const toolActivityCore = {
   callId: realtimeCallIdSchema,
   userId: z.string().min(1),
+  authentication: voiceCallAuthenticationSchema,
   conversationId: z.string().min(1),
   /** OpenAI's `function_call.call_id` — what the two phases agree on. */
   toolCallId: z.string().min(1),
@@ -414,7 +453,10 @@ export type VoiceBridgeResponse =
     }
   | { readonly ok: false; readonly error: string };
 
-/** What the attach endpoint answers. Never echoes the secret. */
+/**
+ * What the attach endpoint answers. Never echoes the secret. `spendFallback` is set when the
+ * call's opening gate fell back to another source (SPEND-4), so the web tier tells the caller.
+ */
 export type RealtimeAttachResult =
-  | { readonly success: true; readonly callId: string }
+  | { readonly success: true; readonly callId: string; readonly spendFallback: SpendFallbackNotice | null }
   | { readonly success: false; readonly error: string };

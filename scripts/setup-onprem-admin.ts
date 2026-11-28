@@ -6,7 +6,7 @@
  *   bun run setup:admin --email admin@clinic.local --name "Dr. Smith"
  *
  * This script:
- * 1. Creates a user with admin role and business-tier subscription
+ * 1. Creates an admin with a Free personal plan and deployment-derived capabilities
  * 2. Sets emailVerified (pre-verified for on-prem)
  * 3. Generates a one-time magic link for initial sign-in (no SMTP required)
  */
@@ -77,7 +77,7 @@ async function main() {
         .where(eq(users.id, existing.id));
 
       const link = await generateOnPremSetupLink(existing.id);
-      console.log(`Existing user ${email} promoted to admin with business tier.`);
+      console.log(`Existing user ${email} promoted to admin with a Free personal plan.`);
       console.log('');
       console.log('One-time sign-in link (expires in 60 minutes):');
       console.log(`  ${link}`);
@@ -103,7 +103,8 @@ async function main() {
   console.log(`  Name:  ${name}`);
   console.log(`  Email: ${email}`);
   console.log(`  Role:  admin`);
-  console.log(`  Tier:  business`);
+  console.log('  Personal plan:  Free');
+  console.log('  Capabilities:   provided by this on-prem deployment');
   console.log('');
   console.log('One-time sign-in link (expires in 60 minutes):');
   console.log(`  ${link}`);

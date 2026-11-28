@@ -4,6 +4,7 @@ import { LocalEnvUnsupportedError, SPRITE_SANDBOX_CAPABILITIES, type SandboxCapa
 import { authorizePreviewHolder, resolvePreviewTarget, type PreviewAccessDeps, type PreviewEnvRow, type PreviewSessionRow } from '../preview-access';
 import type { DevPreviewRecord } from '../dev-preview-store';
 import { buildPreviewRelaySpec, PREVIEW_RELAY_SERVICE_NAME } from '../preview-relay';
+import { credentialActor } from '../../../../permissions/access-actor';
 
 const NOW = new Date('2026-09-06T12:00:00Z');
 const USER = 'user-1';
@@ -53,7 +54,7 @@ function deps(over: Partial<PreviewAccessDeps> & { calls?: string[] } = {}): Pre
     resolveDriveMembership: async () => track('membership', 'member' as const),
     resolveDrivePayer: async () => track('payer', { payerId: OWNER }),
     canRunCode: async () => track('canRunCode', { ok: true as const }),
-    isSessionUsable: async () => track('isSessionUsable', true),
+    loadSessionActor: async (input) => track('loadSessionActor', credentialActor(input.userId, null)),
     attach: async () => track('attach', fakeHandle({ relay: runningRelay() })),
     previewStore: { findByHolder: async () => track('findRow', liveRow()), upsert: async () => true, setStoppedByUser: async () => null, approvePort: async () => null,
     selectPort: async () => null, findStoppedWithRelay: async () => [], markSwept: async () => {}, markRelayStopped: async () => {} },
@@ -66,44 +67,44 @@ function deps(over: Partial<PreviewAccessDeps> & { calls?: string[] } = {}): Pre
 describe('authorizePreviewHolder — database facts only', () => {
   it('a drive member may reach a drive session (the same decider the session routes use)', async () => {
     const d = deps();
-    const result = await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: USER, deps: d });
+    const result = await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(USER, null), deps: d });
     assert({ given: 'member of the session drive', should: 'allow with the payer subject and the live sprite', actual: result, expected: { allowed: true, driveId: 'd1', wakeSubject: { driveId: 'd1', ownerId: OWNER }, sandboxId: 'sbx-ws' } });
   });
 
   it('a non-member is refused with the decider reason, and the membership is the last read', async () => {
     const d = deps({ resolveDriveMembership: async () => 'none' });
-    assert({ given: 'no membership', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: USER, deps: d }), expected: { allowed: false, reason: 'drive_access_denied' } });
+    assert({ given: 'no membership', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(USER, null), deps: d }), expected: { allowed: false, reason: 'drive_access_denied' } });
   });
 
   it('a global-assistant session is owner-only', async () => {
     const d = deps({ findSession: async () => session({ driveId: null }) });
-    assert({ given: 'a stranger', should: 'refuse', actual: (await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: USER, deps: d })).allowed, expected: false });
-    assert({ given: 'the owner', should: 'allow with a null drive', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: OWNER, deps: d }), expected: { allowed: true, driveId: null, wakeSubject: { driveId: null, ownerId: OWNER }, sandboxId: 'sbx-ws' } });
+    assert({ given: 'a stranger', should: 'refuse', actual: (await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(USER, null), deps: d })).allowed, expected: false });
+    assert({ given: 'the owner', should: 'allow with a null drive', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(OWNER, null), deps: d }), expected: { allowed: true, driveId: null, wakeSubject: { driveId: null, ownerId: OWNER }, sandboxId: 'sbx-ws' } });
   });
 
   it('an ended session is refused even when its environment is still running', async () => {
     const d = deps({ findSession: async () => session({ envId: 'env1', sandboxId: null, endedAt: NOW }) });
-    assert({ given: 'ended env-bound session', should: 'refuse session_ended', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: USER, deps: d }), expected: { allowed: false, reason: 'session_ended' } });
+    assert({ given: 'ended env-bound session', should: 'refuse session_ended', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(USER, null), deps: d }), expected: { allowed: false, reason: 'session_ended' } });
   });
 
   it('an env-bound session resolves the ENV sprite (the holder owns the pointer)', async () => {
     const d = deps({ findSession: async () => session({ envId: 'env1', sandboxId: null }) });
-    const result = await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, userId: USER, deps: d });
+    const result = await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'ws1' }, actor: credentialActor(USER, null), deps: d });
     assert({ given: 'env-bound session', should: 'point at the env sprite', actual: result.allowed && result.sandboxId, expected: 'sbx-env' });
   });
 
   it('unknown rows refuse: no session, no env, a torn-down sprite resolves to no sandbox', async () => {
-    assert({ given: 'no session', should: 'session_not_found', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'x' }, userId: USER, deps: deps({ findSession: async () => null }) }), expected: { allowed: false, reason: 'session_not_found' } });
-    assert({ given: 'no env', should: 'env_not_found', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'x' }, userId: USER, deps: deps({ findEnv: async () => null }) }), expected: { allowed: false, reason: 'env_not_found' } });
-    const torn = await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, userId: USER, deps: deps({ findEnv: async () => env({ spriteTornDownAt: NOW }) }) });
+    assert({ given: 'no session', should: 'session_not_found', actual: await authorizePreviewHolder({ holder: { kind: 'workspace', id: 'x' }, actor: credentialActor(USER, null), deps: deps({ findSession: async () => null }) }), expected: { allowed: false, reason: 'session_not_found' } });
+    assert({ given: 'no env', should: 'env_not_found', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'x' }, actor: credentialActor(USER, null), deps: deps({ findEnv: async () => null }) }), expected: { allowed: false, reason: 'env_not_found' } });
+    const torn = await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, actor: credentialActor(USER, null), deps: deps({ findEnv: async () => env({ spriteTornDownAt: NOW }) }) });
     assert({ given: 'torn-down env sprite', should: 'allow with no sandbox', actual: torn.allowed && torn.sandboxId, expected: null });
   });
 
   it('an env: any accepted drive member may view; a local env has nothing to proxy; a vanished drive fails closed', async () => {
-    assert({ given: 'member', should: 'allow', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, userId: USER, deps: deps() }), expected: { allowed: true, driveId: 'd1', wakeSubject: { driveId: 'd1', ownerId: OWNER }, sandboxId: 'sbx-env' } });
-    assert({ given: 'non-member', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, userId: USER, deps: deps({ resolveDriveMembership: async () => 'none' }) }), expected: { allowed: false, reason: 'drive_access_denied' } });
-    assert({ given: 'local env', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, userId: USER, deps: deps({ findEnv: async () => env({ substrate: 'local', sandboxId: null }) }) }), expected: { allowed: false, reason: 'env_not_sprite' } });
-    assert({ given: 'vanished drive', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, userId: USER, deps: deps({ resolveDrivePayer: async () => null }) }), expected: { allowed: false, reason: 'drive_not_found' } });
+    assert({ given: 'member', should: 'allow', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, actor: credentialActor(USER, null), deps: deps() }), expected: { allowed: true, driveId: 'd1', wakeSubject: { driveId: 'd1', ownerId: OWNER }, sandboxId: 'sbx-env' } });
+    assert({ given: 'non-member', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, actor: credentialActor(USER, null), deps: deps({ resolveDriveMembership: async () => 'none' }) }), expected: { allowed: false, reason: 'drive_access_denied' } });
+    assert({ given: 'local env', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, actor: credentialActor(USER, null), deps: deps({ findEnv: async () => env({ substrate: 'local', sandboxId: null }) }) }), expected: { allowed: false, reason: 'env_not_sprite' } });
+    assert({ given: 'vanished drive', should: 'refuse', actual: await authorizePreviewHolder({ holder: { kind: 'env', id: 'env1' }, actor: credentialActor(USER, null), deps: deps({ resolveDrivePayer: async () => null }) }), expected: { allowed: false, reason: 'drive_not_found' } });
   });
 });
 
@@ -150,7 +151,7 @@ describe('resolvePreviewTarget — the gather, in order', () => {
     const d = deps({ attach: async () => fakeHandle({ relay: runningRelay(), power: 'paused' }), canRunCode: async (input) => { seen = input; return { ok: true }; } });
     const target = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: d });
     assert({ given: 'paused + allowed', should: 'forward as a wake', actual: target.decision, expected: { kind: 'forward', wake: true } });
-    assert({ given: 'paused', should: 'ask canRunCode for the payer, not the viewer', actual: seen, expected: { userId: USER, driveId: 'd1', ownerId: OWNER } });
+    assert({ given: 'paused', should: 'ask canRunCode for the payer, not the viewer', actual: seen, expected: { actor: credentialActor(USER, null), driveId: 'd1', ownerId: OWNER } });
   });
 
   it('a paused sprite with a denied wake gate is refused 403 and NOT forwarded', async () => {
@@ -241,7 +242,7 @@ describe('resolvePreviewTarget — the cookie is only as alive as its session', 
     const before = deps();
     assert({ given: 'a usable session', should: 'forward', actual: (await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: before })).decision.kind, expected: 'forward' });
 
-    const after = deps({ isSessionUsable: async () => false });
+    const after = deps({ loadSessionActor: async () => null });
     const target = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: after });
     assert({ given: 'the same cookie after the session is revoked', should: 'opaque 404 with a session_revoked detail', actual: target.decision, expected: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' } });
     assert({ given: 'a revoked session', should: 'read no holder row, never attach, never ask the wake gate', actual: after.calls.filter((c) => c === 'findEnv' || c === 'findSession' || c === 'attach' || c === 'canRunCode' || c === 'findRow'), expected: [] });
@@ -249,15 +250,15 @@ describe('resolvePreviewTarget — the cookie is only as alive as its session', 
 
   it('is asked for the cookie\'s own session and user — not the holder owner', async () => {
     let seen: unknown;
-    const d = deps({ isSessionUsable: async (input) => { seen = input; return true; } });
+    const d = deps({ loadSessionActor: async (input) => { seen = input; return credentialActor(input.userId, null); } });
     await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: d });
     assert({ given: 'a request', should: 'name the cookie session and the cookie user', actual: seen, expected: { sessionId: SESSION, userId: USER } });
   });
 
   it('a dark deployment reveals nothing and does not even ask about the session', async () => {
-    const d = deps({ featureEnabled: () => false, isSessionUsable: async () => false });
+    const d = deps({ featureEnabled: () => false, loadSessionActor: async () => null });
     const target = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: d });
     assert({ given: 'dark', should: 'still answer feature-disabled', actual: target.decision.kind === 'refuse' && target.decision.reason, expected: 'feature-disabled' });
-    assert({ given: 'dark', should: 'cost no session query', actual: d.calls.includes('isSessionUsable'), expected: false });
+    assert({ given: 'dark', should: 'cost no session query', actual: d.calls.includes('loadSessionActor'), expected: false });
   });
 });

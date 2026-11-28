@@ -202,6 +202,6 @@ describe('the GET', () => {
     const response = await GET(new Request(`http://localhost/api/agent-workspaces/${WORKSPACE}/nodes`), params);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(SNAPSHOT);
-    expect(mockRead).toHaveBeenCalledWith(WORKSPACE, AUTH_USER.userId);
+    expect(mockRead).toHaveBeenCalledWith(WORKSPACE, expect.objectContaining({ userId: AUTH_USER.userId }));
   });
 });

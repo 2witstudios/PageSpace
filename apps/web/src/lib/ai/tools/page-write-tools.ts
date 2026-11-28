@@ -1,3 +1,4 @@
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { canActorEditPage, canActorDeletePage, canActorManageDrive, canActorAdministerDrive, driveDeniedByAppToken, driveOutsideMcpScope } from './actor-permissions';
@@ -38,6 +39,8 @@ import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveOrThrowDriveId } from './drive-context-defaults';
 import { toModelOutputForPageWrite } from './page-write-model-output';
+import { toolActor } from '@/lib/ai/tools/actor-permissions';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -370,6 +373,9 @@ async function trashDrive(
     throw new Error('Drive not found or you do not have permission to delete it');
   }
 
+  // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
+  await recordOrgPowerDriveAction(toolActor(context), drive, 'trash');
+
   if (isHomeDrive(drive)) {
     throw new Error(homeDriveActionError(drive, 'trash')!);
   }
@@ -439,11 +445,12 @@ async function restorePage(
 
 // Helper: Restore a drive from trash
 async function restoreDrive(
-  userId: string,
+  actor: AccessActor,
   driveId: string
 ): Promise<{ id: string; name: string; slug: string }> {
-  // Use repository seam for drive lookup
-  const drive = await driveRepository.findByIdAndOwner(driveId, userId);
+  // Use repository seam for drive lookup: lead authority (the lead, or on an org drive an org
+  // Owner/Admin, audited)
+  const drive = await driveRepository.findByIdForLeadAction(driveId, actor, 'restore');
 
   if (!drive) {
     throw new Error('Drive not found or you do not have permission to restore it');
@@ -1336,7 +1343,7 @@ export const pageWriteTools = {
       }
 
       try {
-        const drive = await restoreDrive(userId, id);
+        const drive = await restoreDrive(toolActor(context as ToolExecutionContext), id);
 
         // Log activity for AI-generated drive restore (fire-and-forget)
         logDriveActivityAsync(userId, 'restore', {

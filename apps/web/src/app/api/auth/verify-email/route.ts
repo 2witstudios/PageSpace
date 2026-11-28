@@ -3,6 +3,7 @@ import { verifyToken, markEmailVerified, markEmailVerifiedForAddress } from '@pa
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
 
 export async function GET(request: NextRequest) {
   try {
@@ -58,6 +59,9 @@ export async function GET(request: NextRequest) {
       // Legacy token issued before address binding — preserve prior behavior.
       await markEmailVerified(userId);
     }
+
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(userId);
 
     // Log verification
     loggers.auth.info('Email verified', { userId });

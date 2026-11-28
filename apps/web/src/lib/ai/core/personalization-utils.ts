@@ -18,6 +18,8 @@ import {
   type MemoryField,
 } from '@/lib/memory/budgets';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { checkDerivedContentAccess } from '@pagespace/lib/permissions/org-derived-content';
 import type { PersonalizationInfo } from './system-prompt';
 
 // Budgets live in one place; see budgets.ts for why all three consumers must agree.
@@ -44,15 +46,19 @@ function truncateField(content: string, maxLength: number): string {
 }
 
 /**
- * Fetch user personalization for prompt injection.
+ * Fetch the actor's own personalization for prompt injection.
  *
- * Returns null when personalization is disabled, unconfigured, or empty.
+ * Returns null when personalization is disabled, unconfigured, or empty — and
+ * when memory discovery distilled it from an org whose sign-in policy refuses
+ * the actor's credential (SEC-2/3, D-OW-62): the memory is one free-text merge,
+ * so it is withheld whole rather than served with that org's content in it.
  * Errors are swallowed — personalization is optional and must never take a
  * conversation down with it.
  */
 export async function getUserPersonalization(
-  userId: string
+  actor: AccessActor
 ): Promise<PersonalizationInfo | null> {
+  const { userId } = actor;
   try {
     const personalization = await db.query.userPersonalization.findFirst({
       where: eq(userPersonalization.userId, userId),
@@ -64,10 +70,20 @@ export async function getUserPersonalization(
         bioPageId: true,
         writingStylePageId: true,
         rulesPageId: true,
+        memoryOrgIds: true,
       },
     });
 
     if (!personalization || !personalization.enabled) {
+      return null;
+    }
+
+    const access = await checkDerivedContentAccess(actor, personalization.memoryOrgIds);
+    if (!access.allowed) {
+      loggers.api.debug('Personalization withheld: an org it was distilled from refuses this sign-in', {
+        userId,
+        code: access.code,
+      });
       return null;
     }
 

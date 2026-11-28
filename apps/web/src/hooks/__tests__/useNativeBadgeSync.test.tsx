@@ -13,7 +13,7 @@ type MockCapacitorState = {
   isIOS: boolean;
   isAndroid: boolean;
   isIPad: boolean;
-  capabilities: { secureStore: boolean; nativeAuth: boolean; push: boolean; badge: boolean };
+  capabilities: { secureStore: boolean; nativeAuth: boolean; push: boolean; badge: boolean; storeKit: boolean };
   isReady: boolean;
 };
 
@@ -23,7 +23,7 @@ const IOS_STATE: MockCapacitorState = {
   isIOS: true,
   isAndroid: false,
   isIPad: false,
-  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true },
+  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true, storeKit: true },
   isReady: true,
 };
 
@@ -33,7 +33,7 @@ const ANDROID_STATE: MockCapacitorState = {
   isIOS: false,
   isAndroid: true,
   isIPad: false,
-  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true },
+  capabilities: { secureStore: true, nativeAuth: true, push: true, badge: true, storeKit: false },
   isReady: true,
 };
 
@@ -43,7 +43,7 @@ const WEB_STATE: MockCapacitorState = {
   isIOS: false,
   isAndroid: false,
   isIPad: false,
-  capabilities: { secureStore: false, nativeAuth: false, push: false, badge: false },
+  capabilities: { secureStore: false, nativeAuth: false, push: false, badge: false, storeKit: false },
   isReady: true,
 };
 

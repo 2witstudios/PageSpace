@@ -9,8 +9,31 @@ import { files } from '@pagespace/db/schema/storage';
 import { pages } from '@pagespace/db/schema/core';
 import { sanitizeFilename, isDangerousMimeType } from '../utils/security';
 import { rateLimitRead } from '../middleware/rate-limit';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
 
 const router = Router();
+
+/**
+ * Content safety: nothing is served for a hash on the content blocklist — not
+ * the original, not a preset, not its metadata. This matters most while a
+ * takedown is still waiting to delete the bytes (a case held for evidence
+ * storage): they exist, and must not be readable. One guard on the route
+ * parameter covers every route in this router, present and future.
+ *
+ * A failed lookup is passed to the error handler (500): "couldn't check" is
+ * never treated as "not blocked".
+ */
+router.param('contentHash', async (_req, res, next, contentHash: string) => {
+  try {
+    if (isValidContentHash(contentHash) && (await isHashBlocked(contentHash))) {
+      res.status(410).json({ error: 'This file has been removed' });
+      return;
+    }
+    next();
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Get file metadata (must come before generic preset route)
 router.get('/:contentHash/metadata', rateLimitRead, async (req, res) => {

@@ -75,8 +75,13 @@ export interface AgentSessionRecord {
 
 export interface NewAgentSessionInput {
   ownerId: string;
-  /** null = a global-assistant session. */
-  driveId: string | null;
+  /**
+   * Never null: a global-assistant session is created in its owner's Home
+   * drive (`spawnAgentSession` resolves it), so no write path can mint a
+   * null-drive row. Existing null rows are still READ as global sessions until
+   * the backfill lands.
+   */
+  driveId: string;
   name: string | null;
   /**
    * The environment to run inside, or null for the ordinary ephemeral session

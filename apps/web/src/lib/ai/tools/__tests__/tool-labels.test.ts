@@ -109,3 +109,11 @@ describe('the label table against the real registry', () => {
     expect(outsideRegistry.sort()).toEqual(['ask_agent', 'ask_user']);
   });
 });
+
+describe('plan tool labels (Imago C v3, IMC-2.3)', () => {
+  it('names set_plan and clear_plan in words, never the raw tool name', () => {
+    expect(TOOL_NAME_MAP.set_plan).toBe('Set Plan');
+    expect(TOOL_NAME_MAP.clear_plan).toBe('Clear Plan');
+    expect(describeToolCall('set_plan', { title: 'Launch announcement' }, TOOL_NAME_MAP.set_plan)).toBe('Set Plan: Launch announcement');
+  });
+});

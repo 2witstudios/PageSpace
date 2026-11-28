@@ -9,7 +9,7 @@
  * no error is the worst outcome here.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import type * as SheetStore from '@pagespace/lib/sheets/store';
 
 const mockGetTab = vi.fn();
@@ -42,6 +42,7 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 }));
 
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorViewPage: vi.fn(),
   canActorEditPage: vi.fn(),
 }));

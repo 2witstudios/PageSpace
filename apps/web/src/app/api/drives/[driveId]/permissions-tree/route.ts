@@ -1,12 +1,15 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, isNotNull } from '@pagespace/db/operators';
+import { eq, and } from '@pagespace/db/operators';
 import { drives, pages } from '@pagespace/db/schema/core'
-import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
+import { pagePermissions } from '@pagespace/db/schema/members';
+import { canAdministerDrive } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { getGrantedAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
 
 interface PageNode {
   id: string;
@@ -46,25 +49,9 @@ export async function GET(
       return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
     }
 
-    const isOwner = drive[0].ownerId === user.id;
-    let isAdmin = false;
-
-    if (!isOwner) {
-      const adminMembership = await db.select()
-        .from(driveMembers)
-        .where(and(
-          eq(driveMembers.driveId, driveId),
-          eq(driveMembers.userId, user.id),
-          eq(driveMembers.role, 'ADMIN'),
-          isNotNull(driveMembers.acceptedAt)
-        ))
-        .limit(1);
-
-      isAdmin = adminMembership.length > 0;
-    }
-
-    if (!isOwner && !isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 });
+    // The drive's lead or an effective ADMIN (the org-aware membership).
+    if (!canAdministerDrive(await loadDriveRelationship(actorFromVerifiedUser(user), drive[0]))) {
+      return deniedResponse(actorFromVerifiedUser(user), driveId, NextResponse.json({ error: 'Only drive owners and admins can view permission tree' }, { status: 403 }));
     }
 
     // Get all pages in the drive
@@ -139,7 +126,7 @@ export async function GET(
       if (explicit) {
         driveRootPermissions = explicit;
       } else {
-        const access = await getUserAccessLevel(targetUserId, driveId);
+        const access = await getGrantedAccessLevel(targetUserId, driveId);
         driveRootPermissions = access
           ? { canView: access.canView, canEdit: access.canEdit, canShare: access.canShare }
           : { canView: false, canEdit: false, canShare: false };

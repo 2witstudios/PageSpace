@@ -3,6 +3,8 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope } from
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { deleteStoredObject } from '@/lib/upload/s3-effects';
+import { buildUploadStagingKey } from '@/lib/upload/upload-staging';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -45,6 +47,9 @@ export async function POST(request: Request) {
   // otherwise-successful cancel (#2225 review — CodeRabbit); the semaphore
   // slot is already released, and sweep-expired is the backstop.
   await releasePendingUpload(jobId).catch(() => undefined);
+  // Whatever the client PUT for this job is never served; remove it rather than
+  // leave an orphan. Best-effort, like the release above.
+  await Promise.resolve().then(() => deleteStoredObject(buildUploadStagingKey(jobId))).catch(() => undefined);
 
   auditRequest(request, {
     eventType: 'data.write',

@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 import { createId } from '@paralleldrive/cuid2';
 
 // ---------------------------------------------------------------------------
@@ -42,9 +51,11 @@ vi.mock('../enforced-context', () => ({
   EnforcedAuthContext: class {
     userId: string;
     userRole: string;
+    actor: { via: 'credential'; userId: string; authentication: null };
     constructor(userId: string, userRole: string) {
       this.userId = userId;
       this.userRole = userRole;
+      this.actor = { via: 'credential', userId, authentication: null };
     }
     static fromSession(claims: { userId: string; userRole: string; scopes: string[] }) {
       const ctx = new (this as unknown as new(u: string, r: string) => { userId: string; userRole: string })(claims.userId, claims.userRole);
@@ -63,6 +74,20 @@ vi.mock('../../monitoring/activity-logger', () => ({
 vi.mock('../revocation-kick', () => ({
   kickForPagePermissionRevocation: vi.fn().mockResolvedValue(undefined),
 }));
+
+// POL-2: a widening grant asks the org's guests policy. Default: a drive with no org, allowed.
+const decideOrgDriveAdmission = vi.hoisted(() => vi.fn());
+const requestGuestApproval = vi.hoisted(() => vi.fn());
+const stageAudit = vi.hoisted(() => vi.fn());
+vi.mock('../guest-admission', () => ({ decideOrgDriveAdmission }));
+vi.mock('../guest-holds', () => ({ requestGuestApproval }));
+// AUD-1: the grant's transaction carries its audit stage; the stage itself is a spy.
+vi.mock('../../audit/org-audit', async () => {
+  const { db } = await import('@pagespace/db/db');
+  return {
+    transactionWithOrgAudit: (run: (tx: unknown, audit: typeof stageAudit) => Promise<unknown>) => db.transaction((tx) => run(tx, stageAudit)),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Imports after mocks
@@ -146,9 +171,15 @@ function mockUserExists(exists = true) {
     } as unknown as ReturnType<typeof db.select>);
 }
 
+// The grant the target already holds on the page, read inside the transaction (none by default).
+const txSelect = (existing: unknown[] = []) => vi.fn().mockReturnValue({
+  from: vi.fn().mockReturnValue({ where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(existing) }) }),
+});
+
 // Mock transaction for grant
 function mockTransactionInsert(newId: string) {
   const tx = {
+    select: txSelect(),
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         onConflictDoNothing: vi.fn().mockReturnValue({
@@ -164,6 +195,7 @@ function mockTransactionInsert(newId: string) {
 
 function mockTransactionConflict(existingId: string) {
   const tx = {
+    select: txSelect(),
     insert: vi.fn().mockReturnValue({
       values: vi.fn().mockReturnValue({
         onConflictDoNothing: vi.fn().mockReturnValue({
@@ -189,6 +221,7 @@ function mockTransactionConflict(existingId: string) {
 describe('grantPagePermission', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'allow', orgId: null });
   });
 
   it('returns VALIDATION_FAILED for invalid input (missing fields)', async () => {
@@ -375,7 +408,7 @@ describe('grantPagePermission', () => {
       .mockReturnValueOnce({
         from: vi.fn().mockReturnValue({
           where: vi.fn().mockReturnValue({
-            limit: vi.fn().mockResolvedValue([{ id: 'admin-membership-id' }]),
+            limit: vi.fn().mockResolvedValue([{ role: 'ADMIN', customRoleId: null, source: 'invite' }]),
           }),
         }),
       } as unknown as ReturnType<typeof db.select>);
@@ -675,5 +708,62 @@ describe('revokePagePermission', () => {
 
     expect(revokeResolved).toBe(true);
     expect(result.ok).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// grantPagePermission and the org's guests policy
+// ---------------------------------------------------------------------------
+describe('grantPagePermission and the guests policy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stageAudit.mockResolvedValue(undefined);
+  });
+
+  it('POL-2 (partial) a refused admission writes nothing and answers GUEST_POLICY_OFF', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionInsert('new-perm-id');
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'refuse', orgId: 'org_1' });
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'GUEST_POLICY_OFF' } });
+    expect(decideOrgDriveAdmission).toHaveBeenCalledWith({ driveId: DRIVE_ID, userId: TARGET_ID }, tx);
+    expect(tx.insert).not.toHaveBeenCalled();
+  });
+
+  it('POL-2 (partial) a held admission queues exactly the grant, writes no grant, and audits the request', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionInsert('new-perm-id');
+    decideOrgDriveAdmission.mockResolvedValue({ decision: 'hold', orgId: 'org_1' });
+    requestGuestApproval.mockResolvedValue({ holdId: 'hold_1' });
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: false, error: { code: 'GUEST_APPROVAL_PENDING', holdId: 'hold_1' } });
+    expect(requestGuestApproval).toHaveBeenCalledWith({
+      orgId: 'org_1',
+      driveId: DRIVE_ID,
+      userId: TARGET_ID,
+      origin: 'page_grant',
+      request: { permissions: [{ pageId: PAGE_ID, ...validGrantInput().permissions }], invitedBy: ACTOR_ID },
+      requestedBy: ACTOR_ID,
+    }, tx);
+    expect(tx.insert).not.toHaveBeenCalled();
+    expect(stageAudit).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_1', eventType: 'org.guest.requested' }));
+  });
+
+  it('POL-2 (partial) narrowing a grant the target already holds never asks the policy', async () => {
+    mockPageAsOwner();
+    mockUserExists(true);
+    const tx = mockTransactionConflict('existing-perm-id');
+    tx.select = txSelect([{ canView: true, canEdit: true, canShare: false, canDelete: false }]);
+
+    const result = await grantPagePermission(makeCtx(), validGrantInput());
+
+    expect(result).toMatchObject({ ok: true, data: { isUpdate: true } });
+    expect(decideOrgDriveAdmission).not.toHaveBeenCalled();
   });
 });

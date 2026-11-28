@@ -4,8 +4,9 @@
 // undici, so on Node >=24 `new Request(url, { signal })` throws because the
 // jsdom AbortSignal fails undici's `instanceof AbortSignal` check. Running this
 // file under the node env keeps both on the same (undici) implementation.
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { describe, test, beforeEach, vi } from 'vitest';
-import { assert } from '@/lib/ai/openai-api/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // --- module mocks (must be hoisted before imports) ---
 
@@ -18,6 +19,8 @@ vi.mock('@/lib/auth', () => ({
   isScopedMCPAuth: vi.fn(() => false),
   canPrincipalViewPage: vi.fn().mockResolvedValue(true),
   canPrincipalEditPage: vi.fn().mockResolvedValue(true),
+  // SPEND-7: the caller is a member of drive-a (their session) and of no other drive named here.
+  isPrincipalDriveMember: vi.fn(async (_auth: unknown, driveId: string) => driveId === 'drive-a'),
 }));
 
 vi.mock('@pagespace/db/db', () => ({
@@ -47,6 +50,7 @@ vi.mock('@/lib/repositories/conversation-repository', () => ({
       updatedAt: new Date(),
     }),
     createConversation: vi.fn().mockResolvedValue(undefined),
+    stampClientConversationPage: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
@@ -69,6 +73,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -109,6 +114,7 @@ vi.mock('@/lib/ai/core/message-utils', () => ({
   }),
   extractMessageContent: vi.fn().mockReturnValue('Hello'),
   extractToolResults: vi.fn().mockReturnValue([]),
+  screenFilePartsAgainstBlocklist: vi.fn(async (parts: unknown[]) => ({ parts, blockedHashes: [] })),
 }));
 vi.mock('@/lib/ai/core/ai-tools', async () => {
   const { toModelOutputForReadPage } = await import('@/lib/ai/tools/read-page-vision-output');
@@ -136,6 +142,8 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
 }));
 
 vi.mock('@/lib/ai/core/validate-image-parts', () => ({
@@ -166,6 +174,8 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({
   canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+  // WAL-8: the funder's tier; here the caller's own.
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({
@@ -194,18 +204,19 @@ vi.mock('ai', async (importOriginal) => {
 import { NextResponse } from 'next/server';
 import { streamText } from 'ai';
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { authenticateRequestWithOptions, checkMCPPageScope } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
-import { sanitizeMessagesForModel, extractMessageContent } from '@/lib/ai/core/message-utils';
+import { sanitizeMessagesForModel, extractMessageContent, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import type { UIMessage } from 'ai';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
-import { hasVisionCapability } from '@/lib/ai/core/model-capabilities';
+import { hasVisionCapability, getToolMediaCapabilities } from '@/lib/ai/core/model-capabilities';
 import { hasFileParts, validateUserMessageFileParts } from '@/lib/ai/core/validate-image-parts';
 
 const mcpAuth = {
@@ -270,6 +281,133 @@ describe('POST /api/v1/chat/completions', () => {
       actual: { status: response.status, error: body.error },
       expected: { status: 402, error: 'out_of_credits' },
     });
+  });
+
+  test('POL-8 (partial) the page\'s drive is named to the provider factory, and an org-policy refusal is a 403 naming the policy (not a 500, not a substitution)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    vi.mocked(createAIProvider).mockResolvedValueOnce({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
+
+    const response = await POST(makeRequest(validBody));
+    const body = await response.json();
+
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-abc', contentDriveIds: ['drive-abc'] });
+    expect({ status: response.status, code: body.code, policy: body.policy }).toEqual({ status: 403, code: 'org_policy', policy: 'modelAllowlist' });
+  });
+
+  test('WAL-8 (partial) the plan is judged again on the source the gate HELD: a pre-read Business that the gate moved onto Free own credits is refused 403 and its hold freed (D-OW-64)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    try {
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+      vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'ok', holdId: 'h-held', walletId: 'w-own', spendSource: 'own_credits', entitlementTier: 'free' });
+      vi.mocked(releaseHold).mockClear();
+
+      const refused = await POST(makeRequest(validBody));
+
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).error).toBe('Subscription required');
+      expect(releaseHold).toHaveBeenCalledWith('h-held');
+    } finally {
+      process.env.DEPLOYMENT_MODE = mode;
+    }
+  });
+
+  test('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the tier of whoever FUNDS the call, resolved on its spend', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    const { resolveEntitlementTier } = await import('@pagespace/lib/billing/credit-gate');
+    const mode = process.env.DEPLOYMENT_MODE;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    try {
+      // A paid-tier model: the org drive's wallet (Business) funds it, so it runs.
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('business');
+      expect((await POST(makeRequest(validBody))).status).not.toBe(403);
+      expect(vi.mocked(resolveEntitlementTier).mock.calls.at(-1)?.[2]).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+
+      // The funder is on Free: a tier block, before any hold.
+      vi.mocked(canConsumeAI).mockClear();
+      vi.mocked(createAIProvider).mockResolvedValueOnce({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+      vi.mocked(resolveEntitlementTier).mockResolvedValueOnce('free');
+      const refused = await POST(makeRequest(validBody));
+      expect(refused.status).toBe(403);
+      expect((await refused.json()).error).toBe('Subscription required');
+      expect(canConsumeAI).not.toHaveBeenCalled();
+    } finally {
+      if (mode === undefined) delete process.env.DEPLOYMENT_MODE;
+      else process.env.DEPLOYMENT_MODE = mode;
+    }
+  });
+
+  test('SPEND-3 (partial) a thread names its conversation so the gate reads its stored source; a stateless call names none', async () => {
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null, conversationId: 'conv-abc' });
+    vi.mocked(canConsumeAI).mockClear();
+    await POST(makeRequest(validBody));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-abc', chosen: null });
+  });
+
+  test('SPEND-7 (partial) a completion whose caller names its session in drive A (drive_context) spends in A, bills its usage row there, and carries no drive-B stored source', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-a' });
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-a' }));
+    expect(response.status).toBe(200);
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null });
+    await response.text();
+    expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-a', walletId: 'w-a' }));
+  });
+
+  test('SPEND-7 (partial) an API client thread is a session in its own drive: it spends there with its stored source, and drive_context cannot move it', async () => {
+    const { conversationRepository } = await import('@/lib/repositories/conversation-repository');
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-a', title: null, createdAt: new Date(), updatedAt: new Date(),
+    } as never);
+    const { isPrincipalDriveMember } = await import('@/lib/auth');
+    vi.mocked(isPrincipalDriveMember).mockImplementation(async (_auth, driveId: string) => driveId === 'drive-a' || driveId === 'drive-b');
+    await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc', drive_context: 'drive-b' }));
+    expect(vi.mocked(canConsumeAI).mock.calls[0]?.[2]?.spend).toEqual({ kind: 'drive', driveId: 'drive-a', chosen: null, conversationId: 'conv-abc' });
+    vi.mocked(isPrincipalDriveMember).mockImplementation(async (_auth, driveId: string) => driveId === 'drive-a');
+  });
+
+  test('SPEND-7 (partial) a client thread opened in a drive the caller cannot use is refused 403 at use — its drive is never taken on trust (D-OW-64)', async () => {
+    const { conversationRepository } = await import('@/lib/repositories/conversation-repository');
+    vi.mocked(conversationRepository.getConversation).mockResolvedValueOnce({
+      id: 'conv-abc', userId: 'user-1', isActive: true, type: 'client', contextId: 'drive-not-mine', title: null, createdAt: new Date(), updatedAt: new Date(),
+    } as never);
+    vi.mocked(canConsumeAI).mockClear();
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+  });
+
+  test('POL-8 (partial) a completion run from a session in another drive is judged by the agent drive\'s org policy too (D-OW-64)', async () => {
+    const { createAIProvider } = await import('@/lib/ai/core/provider-factory');
+    await POST(makeRequest({ ...validBody, drive_context: 'drive-a' }));
+    expect(vi.mocked(createAIProvider).mock.calls.at(-1)?.[2]).toEqual({ driveId: 'drive-a', contentDriveIds: ['drive-abc'] });
+  });
+
+  test('SPEND-7 (partial) a drive_context the caller cannot use is refused 403 before anything is reserved', async () => {
+    vi.mocked(canConsumeAI).mockClear();
+    const response = await POST(makeRequest({ ...validBody, drive_context: 'drive-not-mine' }));
+    expect(response.status).toBe(403);
+    expect(canConsumeAI).not.toHaveBeenCalled();
+  });
+
+  test('SPEND-4 (partial) a drive rule that moved the call to another source is reported on the stream response, from and to', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({
+      allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-own', spendSource: 'own_credits',
+      fallback: { from: 'drive_wallet', to: 'own_credits' },
+    });
+    const response = await POST(makeRequest(validBody));
+    expect(response.status).toBe(200);
+    expect(readSpendFallbackHeaders(response.headers)).toEqual({ from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' });
+  });
+
+  test('SPEND-4 (partial) a call that spent the source it named carries no fallback headers', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'h1', walletId: 'w-product', spendSource: 'drive_wallet' });
+    const response = await POST(makeRequest(validBody));
+    expect(readSpendFallbackHeaders(response.headers)).toBeNull();
   });
 
   test('proceeds to a 200 stream when the credit gate allows', async () => {
@@ -357,6 +495,144 @@ describe('POST /api/v1/chat/completions', () => {
       should: 'still return 400 from file-part validation and never call the prepaid credit gate',
       actual: { status: response.status, error: body.error, creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0 },
       expected: { status: 400, error: 'Image "cat.png" exceeds the 4MB size limit', creditGateCalled: false },
+    });
+  });
+
+  test('refuses a blocklisted attachment in a stateless call (no conversation_id) before the credit gate and the model', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.id === 'msg-1');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      messages: [
+        {
+          role: 'user',
+          id: 'msg-1',
+          content: 'What is in this image?',
+          parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' }],
+        },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a stateless request whose EARLIER message carries an attachment on the content blocklist',
+      should: 'return the neutral 422, never reserve credit, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        screenedUser: vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[1],
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        screenedUser: { userId: mcpAuth.userId },
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
+  test('screens the file parts of every request message against the blocklist in ONE lookup', async () => {
+    vi.mocked(hasFileParts).mockImplementation((message: UIMessage) => message.parts.some(p => p.type === 'file'));
+    const first = { type: 'file', url: 'data:image/png;base64,aGVsbG8=', mediaType: 'image/png' };
+    const second = { type: 'file', url: 'data:image/png;base64,d29ybGQ=', mediaType: 'image/png' };
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        { role: 'user', id: 'msg-1', content: 'one', parts: [first] },
+        { role: 'assistant', id: 'msg-2', content: 'two', parts: [second] },
+        { role: 'user', id: 'msg-3', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const calls = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls;
+    assert({
+      given: 'a resent history with file parts on a user AND an assistant message, none blocked',
+      should: 'screen both parts in a single blocklist call and carry on to the model',
+      actual: {
+        calls: calls.length,
+        screenedUrls: (calls[0]?.[0] as Array<{ url?: string }> | undefined)?.map(p => p.url),
+        status: response.status,
+      },
+      expected: { calls: 1, screenedUrls: [first.url, second.url], status: 200 },
+    });
+  });
+
+  test('screens the image bytes of a client-supplied read_page visual result, and refuses a blocked one', async () => {
+    const imageBase64 = Buffer.from('blocked-bytes').toString('base64');
+    vi.mocked(screenFilePartsAgainstBlocklist).mockResolvedValueOnce({ parts: [], blockedHashes: ['ab'.repeat(32)] });
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png', imageBase64, message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    const screened = vi.mocked(screenFilePartsAgainstBlocklist).mock.calls[0]?.[0] as Array<{ type: string; url?: string }> | undefined;
+    assert({
+      given: 'a resent history whose assistant turn carries a read_page visual result with image bytes (no file parts at all)',
+      should: 'screen those bytes as a data: file part and return the neutral 422 before the credit gate and the model',
+      actual: {
+        screened: screened?.map(p => ({ type: p.type, url: p.url })),
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        screened: [{ type: 'file', url: `data:application/octet-stream;base64,${imageBase64}` }],
+        status: 422,
+        creditGateCalled: false,
+        streamTextCalls: 0,
+      },
+    });
+  });
+
+  test('refuses a client-supplied read_page visual result whose imageBase64 is not decodable, before the gate and the model', async () => {
+    const body = {
+      model: 'ps-agent://page-123',
+      client_manages_history: true,
+      messages: [
+        {
+          role: 'assistant',
+          id: 'msg-1',
+          content: '',
+          parts: [{
+            type: 'tool-read_page',
+            toolCallId: 'call-1',
+            state: 'output-available',
+            input: { pageId: 'p' },
+            output: { success: true, type: 'visual_content_delivered', mimeType: 'image/png;charset=utf-8', imageBase64: '%%%not-base64%%%', message: 'here' },
+          }],
+        },
+        { role: 'user', id: 'msg-2', content: 'Thanks!', parts: [{ type: 'text', text: 'Thanks!' }] },
+      ],
+    };
+    const response = await POST(makeRequest(body));
+    assert({
+      given: 'a read_page visual result whose bytes cannot be decoded, so cannot be hashed',
+      should: 'fail closed with the neutral 422 and never reserve credit or call the model',
+      actual: {
+        status: response.status,
+        creditGateCalled: vi.mocked(canConsumeAI).mock.calls.length > 0,
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: { status: 422, creditGateCalled: false, streamTextCalls: 0 },
     });
   });
 
@@ -897,7 +1173,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'client',
       lastMessageAt: null,
@@ -935,7 +1211,7 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
@@ -983,7 +1259,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1023,7 +1299,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1051,7 +1327,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1083,7 +1359,7 @@ describe('POST /api/v1/chat/completions', () => {
         createdAt: new Date(),
         updatedAt: new Date(),
         isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
         type: 'page',
         lastMessageAt: null,
@@ -1136,7 +1412,8 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   test('cross-turn vision guard: read_page degrades a stale visual_content_delivered result when the requested model lacks vision', async () => {
-    vi.mocked(hasVisionCapability).mockReturnValueOnce(false);
+    // The guard reads the same capability source as the tool context.
+    vi.mocked(getToolMediaCapabilities).mockReturnValueOnce({ hasVision: false, hasPdfInput: false, hasToolResultMedia: true });
     vi.mocked(streamText).mockImplementationOnce((() => ({
       totalUsage: Promise.resolve({ inputTokens: 5, outputTokens: 10 }),
       steps: Promise.resolve([]),
@@ -1240,6 +1517,30 @@ describe('POST /api/v1/chat/completions', () => {
   });
 
   // --- Credit-hold leak regressions (audit findings L6, L7) ---
+
+  test('a blocklisted attachment refused at user-message persistence returns the neutral 422, not a 500', async () => {
+    vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-blocked' });
+    vi.mocked(messageRepository.savePageMessage).mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+    const response = await POST(makeRequest({ ...validBody, conversation_id: 'conv-abc' }));
+
+    assert({
+      given: 'a user message whose attachment is on the content blocklist',
+      should: 'return 422 with the neutral message, release the hold, and never call the model',
+      actual: {
+        status: response.status,
+        body: await response.json(),
+        releasedHoldId: vi.mocked(releaseHold).mock.calls[0]?.[0],
+        streamTextCalls: vi.mocked(streamText).mock.calls.length,
+      },
+      expected: {
+        status: 422,
+        body: { error: "This file can't be uploaded" },
+        releasedHoldId: 'hold-blocked',
+        streamTextCalls: 0,
+      },
+    });
+  });
 
   test('L6: a pre-stream setup throw releases the hold and never reaches the model', async () => {
     vi.mocked(canConsumeAI).mockResolvedValueOnce({ allowed: true, reason: 'unlimited', holdId: 'hold-setup' });
@@ -1422,7 +1723,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: false,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,
@@ -1450,7 +1751,7 @@ describe('POST /api/v1/chat/completions', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
       isShared: true,
-  agentPageId: null, rev: 0,
+  agentPageId: null, chosenWalletId: null, rev: 0,
   planPageId: null,
       type: 'page',
       lastMessageAt: null,

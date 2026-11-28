@@ -1,0 +1,207 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Socket } from 'socket.io-client';
+import { parseSheetContentSafe, sanitizeSheetData, type SheetData } from '@pagespace/lib/sheets/sheet';
+import { useDocument } from '@/retained/hooks/useDocument';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import type { PageEventPayload } from '@/retained-adapters/ui-contracts';
+import { shouldApplyServerContent } from '../core/sync';
+
+/**
+ * Shell hook bundling the sheet's persistence lifecycle: the pageId-only
+ * `useDocument`, the isDirty/content/forceSave refs, initial activation, history
+ * reset on server reload, the socket content-update handler (which ignores
+ * server content while dirty via the pure `shouldApplyServerContent`), and the
+ * auto-save on unmount/blur. The unmount/blur listeners deliberately have empty
+ * deps and read through refs so they never re-subscribe or capture stale state.
+ */
+export interface UseSheetPersistenceParams {
+  pageId: string;
+  socket: Socket | null;
+  /** Reset the undo/redo history to a freshly loaded sheet. */
+  resetHistory: (sheet: SheetData) => void;
+}
+
+export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPersistenceParams) => {
+  const {
+    document: documentState,
+    initializeAndActivate,
+    updateContent: baseUpdateContent,
+    updateContentFromServer,
+    saveWithDebounce,
+    forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
+  } = useDocument(pageId);
+
+  // Non-null when the stored content could not be parsed; the view uses this to
+  // disable editing rather than overwrite content it failed to read.
+  const [parseError, setParseError] = useState<string | null>(null);
+  // The page whose content fetch failed with nothing cached, so there is no stored content to show or edit.
+  const [fetchFailedPageId, setFetchFailedPageId] = useState<string | null>(null);
+  // The page whose stored sheet has been handed to resetHistory, i.e. is what the grid shows.
+  const [appliedPageId, setAppliedPageId] = useState<string | null>(null);
+
+  // Keep forceSave/isDirty/content in refs so the empty-dep listeners below never
+  // re-subscribe and always see the latest values.
+  const forceSaveRef = useRef(forceSave);
+  useEffect(() => {
+    forceSaveRef.current = forceSave;
+  }, [forceSave]);
+
+  const isDirtyRef = useRef(false);
+  const contentRef = useRef(documentState?.content ?? '');
+  useEffect(() => {
+    isDirtyRef.current = documentState?.isDirty || false;
+    contentRef.current = documentState?.content ?? '';
+  }, [documentState?.isDirty, documentState?.content]);
+
+  // Initialize/activate the document when the page changes.
+  // Bumped by retryLoad to run the fetch again after a failure.
+  const [loadAttempt, setLoadAttempt] = useState(0);
+
+  // No empty fallback on failure: an empty sheet in the store would autosave over the stored cells.
+  useEffect(() => {
+    let cancelled = false;
+    setFetchFailedPageId(null);
+    void initializeAndActivate({ emptyOnFailure: false }).then((loaded) => {
+      if (!cancelled) setFetchFailedPageId(loaded ? null : pageId);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [initializeAndActivate, pageId, loadAttempt]);
+
+  const retryLoad = useCallback(() => setLoadAttempt((attempt) => attempt + 1), []);
+
+  // Content this hook has already reconciled — either loaded from the server or
+  // echoed back from a local edit. Used to tell those two apart below.
+  //
+  // Scoped to the page: two different pages can hold byte-identical content
+  // (two fresh empty sheets serialize the same), and a bare content match
+  // would then treat the new page's first load as this page's echo, leaving
+  // the previous page's undo stack in place. An undo could then write the
+  // previous page's state into this one.
+  const knownContentRef = useRef<{ pageId: string; content: string } | null>(null);
+
+  // Record locally-originated content before it round-trips through the store,
+  // so the reset effect can recognise the echo and leave history alone.
+  const updateContent = useCallback(
+    (content: string) => {
+      knownContentRef.current = { pageId, content };
+      baseUpdateContent(content);
+    },
+    [baseUpdateContent, pageId]
+  );
+
+  // Reset history when content is (re)loaded from the server, so undo cannot
+  // walk back into stale state.
+  //
+  // This deliberately keys on the content string rather than on `documentState`.
+  // `documentState` is a fresh object on every store write, so depending on it
+  // fired this effect after every local keystroke and cleared the undo stack —
+  // undo was dead in practice. Comparing content means only genuinely new,
+  // server-originated content resets history.
+  useEffect(() => {
+    const content = documentState?.content;
+    const known = knownContentRef.current;
+    if (
+      content === undefined ||
+      (known !== null && known.pageId === pageId && known.content === content)
+    ) {
+      return;
+    }
+
+    knownContentRef.current = { pageId, content };
+
+    const parsed = parseSheetContentSafe(content);
+    if (!parsed.ok) {
+      // The content exists but cannot be read. Do NOT hand an empty sheet to
+      // the editor: it would autosave that empty sheet straight over the user's
+      // data. Surface the failure and let the view disable editing.
+      setParseError(parsed.message);
+      return;
+    }
+
+    setParseError(null);
+    resetHistory(sanitizeSheetData(parsed.sheet));
+    setAppliedPageId(pageId);
+  }, [pageId, documentState?.content, resetHistory]);
+
+  // Socket updates — uses refs to avoid re-subscribing on every content change.
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleContentUpdate = async (eventData: PageEventPayload) => {
+      if (eventData.pageId !== pageId) return;
+      try {
+        const response = await fetchWithAuth(`/api/pages/${pageId}`);
+        if (!response.ok) return;
+        const updatedPage = await response.json();
+        if (shouldApplyServerContent(updatedPage.content, contentRef.current, isDirtyRef.current)) {
+          updateContentFromServer(updatedPage.content, updatedPage.contentRevision, updatedPage.contentMode);
+        }
+      } catch (error) {
+        console.error('Failed to fetch updated sheet content:', error);
+      }
+    };
+
+    socket.on('page:content-updated', handleContentUpdate);
+    return () => {
+      socket.off('page:content-updated', handleContentUpdate);
+    };
+  }, [pageId, socket, updateContentFromServer]);
+
+  // Auto-save any unsaved changes on true unmount.
+  useEffect(() => {
+    return () => {
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
+      }
+    };
+  }, []); // ✅ Empty deps — only runs on mount/unmount
+
+  // Auto-save on window blur.
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.addEventListener) return;
+
+    const handleBlur = () => {
+      if (isDirtyRef.current) {
+        forceSaveRef.current().catch(console.error);
+      }
+    };
+
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      if (typeof window !== 'undefined' && window.removeEventListener) {
+        window.removeEventListener('blur', handleBlur);
+      }
+    };
+  }, []); // ✅ Empty deps — uses refs for latest state
+
+  // A stable force-save callback for keyboard shortcuts (reads the latest ref).
+  // forceSave is async — surface rejections like the unmount/blur savers do.
+  const forceSaveNow = useCallback(() => {
+    forceSaveRef.current().catch(console.error);
+  }, []);
+
+  // Editing waits until the stored sheet is in history; before that the grid is an empty placeholder.
+  const isLoaded = documentState !== undefined && appliedPageId === pageId;
+  const loadError =
+    parseError ?? (!isLoaded && fetchFailedPageId === pageId ? 'Failed to load sheet content' : null);
+
+  return {
+    documentState,
+    isLoaded,
+    loadError,
+    retryLoad,
+    updateContent,
+    updateContentFromServer,
+    saveWithDebounce,
+    forceSave,
+    forceSaveNow,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
+  };
+};

@@ -232,3 +232,19 @@ PageSpace has 17 specialized domain expert agents with deep knowledge of specifi
 - Never commit secrets. Base config in `.env.example`; runtime in `.env`
 - Important vars: `DATABASE_URL`, encryption keys, `WEB_APP_URL`, `NEXT_PUBLIC_*`, service ports
 - For self‑host, see `docker-compose.yml`
+
+## 8. PLANNING & BOARD (PageSpace)
+
+Epics are planned and tracked in the **PageSpace - Dev** drive (`omziyxp4skckh7ixi2sxzhuk`) with the `pagespace` CLI and the `/task` skill. Never keep a plan or task list only in local files.
+
+| What | Page / id |
+|------|-----------|
+| Tasks board (Epic → Phase → Leaf) | `Tasks` — `gi4tx38tm7uhbr7f5z4a3pfg` |
+| Artifact conventions | `Library/Task artifacts and linking` — `g85ms8pvm60jyl1hgnbup1xs` |
+| Universal prompts | `Library/Universal prompts` — Builder contract `dot7lei5durql366ies3ykio`, Reviewer contract `rdutrnh2chccjf08p9bpw9g2`, Orchestrator stage loop `lvxnv6ot26ostm4ypl8qjwv5` |
+| Plans / Prompts / Reviews | `Plans` `mo8coxglrfwejcb3kejgq0u4` · `Prompts` `kqxmlcoxk05fq3tlb6ljb5e7` · `Reviews` `q9akt97auagozom4bstot28d` (one subfolder per epic) |
+| Channels | Epic Updates `fo15daap3ns9hst5895qxv2a` · Incidents `oh8kvrr82mqjwtrvsxvjjdvd` |
+
+- Leaf statuses: To Do (`pending`) → Ready → In Progress → In Review → Done (`completed`); Blocked at any point. Done is granted only from an independent review record.
+- Task codes in use: `IMG` (Imago epic — `Plan — Imago` `i8mztmt39q5urnaw7y7aket4`; leaf PRs target the integration branch `pu/imago`).
+- ADRs live in `docs/adr/` (next number = highest + 1).

@@ -83,6 +83,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: (...a: unknown[]) => isAuthErrorMock(...a),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: (...a: unknown[]) => canUserViewPageMock(...a),
 }));
 vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
@@ -242,7 +243,7 @@ describe('GET /api/ai/conversations/[conversationId]/plan', () => {
     // passed only the owner could not express "shared AND page access" at all,
     // which is how it came to answer differently from its four siblings.
     expect(canAccessConversationMock).toHaveBeenCalledWith(
-      COLLABORATOR,
+      expect.objectContaining({ userId: COLLABORATOR }),
       expect.objectContaining({
         userId: OWNER,
         isShared: true,

@@ -56,10 +56,20 @@ export type StartDedicatedResult =
   | { ok: true; stripeSubscriptionId: string; clientSecret: string; status: string }
   | { ok: false; reason: StartDedicatedRefusal };
 
+/**
+ * Whose Stripe customer the subscription is created on (WAL-9, resolved by the caller through
+ * `decideDedicatedPurchaser`): a personal drive's owner, on their own customer; or an org, on
+ * the org's customer (`organizations.stripeCustomerId`), recorded under the Owner or Admin who
+ * bought it — never on that person's card.
+ */
+export type DedicatedPayer =
+  | { kind: 'user'; user: Parameters<typeof getOrCreateStripeCustomer>[0] }
+  | { kind: 'org'; orgId: string; stripeCustomerId: string; buyerUserId: string };
+
 export interface StartDedicatedInput {
   publishedAppId: string;
-  /** The app's payer — the drive owner, resolved by the caller. */
-  user: Parameters<typeof getOrCreateStripeCustomer>[0];
+  /** Who pays: the drive owner, or the drive's org (WAL-9). */
+  payer: DedicatedPayer;
   /** The size being bought. Must be dedicated-legal and must have a configured price. */
   guestPreset: string;
 }
@@ -116,7 +126,11 @@ export async function startDedicatedSubscription(
     return { ok: false, reason: price.reason };
   }
 
-  const customerId = await getOrCreateStripeCustomer(input.user);
+  const customerId = input.payer.kind === 'org'
+    ? input.payer.stripeCustomerId
+    : await getOrCreateStripeCustomer(input.payer.user);
+  const buyerUserId = input.payer.kind === 'org' ? input.payer.buyerUserId : input.payer.user.id;
+  const payerOrgId = input.payer.kind === 'org' ? input.payer.orgId : null;
 
   // AN IDEMPOTENCY KEY, because the read above cannot serialize anything.
   //
@@ -153,7 +167,9 @@ export async function startDedicatedSubscription(
       [SUBSCRIPTION_KIND_METADATA_KEY]: DEDICATED_SUBSCRIPTION_KIND,
       publishedAppId: input.publishedAppId,
       guestPreset: input.guestPreset,
-      userId: input.user.id,
+      userId: buyerUserId,
+      // WAL-9: the org billed, for an org drive's app. Absent for a personal drive's.
+      ...(payerOrgId ? { orgId: payerOrgId } : {}),
     },
   }, { idempotencyKey });
 
@@ -167,7 +183,8 @@ export async function startDedicatedSubscription(
   // describes accurately and which entitles nobody.
   const mirrorResult = await recordDedicatedSubscription({
     publishedAppId: input.publishedAppId,
-    userId: input.user.id,
+    userId: buyerUserId,
+    orgId: payerOrgId,
     stripeSubscriptionId: subscription.id,
     stripePriceId: price.priceId,
     guestPreset: input.guestPreset,
@@ -255,6 +272,7 @@ export async function cancelDedicatedSubscription(
   const mirrorResult = await recordDedicatedSubscription({
     publishedAppId: mirror.publishedAppId,
     userId: mirror.userId,
+    orgId: mirror.orgId,
     stripeSubscriptionId: subscription.id,
     stripePriceId: mirror.stripePriceId,
     guestPreset: mirror.guestPreset,

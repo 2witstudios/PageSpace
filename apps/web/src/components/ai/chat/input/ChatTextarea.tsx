@@ -256,12 +256,12 @@ const ChatTextareaInner = forwardRef<ChatTextareaRef, ChatTextareaProps>(
           {...commandComboboxProps}
           className={cn(
             'min-h-[36px] max-h-48 resize-none break-words',
+            variant === 'sidebar' && 'px-2.5 py-2',
             CHAT_TYPOGRAPHY,
-            // Context-aware background:
-            // - main: transparent to blend with InputCard, no shadow in light mode for flush look
-            // - sidebar: white in light mode for contrast, slight gray lift in dark mode
+            // Transparent in both variants so the text blends into its card (sidebar: the
+            // ChatInput card; main: InputCard). Only main keeps the dark-mode shadow.
             variant === 'sidebar'
-              ? 'bg-white dark:bg-card/50'
+              ? 'bg-transparent dark:bg-transparent shadow-none'
               : 'bg-transparent dark:bg-transparent shadow-none dark:shadow-xs',
             'border-none outline-none',
             'text-foreground placeholder:text-muted-foreground',

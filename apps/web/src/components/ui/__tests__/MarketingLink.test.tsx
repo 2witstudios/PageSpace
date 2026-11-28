@@ -25,11 +25,19 @@ describe('MarketingLink', () => {
     expect(openExternalUrl).not.toHaveBeenCalled();
   });
 
-  it('given the native app, should open the absolute page URL in the system browser sheet instead of the web view', () => {
+  it('given the native app, should open the embedded page (no site navigation) in the system browser sheet instead of the web view', () => {
     isCapacitorApp.mockReturnValue(true);
     render(<MarketingLink href="/privacy">Privacy Policy</MarketingLink>);
     const notPrevented = fireEvent.click(screen.getByRole('link', { name: 'Privacy Policy' }));
     expect(notPrevented).toBe(false);
-    expect(openExternalUrl).toHaveBeenCalledWith(`${window.location.origin}/privacy`);
+    expect(openExternalUrl).toHaveBeenCalledWith(`${window.location.origin}/privacy?embed=1`);
+  });
+
+  it('given the native app and an absolute URL on another host, should open it unchanged', () => {
+    isCapacitorApp.mockReturnValue(true);
+    const eula = 'https://www.apple.com/legal/internet-services/itunes/dev/stdeula/';
+    render(<MarketingLink href={eula}>Terms of Use</MarketingLink>);
+    fireEvent.click(screen.getByRole('link', { name: 'Terms of Use' }));
+    expect(openExternalUrl).toHaveBeenCalledWith(eula);
   });
 });

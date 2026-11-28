@@ -205,7 +205,9 @@ describe('Auth Middleware', () => {
 
     it('returns auth details for valid MCP token', async () => {
       // Arrange
+      const authenticatedAt = new Date(Date.now() - 3600000);
       const mockMCPToken = {
+        authenticatedAt, authenticationAssurance: 'user_verified_passkey',
         id: 'token-id',
         userId: 'test-user-id',
         user: {
@@ -223,6 +225,7 @@ describe('Auth Middleware', () => {
 
       // Assert
       expect(result).toEqual({
+        authentication: { authenticatedAtMs: authenticatedAt.getTime(), assurance: 'user_verified_passkey' },
         userId: 'test-user-id',
         role: 'user',
         tokenVersion: 0,
@@ -353,10 +356,12 @@ describe('Auth Middleware', () => {
     });
 
     it('returns auth details for a valid account-scoped OAuth token (full access, like an unscoped MCP token)', async () => {
-      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken() as never);
+      const authenticatedAt = new Date(Date.now() - 3600000);
+      vi.mocked(findOAuthAccessTokenByValue).mockResolvedValue(mockOAuthToken({ authenticatedAt, authenticationAssurance: 'single_factor' }) as never);
 
       const result = await validateOAuthAccessToken('ps_at_valid-token');
       expect(result).toEqual({
+        authentication: { authenticatedAtMs: authenticatedAt.getTime(), assurance: 'single_factor' },
         userId: 'test-user-id',
         role: 'user',
         tokenVersion: 0,

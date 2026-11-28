@@ -1,5 +1,5 @@
 import { describe, it, afterEach, vi } from 'vitest';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 const imageModels = [
   { id: 'bytedance/seedream-4', displayName: 'Seedream 4' },

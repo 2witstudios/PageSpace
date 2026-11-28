@@ -90,12 +90,15 @@ const hasDangerousScheme = (rawValue: string): boolean => {
   const normalized = decodeEntitiesForCheck(rawValue)
     .replace(/[\u0000-\u0020]+/g, '')
     .toLowerCase();
-  return (
-    normalized.startsWith('javascript:') ||
-    normalized.startsWith('data:text/html') ||
-    normalized.startsWith('data:image/svg+xml')
-  );
+  if (normalized.startsWith('javascript:') || normalized.startsWith('vbscript:')) return true;
+  // A data: URL is kept only as a raster image: any other type (text/html, image/svg+xml, xml, …) can be a
+  // document that runs script when navigated to.
+  if (normalized.startsWith('data:')) return !SAFE_DATA_IMAGE.test(normalized);
+  return false;
 };
+
+/** The data: URLs a published document may keep: raster images only. */
+const SAFE_DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp)[;,]/;
 
 interface ScannedAttribute {
   /** Lowercased attribute name. */

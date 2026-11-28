@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean, index } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, boolean, index, integer } from 'drizzle-orm/pg-core';
 import { relations } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -17,6 +17,14 @@ export const subscriptions = pgTable('subscriptions', {
   stripeScheduleId: text('stripeScheduleId'),
   scheduledPriceId: text('scheduledPriceId'),
   scheduledChangeDate: timestamp('scheduledChangeDate', { mode: 'date' }),
+  // Storage add-on (STORAGE_ADDON blocks): the Stripe item carrying the storage
+  // price and its quantity, mirrored from Stripe. After a decrease the blocks
+  // already paid for stay entitled until storageGraceUntil (removal at period end).
+  stripeStorageItemId: text('stripeStorageItemId'),
+  storageBlocks: integer('storageBlocks').default(0).notNull(),
+  storageGraceBlocks: integer('storageGraceBlocks').default(0).notNull(),
+  storageGraceUntil: timestamp('storageGraceUntil', { mode: 'date' }),
+  storageRevision: integer('storageRevision').default(0).notNull(),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {

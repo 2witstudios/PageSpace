@@ -49,3 +49,22 @@ export const buildContextRef = (pathname: string, drives: DriveEntry[]): Context
       return { routeType: 'other' };
   }
 };
+
+const ROUTE_TYPES: readonly ContextRefRouteType[] = ['page', 'channel', 'drive', 'dm', 'other'];
+const optionalId = (value: unknown): string | undefined => (typeof value === 'string' && value.length > 0 ? value : undefined);
+
+/**
+ * A request body's `contextRef`, kept only when it has the shape `buildContextRef` produces:
+ * a known route type and string ids. Anything else is no reference at all. Still a CLAIM —
+ * the server resolves and permission-checks it (resolveRequestContext) before trusting a drive.
+ *
+ * Pure — no I/O, no side effects.
+ */
+export const parseContextRef = (raw: unknown): ContextRef | undefined => {
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { routeType, pageId, driveId, dmConversationId } = raw as Record<string, unknown>;
+  if (!ROUTE_TYPES.includes(routeType as ContextRefRouteType)) return undefined;
+  const ref: ContextRef = { routeType: routeType as ContextRefRouteType };
+  const ids = { pageId: optionalId(pageId), driveId: optionalId(driveId), dmConversationId: optionalId(dmConversationId) };
+  return Object.assign(ref, Object.fromEntries(Object.entries(ids).filter(([, v]) => v !== undefined)));
+};

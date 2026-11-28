@@ -1,3 +1,4 @@
+import { LeaveOrganizationRefusedError } from '@pagespace/lib/organizations/leave';
 import { withAdminAuth } from '@/lib/auth';
 import { z } from 'zod';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -5,6 +6,7 @@ import { accountRepository } from '@pagespace/lib/repositories/account-repositor
 import { dataSubjectRequestRepository } from '@pagespace/lib/repositories/data-subject-request-repository';
 import { lodgeAndEnqueueErasure } from '@/lib/erasure/request-erasure';
 import { enqueueAccountErasure } from '@/lib/erasure/enqueue';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 /**
  * Admin-gated Right-to-Erasure escalation (#908).
@@ -46,6 +48,16 @@ export const POST = withAdminAuth(async (admin, request) => {
     return Response.json({ error: 'Target user not found' }, { status: 404 });
   }
 
+  // Force-delete cannot erase an org Owner (ORG-6): organization ownership transfers first. The
+  // worker would block the job anyway; refusing here says why instead of queueing a dead request.
+  const ownedOrganizations = await accountRepository.getOwnedOrganizationNames(userId);
+  if (ownedOrganizations.length > 0) {
+    return Response.json(
+      { error: 'User owns organizations. Transfer organization ownership first.', ownedOrganizations },
+      { status: 400 }
+    );
+  }
+
   const existing = await dataSubjectRequestRepository.findActiveErasureForUser(userId);
   if (existing) {
     // A request that the worker BLOCKED on multi-member drives is exactly what
@@ -58,7 +70,7 @@ export const POST = withAdminAuth(async (admin, request) => {
         const jobId = await enqueueAccountErasure({
           requestId: existing.id,
           userId,
-          callerUserId: admin.id,
+          caller: actorFromVerifiedUser(admin),
         });
         await dataSubjectRequestRepository.markQueued(existing.id, jobId);
         loggers.auth.info(
@@ -89,7 +101,7 @@ export const POST = withAdminAuth(async (admin, request) => {
       subjectUserId: userId,
       subjectEmail: subject.email,
       stripeCustomerId: subject.stripeCustomerId,
-      callerUserId: admin.id,
+      caller: actorFromVerifiedUser(admin),
       requestedByType: 'admin',
       forceDelete,
       legalBasis: legalBasis ?? 'admin_escalation',
@@ -105,6 +117,9 @@ export const POST = withAdminAuth(async (admin, request) => {
       { status: 202 }
     );
   } catch (error) {
+    if (error instanceof LeaveOrganizationRefusedError) {
+      return Response.json({ error: 'Transfer ownership of your organizations or delete them before deleting your account', code: 'org_owner_must_transfer', ownedOrganizations: await accountRepository.getOwnedOrganizationNames(userId) }, { status: 400 });
+    }
     loggers.auth.error('Admin erasure escalation failed:', error as Error);
     return Response.json({ error: 'Failed to queue account erasure' }, { status: 500 });
   }

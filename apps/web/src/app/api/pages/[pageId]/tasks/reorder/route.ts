@@ -10,6 +10,7 @@ import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from './reorder-task-list';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -44,9 +45,9 @@ export async function PATCH(
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to reorder tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Get task list page for driveId

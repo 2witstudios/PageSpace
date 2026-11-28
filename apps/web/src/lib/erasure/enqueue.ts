@@ -1,4 +1,5 @@
 import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Enqueue a durable GDPR account-erasure job on the processor (#906).
@@ -17,11 +18,11 @@ export interface EnqueueErasureParams {
   /** The user whose data is being erased. */
   userId: string;
   /** The authenticated caller minting the token (self or admin). */
-  callerUserId: string;
+  caller: AccessActor;
 }
 
 export async function enqueueAccountErasure(params: EnqueueErasureParams): Promise<string> {
-  const { token } = await createUserServiceToken(params.callerUserId, ['erasure:enqueue'], '2m');
+  const { token } = await createUserServiceToken(params.caller, ['erasure:enqueue'], '2m');
 
   const res = await fetch(`${PROCESSOR_URL}/api/erasure/enqueue`, {
     method: 'POST',

@@ -12,7 +12,7 @@ import { isCapacitorApp } from '@/lib/capacitor-bridge';
  */
 function ConsentProvider() {
   const hydrate = useConsentStore((s) => s.hydrate);
-  const showBanner = useConsentStore((s) => s.showBanner());
+  const showBanner = useConsentStore((s) => s.showBanner() || s.reopenRequested);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {

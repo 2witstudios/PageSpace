@@ -28,8 +28,8 @@ import {
   type ControlClaims,
   type ControlCommandType,
   type Ed25519Verify,
-} from './control-instruction.js';
-import { parseControlCommand } from './parse-control-command.js';
+} from './control-instruction.ts';
+import { parseControlCommand } from './parse-control-command.ts';
 
 export type ControlInstructionDenyReason =
   | 'malformed'

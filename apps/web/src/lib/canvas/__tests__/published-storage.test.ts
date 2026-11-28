@@ -15,12 +15,24 @@ import {
   getPublishAssetBaseUrl,
   copyAssetToPublishBucket,
   copyObjectToPublishBucket,
+  clearPublishedPrefix,
+  copyPublishedSiteFileArtifact,
+  createPublishedObjectStore,
 } from '../published-storage';
 
 const send = vi.fn();
 const HASH = 'a'.repeat(64);
 
 vi.mock('server-only', () => ({}));
+
+// POL-4: every write into a published prefix asks the policy layer first. The default here is "writable"; the
+// refusal tests below make it reject.
+const assertPrefixWritable = vi.hoisted(() => vi.fn(async (_prefix: string) => {}));
+vi.mock('@pagespace/lib/organizations/published-visibility', () => ({ assertPrefixWritable }));
+
+// Content safety: a blocked hash is never promoted to the public bucket. Default: nothing is blocked.
+const isHashBlocked = vi.hoisted(() => vi.fn(async (_hash: string) => false));
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked }));
 
 // Mock only the S3Client constructor (capture .send); keep the real command
 // classes so `instanceof` checks below still hold.
@@ -173,16 +185,22 @@ describe('deletePublishedArtifact', () => {
     process.env.PUBLISH_BUCKET = 'test-bucket';
   });
 
-  it('sends a DeleteObjectCommand with the right bucket and key', async () => {
+  it('sends a DeleteObjectCommand with the right bucket and key (and one for its paused twin, POL-4)', async () => {
     await deletePublishedArtifact('published/acme/index.html');
 
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledTimes(2);
     const command = send.mock.calls[0][0];
     expect(command).toBeInstanceOf(DeleteObjectCommand);
     expect(command.input).toEqual({
       Bucket: 'test-bucket',
       Key: 'published/acme/index.html',
     });
+    expect(send.mock.calls[1][0].input).toEqual({ Bucket: 'test-bucket', Key: 'suspended/acme/index.html' });
+  });
+
+  it('a key outside the public prefix has no paused twin: exactly one delete', async () => {
+    await deletePublishedArtifact('assets/abc');
+    expect(send).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -394,8 +412,34 @@ describe('buildAssetUrlFromKey', () => {
 describe('copyAssetToPublishBucket', () => {
   beforeEach(() => {
     send.mockReset();
+    isHashBlocked.mockReset();
+    isHashBlocked.mockResolvedValue(false);
     process.env.PUBLISH_BUCKET = 'test-publish';
     process.env.BUCKET_NAME = 'test-files';
+  });
+
+  it('given a blocked hash, should refuse before touching either bucket — even when the public copy already exists', async () => {
+    isHashBlocked.mockResolvedValue(true);
+
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow(
+      'This file is not available for publishing',
+    );
+
+    expect(isHashBlocked).toHaveBeenCalledWith(HASH);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('given a blocked hash, should refuse to promote its thumbnail too', async () => {
+    isHashBlocked.mockResolvedValue(true);
+
+    await expect(
+      copyObjectToPublishBucket({
+        sourceKey: `cache/${HASH}/thumbnail.webp`,
+        assetKey: `assets/cache/${HASH}/thumbnail.webp`,
+        contentType: 'image/webp',
+      }),
+    ).rejects.toThrow('This file is not available for publishing');
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('given the asset already exists in the publish bucket (HeadObject 200), should skip GetObject and PutObject', async () => {
@@ -439,6 +483,35 @@ describe('copyAssetToPublishBucket', () => {
       ContentType: 'image/png',
     });
     expect(putCmd.input.Body).toBeInstanceOf(Uint8Array);
+  });
+
+  it('given the hash is blocked between the check and the PUT, should take the copy it just wrote back down: nothing stays public', async () => {
+    // A public bucket in memory, so "nothing stays public" is checked on state, not on a call log.
+    const publicKeys = new Set<string>();
+    send.mockImplementation(async (command: unknown) => {
+      if (command instanceof HeadObjectCommand) {
+        if (publicKeys.has(command.input.Key!)) return {};
+        throw Object.assign(new Error('Not Found'), { name: 'NotFound' });
+      }
+      if (command instanceof GetObjectCommand) return { Body: { transformToByteArray: async () => new Uint8Array([1]) } };
+      if (command instanceof PutObjectCommand) {
+        publicKeys.add(command.input.Key!);
+        return {};
+      }
+      if (command instanceof DeleteObjectCommand) {
+        publicKeys.delete(command.input.Key!);
+        return {};
+      }
+      throw new Error(`unexpected ${String(command)}`);
+    });
+    // The takedown's block lands after this publish checked and before its PUT finished.
+    isHashBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+
+    await expect(copyAssetToPublishBucket({ contentHash: HASH, mimeType: 'image/png' })).rejects.toThrow(
+      'This file is not available for publishing',
+    );
+    expect(publicKeys.size).toBe(0);
+    send.mockReset();
   });
 
   it('given HeadObject throws a non-404 error, should propagate the error without copying', async () => {
@@ -514,5 +587,76 @@ describe('copyObjectToPublishBucket', () => {
       Key: 'assets/cache/abc123/thumbnail.webp',
       ContentType: 'image/webp',
     });
+  });
+});
+
+
+describe('the policy write guard', () => {
+  beforeEach(() => {
+    send.mockReset();
+    send.mockResolvedValue({});
+    assertPrefixWritable.mockReset();
+    assertPrefixWritable.mockResolvedValue(undefined);
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('POL-4 (partial) every writer into a published prefix asks first, and a refusal sends nothing to the bucket', async () => {
+    assertPrefixWritable.mockRejectedValue(new Error('hidden'));
+    await expect(putPublishedArtifact({ subdomain: 'acme', path: 'a', html: 'x' })).rejects.toThrow('hidden');
+    await expect(putPublishedSiteFile({ prefix: 'acme', file: 'robots.txt', body: 'x' })).rejects.toThrow('hidden');
+    await expect(copyPublishedArtifact('published/acme/a/index.html', 'published/acme/index.html')).rejects.toThrow('hidden');
+    await expect(copyPublishedSiteFileArtifact('published/acme/robots.txt', 'published/host.test/robots.txt')).rejects.toThrow('hidden');
+    expect(send).not.toHaveBeenCalled();
+    expect(assertPrefixWritable.mock.calls.map((c) => c[0])).toEqual(['acme', 'acme', 'acme', 'host.test']);
+  });
+
+  it('POL-4 (partial) a writable site is written exactly as before', async () => {
+    await putPublishedArtifact({ subdomain: 'acme', path: 'a', html: 'x' });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0]).toBeInstanceOf(PutObjectCommand);
+  });
+
+  it('POL-4 (partial) unpublishing deletes the paused copy under suspended/ too, so a restore cannot bring back a page its author took down', async () => {
+    await deletePublishedArtifact('published/acme/about/index.html');
+    const keys = send.mock.calls.map((c) => (c[0] as DeleteObjectCommand).input.Key);
+    expect(keys).toEqual(['published/acme/about/index.html', 'suspended/acme/about/index.html']);
+  });
+
+  it('POL-4 (partial) removing a host clears both its public and its paused prefix', async () => {
+    send.mockResolvedValue({ Contents: [{ Key: 'k1' }], IsTruncated: false });
+    await clearPublishedPrefix('docs.example.com');
+    const lists = send.mock.calls.map((c) => c[0]).filter((c) => c.constructor.name === 'ListObjectsV2Command').map((c) => c.input.Prefix);
+    expect(lists).toEqual(['published/docs.example.com/', 'suspended/docs.example.com/']);
+  });
+});
+
+describe('createPublishedObjectStore', () => {
+  beforeEach(() => {
+    send.mockReset();
+    process.env.PUBLISH_BUCKET = 'test-bucket';
+  });
+
+  it('POL-4 (partial) listKeys follows continuation tokens until the listing is complete', async () => {
+    send
+      .mockResolvedValueOnce({ Contents: [{ Key: 'a' }, { Key: 'b' }], IsTruncated: true, NextContinuationToken: 't1' })
+      .mockResolvedValueOnce({ Contents: [{ Key: 'c' }], IsTruncated: false });
+    expect(await createPublishedObjectStore().listKeys('published/x/')).toEqual(['a', 'b', 'c']);
+    expect(send.mock.calls[1][0].input.ContinuationToken).toBe('t1');
+  });
+
+  it('POL-4 (partial) listPrefixes returns the immediate sub-prefix names without the root or the trailing slash', async () => {
+    send.mockResolvedValueOnce({ CommonPrefixes: [{ Prefix: 'suspended/acme/' }, { Prefix: 'suspended/docs.example.com/' }], IsTruncated: false });
+    expect(await createPublishedObjectStore().listPrefixes('suspended/')).toEqual(['acme', 'docs.example.com']);
+    expect(send.mock.calls[0][0].input).toMatchObject({ Prefix: 'suspended/', Delimiter: '/' });
+  });
+
+  it('POL-4 (partial) copy keeps the stored content type (COPY, never REPLACE) within the publish bucket, and remove deletes one key', async () => {
+    send.mockResolvedValue({});
+    const store = createPublishedObjectStore();
+    await store.copy('published/acme/robots.txt', 'suspended/acme/robots.txt');
+    expect(send.mock.calls[0][0]).toBeInstanceOf(CopyObjectCommand);
+    expect(send.mock.calls[0][0].input).toMatchObject({ Bucket: 'test-bucket', CopySource: 'test-bucket/published/acme/robots.txt', Key: 'suspended/acme/robots.txt', MetadataDirective: 'COPY' });
+    await store.remove('published/acme/robots.txt');
+    expect(send.mock.calls[1][0]).toBeInstanceOf(DeleteObjectCommand);
   });
 });

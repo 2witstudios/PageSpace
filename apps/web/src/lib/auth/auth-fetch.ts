@@ -3,6 +3,8 @@
 import { createClientLogger } from '@/lib/logging/client-logger';
 import { getPlatformStorage, type PlatformStorage, type StoredSession } from './platform-storage';
 import { isNativeApp } from '@/lib/capacitor-bridge';
+import { readOrgSignInDenial } from './org-sign-in-denial';
+import { useOrgReauthStore } from '@/stores/useOrgReauthStore';
 
 interface FetchOptions extends RequestInit {
   skipAuth?: boolean;
@@ -396,7 +398,20 @@ class AuthFetch {
       }
     }
 
+    await this.reportOrgSignInDenial(response);
     return response;
+  }
+
+  /**
+   * D-OW-45: an org's sign-in policy refused this credential. Every request goes through here (SWR reads and
+   * mutations alike), so this is the one place that hands the denial to the re-authentication prompt. The caller
+   * still receives the response unchanged and handles it as it always did.
+   */
+  private async reportOrgSignInDenial(response: Response): Promise<void> {
+    if (response.status !== 401 && response.status !== 403) return;
+    const body: unknown = await response.clone().json().catch(() => null);
+    const denial = readOrgSignInDenial(response.status, body);
+    if (denial) useOrgReauthStore.getState().report(denial);
   }
 
   /**

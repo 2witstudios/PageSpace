@@ -4,12 +4,13 @@ import { stripe } from '@/lib/stripe';
 import { sendEmail, resolveAppUrl } from '@pagespace/lib/services/email-service';
 import { PaymentReceiptEmail } from '@pagespace/lib/email-templates/PaymentReceiptEmail';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { dollarsFromCents } from '@pagespace/lib/billing/money-model';
 
 function formatCents(cents: number, currency: string): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: currency.toUpperCase(),
-  }).format(cents / 100);
+  }).format(dollarsFromCents(cents));
 }
 
 function formatDate(unixSeconds: number): string {

@@ -3,20 +3,35 @@ import { createId } from '@paralleldrive/cuid2';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import { creditLedger, creditHolds } from '@pagespace/db/schema/credits';
+import {
+  wallets,
+  personalRootWalletOf,
+  PERSONAL_ROOT_WALLET_ARBITER,
+  PERSONAL_ROOT_WALLET_UPSERT_TARGET,
+} from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
+import { ceremonyAuthentication } from '../../../packages/lib/src/auth/authentication-evidence';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
 
-import type { SubscriptionTier as Tier } from '@pagespace/lib/billing/subscription-tiers';
+import type { PersonalSubscriptionTier as Tier } from '@pagespace/lib/billing/subscription-tiers';
+import { centsFromDollars } from '@pagespace/lib/billing/money-model';
 
 export type { Tier };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The user's personal root wallet id (the former credit_balances row), created bare if absent. */
+async function personalWalletId(userId: string): Promise<string> {
+  await db.insert(wallets).values({ ownerType: 'user', userId }).onConflictDoNothing(PERSONAL_ROOT_WALLET_ARBITER);
+  const [row] = await db.select({ id: wallets.id }).from(wallets).where(personalRootWalletOf(userId));
+  return row.id;
+}
 
 export interface SeededUser {
   userId: string;
@@ -28,6 +43,10 @@ export interface SeededUser {
 }
 
 export interface SeedOptions {
+  /** Display name, for specs that find a person by name on screen. Factory default otherwise. */
+  name?: string;
+  /** Name of the user's own drive, for specs that find it on screen. Factory default otherwise. */
+  driveName?: string;
   tier?: Tier;
   /** AI provider for this user. Defaults to 'openrouter' so calls hit the mock stub. */
   provider?: string;
@@ -47,11 +66,12 @@ export interface SeedOptions {
 export async function seedUser(opts: SeedOptions = {}): Promise<SeededUser> {
   const tier = opts.tier ?? 'pro';
   const user = await factories.createUser({
+    ...(opts.name ? { name: opts.name } : {}),
     subscriptionTier: tier,
     currentAiProvider: opts.provider ?? 'openrouter',
     currentAiModel: opts.model ?? 'e2e/stub-model',
   });
-  const drive = await factories.createDrive(user.id);
+  const drive = await factories.createDrive(user.id, opts.driveName ? { name: opts.driveName } : {});
 
   await setBalance(user.id, {
     monthlyRemainingCents: opts.monthlyRemainingCents ?? 10_000,
@@ -61,6 +81,8 @@ export async function seedUser(opts: SeedOptions = {}): Promise<SeededUser> {
   });
 
   const sessionToken = await sessionService.createSession({
+    // Test fixture: stands in for an emailed-link sign-in (D-OW-45).
+    authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()),
     userId: user.id,
     type: 'user',
     scopes: [],
@@ -95,16 +117,16 @@ export async function setBalance(
     updatedAt: new Date(now),
   };
   await db
-    .insert(creditBalances)
+    .insert(wallets)
     .values(row)
-    .onConflictDoUpdate({ target: creditBalances.userId, set: row });
+    .onConflictDoUpdate({ ...PERSONAL_ROOT_WALLET_UPSERT_TARGET, set: row });
 }
 
 export async function getBalance(userId: string) {
   const [row] = await db
     .select()
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId));
+    .from(wallets)
+    .where(personalRootWalletOf(userId));
   return row ?? null;
 }
 
@@ -120,8 +142,9 @@ export async function getHolds(userId: string) {
 /** Pre-seed N active (non-expired) holds to simulate concurrent in-flight calls. */
 export async function seedHolds(userId: string, count: number, estCents = 25): Promise<void> {
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const walletId = await personalWalletId(userId);
   for (let i = 0; i < count; i++) {
-    await db.insert(creditHolds).values({ userId, estCents, expiresAt });
+    await db.insert(creditHolds).values({ userId, walletId, estCents, expiresAt });
   }
 }
 
@@ -265,12 +288,13 @@ export async function seedPendingReconcileCall(
 
   await db.insert(creditLedger).values({
     userId,
+    walletId: await personalWalletId(userId),
     entryType: 'usage',
     bucket: 'monthly',
     amountCents: -opts.chargedCents,
     appliedCents: -opts.chargedCents,
     chargeMillicents: opts.chargedCents * 1000,
-    realCostCents: Math.round(opts.billedCostDollars * 100),
+    realCostCents: centsFromDollars(opts.billedCostDollars),
     aiUsageLogId: log.id,
   });
 

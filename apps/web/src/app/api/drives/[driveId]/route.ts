@@ -1,3 +1,4 @@
+import { recordOrgPowerDriveAction } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { getDriveById, getDriveWithAccess, updateDrive, trashDrive, isValidDriveHomePage, isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
@@ -13,6 +14,9 @@ import { trackDriveOperation } from '@pagespace/lib/monitoring/activity-tracker'
 import { syncPublishedHomeRoot, regeneratePublishedSiteFiles } from '@/lib/canvas/publish-page';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
 import { db } from '@pagespace/db/db';
+import { publishDriveTransitionInvalidation } from '@pagespace/lib/services/drive-transition-invalidation';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { MARK_COLORS } from '@pagespace/lib/avatars/avatar-core';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp', 'oauth'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -37,6 +41,8 @@ const patchSchema = z.object({
   // — never trusted as a URL directly.
   ogImageFileId: z.string().min(1).optional(),
   faviconFileId: z.string().min(1).optional(),
+  // The color the drive's initial sits on without an avatar: a mark palette key, null for the default.
+  color: z.enum(MARK_COLORS).nullable().optional(),
 }).strict();
 
 /**
@@ -58,7 +64,6 @@ export async function GET(
     const scopeError = checkMCPDriveScope(auth, driveId);
     if (scopeError) return scopeError;
 
-    const userId = auth.userId;
 
     // A scoped MCP token is its own drive member — gate on and report the
     // TOKEN's membership, not the owning user's.
@@ -67,14 +72,14 @@ export async function GET(
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      const level = await getAppDriveAccessLevel(auth.tokenId, driveId);
+      const level = await getAppDriveAccessLevel(actorFromAuth(auth), auth.tokenId, driveId);
       if (!level?.canView) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
-      const membership = await getAppDriveMembership(auth.tokenId, driveId);
+      const membership = await getAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId);
       if (membership?.role === null) {
         // Inherit: the key is its owner — present the owner's own relationship.
-        const inherited = await getDriveWithAccess(driveId, userId);
+        const inherited = await getDriveWithAccess(driveId, actorFromAuth(auth));
         if (inherited) return NextResponse.json(inherited);
       }
       return NextResponse.json({
@@ -86,7 +91,7 @@ export async function GET(
       });
     }
 
-    const driveWithAccess = await getDriveWithAccess(driveId, userId);
+    const driveWithAccess = await getDriveWithAccess(driveId, actorFromAuth(auth));
 
     if (!driveWithAccess) {
       // Check if drive exists at all for proper error
@@ -94,7 +99,7 @@ export async function GET(
       if (!drive) {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
       }
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     return NextResponse.json(driveWithAccess);
@@ -159,10 +164,15 @@ export async function PATCH(
     // Check authorization: owner/admin authority. Scoped tokens with an
     // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can update drive settings' },
         { status: 403 }
-      );
+      ));
+    }
+
+    // A rename taken through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    if (validatedBody.name !== undefined) {
+      await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'rename');
     }
 
     // A home page must be a non-trashed page belonging to this drive
@@ -194,7 +204,7 @@ export async function PATCH(
     // both are sent, the resolved file wins (it's the more specific action).
     let resolvedOgImageUrl = validatedBody.publishDefaultOgImageUrl;
     if (validatedBody.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.ogImageFileId, driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }
@@ -203,7 +213,7 @@ export async function PATCH(
 
     let resolvedFaviconUrl = validatedBody.publishFaviconUrl;
     if (validatedBody.faviconFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: validatedBody.faviconFileId, driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected favicon is unavailable or not accessible' }, { status: 400 });
       }
@@ -225,6 +235,7 @@ export async function PATCH(
         resolvedFaviconUrl === undefined
           ? undefined
           : resolvedFaviconUrl || null,
+      color: validatedBody.color,
     });
 
     // A changed 404 page or favicon must be reflected in the site files
@@ -234,8 +245,8 @@ export async function PATCH(
       void regeneratePublishedSiteFiles(driveId);
     }
 
-    // Broadcast drive update event if name, drivePrompt, or homePageId changed
-    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined)) {
+    // Broadcast drive update event if name, drivePrompt, homePageId or the mark color changed
+    if (updatedDrive && (validatedBody.name || validatedBody.drivePrompt !== undefined || validatedBody.homePageId !== undefined || validatedBody.color !== undefined)) {
       const recipientUserIds = await getDriveRecipientUserIds(driveId);
       await broadcastDriveEvent(
         createDriveEventPayload(drive.id, 'updated', {
@@ -345,11 +356,14 @@ export async function DELETE(
     // Check authorization: owner/admin authority. Scoped tokens with an
     // explicit role need OWNER/ADMIN; inherited keys use the owner's authority.
     if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json(
         { error: 'Only drive owners and admins can delete drives' },
         { status: 403 }
-      );
+      ));
     }
+
+    // Trashing through org Owner/Admin power (an org drive the actor does not lead) is audited.
+    await recordOrgPowerDriveAction(actorFromAuth(auth), drive, 'trash');
 
     // Get recipients BEFORE trashing (ensures we have valid member list)
     const recipientUserIds = await getDriveRecipientUserIds(driveId);
@@ -365,6 +379,16 @@ export async function DELETE(
       }),
       recipientUserIds
     );
+
+    // ARCH-2: a trash ends live access for everyone but the owner (who reaches it through
+    // their trash), with no row deleted — re-resolve each recipient post-commit and kick
+    // the held rooms of those whose access ended.
+    await publishDriveTransitionInvalidation({
+      driveId,
+      orgIdBefore: drive.orgId,
+      orgIdAfter: drive.orgId,
+      audienceBefore: recipientUserIds,
+    });
 
     trackDriveOperation(userId, 'delete', driveId, {
       name: drive.name,

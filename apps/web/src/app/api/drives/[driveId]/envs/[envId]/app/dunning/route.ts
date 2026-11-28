@@ -31,6 +31,7 @@ import {
   isDedicatedTierPurchasable,
 } from '@pagespace/lib/services/app-hosting/dedicated-tier-service';
 import { findPublishedAppByEnvId } from '@/lib/app-hosting/published-app-dto';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -44,7 +45,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     if (scopeError) return scopeError;
 
     if (!(await isPrincipalDriveMember(auth, driveId))) {
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     if (!(await resolveEnvInDrive(envId, driveId))) {

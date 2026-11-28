@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildContextRef } from '../buildContextRef';
+import { buildContextRef, parseContextRef } from '../buildContextRef';
 import type { DriveEntry } from '../resolveLocationContext';
 
 const DRIVES: DriveEntry[] = [
@@ -117,5 +117,18 @@ describe('buildContextRef', () => {
     ])('given %s, should return routeType other', (_label, path) => {
       expect(buildContextRef(path, DRIVES)).toEqual({ routeType: 'other' });
     });
+  });
+});
+
+describe('parseContextRef', () => {
+  it('given a body contextRef in buildContextRef\'s shape, should keep the route type and its string ids only', () => {
+    expect(parseContextRef({ routeType: 'page', pageId: 'p1', driveId: 'd1' })).toEqual({ routeType: 'page', pageId: 'p1', driveId: 'd1' });
+    expect(parseContextRef({ routeType: 'drive', driveId: 'd1', pageId: 7 })).toEqual({ routeType: 'drive', driveId: 'd1' });
+  });
+
+  it('given anything else, should be no reference at all', () => {
+    expect(parseContextRef(undefined)).toBeUndefined();
+    expect(parseContextRef('drive')).toBeUndefined();
+    expect(parseContextRef({ routeType: 'admin', driveId: 'd1' })).toBeUndefined();
   });
 });

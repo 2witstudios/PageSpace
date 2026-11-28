@@ -30,9 +30,11 @@ const UpgradeIcon = PLANS.pro.icon;
  */
 export function UpgradeTierButton({ isFree, className }: UpgradeTierButtonProps) {
   const router = useRouter();
-  const { showBilling } = useBillingVisibility();
+  // /settings/plan sells on either store (Stripe on the web, In-App Purchase in
+  // the iOS app with StoreKit); hidden only where nothing may be sold.
+  const { showPurchases } = useBillingVisibility();
 
-  if (!showBilling || !isFree) return null;
+  if (!showPurchases || !isFree) return null;
 
   return (
     <Button

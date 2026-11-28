@@ -11,7 +11,30 @@ describe('parseTaskQuerySpec', () => {
       given: 'an empty query string',
       should: 'default to limit 100, offset 0, sortOrder asc, no filters',
       actual: parseTaskQuerySpec(new URLSearchParams('')),
-      expected: { sortOrder: 'asc', limit: 100, offset: 0 },
+      expected: { sortOrder: 'asc', perStatus: false, limit: 100, offset: 0 },
+    });
+  });
+
+  it('statusGroup', () => {
+    assert({
+      given: 'statusGroup=active, statusGroup=completed and an unknown group',
+      should: 'keep the two known groups and drop anything else',
+      actual: ['active', 'completed', 'bogus'].map(
+        g => parseTaskQuerySpec(new URLSearchParams(`statusGroup=${g}`)).statusGroup,
+      ),
+      expected: ['active', 'completed', undefined],
+    });
+  });
+
+  it('perStatus', () => {
+    assert({
+      given: 'perStatus=true and no perStatus param',
+      should: 'enable per-column paging only when asked',
+      actual: [
+        parseTaskQuerySpec(new URLSearchParams('perStatus=true')).perStatus,
+        parseTaskQuerySpec(new URLSearchParams('')).perStatus,
+      ],
+      expected: [true, false],
     });
   });
 

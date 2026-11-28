@@ -202,7 +202,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/search/glob?pattern=*.md`);
       await GET(request, createContext(mockDriveId));
 
-      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, mockUserId);
+      expect(checkDriveAccessForSearch).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockUserId }));
     });
 
     it('should call globSearchPages with correct parameters', async () => {
@@ -214,7 +214,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*.md',
         'test-drive',
         { includeTypes: undefined, maxResults: 50 }
@@ -230,7 +230,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['DOCUMENT', 'FOLDER'], maxResults: 100 }
@@ -246,7 +246,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['DOCUMENT'], maxResults: 100 }
@@ -262,7 +262,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['TASK_LIST'], maxResults: 100 }
@@ -294,7 +294,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: ['FILE'], maxResults: 100 }
@@ -357,7 +357,7 @@ describe('GET /api/drives/[driveId]/search/glob', () => {
 
       expect(globSearchPages).toHaveBeenCalledWith(
         mockDriveId,
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         '*',
         'test-drive',
         { includeTypes: undefined, maxResults: 200 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { AutomationSkipNote, isSpendSkip } from '@/components/wallets/AutomationSpendState';
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { format } from 'date-fns';
 import { AlertCircle, Bot, CalendarIcon, Check, ChevronRight, CircleHelp, Clock, MapPin, Trash2, UserPlus, X, Zap } from 'lucide-react';
@@ -1083,7 +1084,9 @@ export function EventModal({
                           promptPlaceholder="What should the agent do when this event starts?"
                         />
 
-                        {existingStatus && existingStatus !== 'never_run' && (
+                        {existingTrigger && isSpendSkip(existingTrigger.lastFireError) ? (
+                          <AutomationSkipNote error={existingTrigger.lastFireError} driveId={effectiveDriveId ?? null} />
+                        ) : existingStatus && existingStatus !== 'never_run' && (
                           <p className={cn(
                             'text-xs',
                             existingStatus === 'error' ? 'text-destructive' : 'text-muted-foreground',

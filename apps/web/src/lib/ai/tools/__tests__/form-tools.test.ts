@@ -8,6 +8,7 @@ const mockGetFormTargetById = vi.hoisted(() => vi.fn());
 const mockBuildFormHtml = vi.hoisted(() => vi.fn());
 
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: mockCanActorEditPage,
 }));
 

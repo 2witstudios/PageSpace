@@ -4,9 +4,11 @@ import { db } from '@pagespace/db/db';
 import { and, eq } from '@pagespace/db/operators';
 import { pageWebhooks } from '@pagespace/db/schema/page-webhooks';
 import { WEBHOOK_USERNAME_MAX_LENGTH } from '@pagespace/lib/services/page-webhook-core';
+import { AUTOMATION_OWNER_LEFT_CODE, AUTOMATION_OWNER_LEFT_ERROR } from '@pagespace/lib/permissions/automation-ownership';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -37,7 +39,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ pageI
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     let body: unknown;
@@ -52,6 +54,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ pageI
 
     const existing = await findOwnedWebhook(pageId, id);
     if (!existing) return NextResponse.json({ error: 'Webhook not found' }, { status: 404 });
+    // [D-OW-36] An owner-left webhook stays off until an Owner or Admin reassigns it (which switches it back on).
+    if (existing.ownerLeftAt && validation.data.isEnabled === true) {
+      return NextResponse.json({ error: AUTOMATION_OWNER_LEFT_ERROR, code: AUTOMATION_OWNER_LEFT_CODE }, { status: 409 });
+    }
 
     const [row] = await db
       .update(pageWebhooks)
@@ -83,7 +89,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ page
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     const existing = await findOwnedWebhook(pageId, id);

@@ -1,7 +1,9 @@
 /** Shared display formatting for the admin console. */
 
+import { dollarsFromCents } from '@pagespace/lib/billing/money-model';
+
 export function usd(cents: number): string {
-  return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+  return dollarsFromCents(cents).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
 export function pct(value: number | null, digits = 1): string {

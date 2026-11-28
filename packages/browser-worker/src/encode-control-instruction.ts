@@ -4,7 +4,7 @@
  * emitted (JWS-style), so the verifier checks the bytes it received before
  * it parses a single field, and no canonical-JSON agreement is needed.
  */
-import type { ControlClaims, Ed25519Sign, EncodedControlInstruction } from './control-instruction.js';
+import type { ControlClaims, Ed25519Sign, EncodedControlInstruction } from './control-instruction.ts';
 
 export type EncodeControlInstructionOptions = {
   readonly claims: ControlClaims;

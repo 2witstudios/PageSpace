@@ -3,20 +3,34 @@ import { assert } from '../../sandbox/__tests__/riteway';
 
 const mockDb = vi.hoisted(() => ({ select: vi.fn() }));
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
+// SEAT-9: the org's billing status is read before any org pool charge; paid unless a test lapses it.
+const orgStatus = vi.hoisted(() => ({ active: true }));
+vi.mock('../../../organizations/status', () => ({ isOrgActive: vi.fn(async () => orgStatus.active) }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn((a, b) => ({ op: 'eq', a, b })) }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'users.id', subscriptionTier: 'users.subscriptionTier' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
-  drives: { id: 'drives.id', ownerId: 'drives.ownerId' },
+  drives: { id: 'drives.id', ownerId: 'drives.ownerId', orgId: 'drives.orgId' },
 }));
 
 const mockCanConsumeAI = vi.hoisted(() => vi.fn());
-vi.mock('../../../billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
+const mockCanConsumeOrgPool = vi.hoisted(() => vi.fn());
+const mockFindOrgPoolWalletId = vi.hoisted(() => vi.fn());
+vi.mock('../../../billing/credit-gate', () => ({
+  canConsumeAI: mockCanConsumeAI,
+  canConsumeOrgPool: mockCanConsumeOrgPool,
+  findOrgPoolWalletId: mockFindOrgPoolWalletId,
+  hasSpendableBalance: vi.fn(),
+  hasSpendableOrgPool: vi.fn(),
+}));
 
 const mockReleaseHold = vi.hoisted(() => vi.fn());
-vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
+const mockHoldWalletId = vi.hoisted(() => vi.fn());
+vi.mock('../../../billing/credit-consume', () => ({ releaseHold: mockReleaseHold, holdWalletId: mockHoldWalletId }));
+// A personal charge settles on the person's personal root, named explicitly (P1-1).
+vi.mock('../../../billing/personal-wallet', () => ({ ensurePersonalRootWalletId: vi.fn(async (_db: unknown, userId: string) => `root-of-${userId}`) }));
 
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
@@ -29,6 +43,7 @@ import {
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../../billing/credit-pricing';
 import { PUBLISHED_APP_AWAKE_MODEL } from '../../../monitoring/usage-source';
+import { PERSONAL_SPEND } from '../../../billing/spend-target';
 import {
   calculateMachineCostDollars,
   PUBLISHED_APP_GUEST_SHAPE,
@@ -38,6 +53,8 @@ import {
 beforeEach(() => {
   mockDb.select.mockReset();
   mockCanConsumeAI.mockReset();
+  mockCanConsumeOrgPool.mockReset();
+  mockFindOrgPoolWalletId.mockReset();
   mockReleaseHold.mockReset();
   mockTrackUsage.mockReset();
 });
@@ -48,15 +65,26 @@ function mockSingleRow(row: Record<string, unknown> | undefined) {
   });
 }
 
-describe('defaultAppBillingDeps.resolvePayerId', () => {
+describe('defaultAppBillingDeps.resolveCharge', () => {
   it('bills the DRIVE OWNER — the payer for anything hanging off an environment', async () => {
-    mockSingleRow({ ownerId: 'drive-owner-1' });
+    mockSingleRow({ ownerId: 'drive-owner-1', orgId: null });
 
     assert({
       given: 'a published app whose drive resolves',
       should: 'pay from the drive owner',
-      actual: await defaultAppBillingDeps.resolvePayerId({ driveId: 'drive-1' }),
-      expected: 'drive-owner-1',
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1', costOwnerId: null }),
+      expected: { kind: 'user', userId: 'drive-owner-1' },
+    });
+  });
+
+  it("WAL-9 (partial) an app in an ORG drive charges the org pool, recorded under the drive lead — never the lead's wallet", async () => {
+    mockSingleRow({ ownerId: 'lead-marcus', orgId: 'org-northwind' });
+
+    assert({
+      given: 'a published app whose drive belongs to an org',
+      should: 'charge the org, recorded under the lead',
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'drive-1', costOwnerId: null }),
+      expected: { kind: 'org', orgId: 'org-northwind', userId: 'lead-marcus', accrual: true },
     });
   });
 
@@ -69,7 +97,7 @@ describe('defaultAppBillingDeps.resolvePayerId', () => {
     assert({
       given: 'a stale read of a drive mid-delete',
       should: 'resolve to null',
-      actual: await defaultAppBillingDeps.resolvePayerId({ driveId: 'gone' }),
+      actual: await defaultAppBillingDeps.resolveCharge({ driveId: 'gone', costOwnerId: null }),
       expected: null,
     });
   });
@@ -82,7 +110,7 @@ describe('defaultAppBillingDeps.gate', () => {
     mockSingleRow({ subscriptionTier: 'pro' });
     mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
 
-    await defaultAppBillingDeps.gate({ payerId: 'payer-1' });
+    await defaultAppBillingDeps.gate({ charge: { kind: 'user', userId: 'payer-1' } });
 
     expect(mockCanConsumeAI).toHaveBeenCalledWith('payer-1', 'pro', expect.anything());
   });
@@ -94,9 +122,12 @@ describe('defaultAppBillingDeps.gate', () => {
     mockSingleRow({ subscriptionTier: 'free' });
     mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
 
-    await defaultAppBillingDeps.gate({ payerId: 'payer-1' });
+    await defaultAppBillingDeps.gate({ charge: { kind: 'user', userId: 'payer-1' } });
 
     expect(mockCanConsumeAI).toHaveBeenCalledWith('payer-1', 'free', {
+      // Compute bills the payer's personal wallet (WAL-9): no drive wallet is ever named.
+      spend: PERSONAL_SPEND,
+      spendKind: 'compute',
       estCostCents: PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
       maxInFlight: PUBLISHED_APP_MAX_INFLIGHT,
       dailyCapCeilingCents: PUBLISHED_APP_DAILY_CAP_CEILING_CENTS,
@@ -107,25 +138,43 @@ describe('defaultAppBillingDeps.gate', () => {
   it('passes the hold through on an allowed gate, and the reason on a refusal', async () => {
     mockSingleRow({ subscriptionTier: 'pro' });
     mockCanConsumeAI.mockResolvedValue({ allowed: true, holdId: 'hold-9' });
-    expect(await defaultAppBillingDeps.gate({ payerId: 'p' })).toEqual({
+    expect(await defaultAppBillingDeps.gate({ charge: { kind: 'user', userId: 'p' } })).toEqual({
       allowed: true,
       holdId: 'hold-9',
-      reason: undefined,
     });
 
     mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
-    expect(await defaultAppBillingDeps.gate({ payerId: 'p' })).toEqual({
+    expect(await defaultAppBillingDeps.gate({ charge: { kind: 'user', userId: 'p' } })).toEqual({
       allowed: false,
-      holdId: undefined,
       reason: 'insufficient_credits',
+      orgRefusal: undefined,
     });
+  });
+
+  it('WAL-9 (partial) an org charge holds on the ORG POOL (org tier, compute, same bounds) and never gates a person', async () => {
+    mockCanConsumeOrgPool.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold-org', walletId: 'pool-1' });
+    const result = await defaultAppBillingDeps.gate({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead' } });
+    expect(mockCanConsumeOrgPool).toHaveBeenCalledWith('lead', 'org-1', {
+      spendKind: 'compute',
+      estCostCents: PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
+      maxInFlight: PUBLISHED_APP_MAX_INFLIGHT,
+      dailyCapCeilingCents: PUBLISHED_APP_DAILY_CAP_CEILING_CENTS,
+    });
+    expect(mockCanConsumeAI).not.toHaveBeenCalled();
+    expect(result).toEqual({ allowed: true, holdId: 'hold-org' });
+  });
+
+  it('WAL-9 (partial) a paused org pool refuses the wake by name', async () => {
+    mockCanConsumeOrgPool.mockResolvedValue({ allowed: false, reason: 'source_refused', refusal: { source: null, reason: 'source_paused', options: [] } });
+    expect(await defaultAppBillingDeps.gate({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead' } }))
+      .toEqual({ allowed: false, reason: 'org_wallet_paused', orgRefusal: 'org_wallet_paused' });
   });
 });
 
 describe('defaultAppBillingDeps.trackUsage', () => {
   const settle = () =>
     defaultAppBillingDeps.trackUsage({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: 'hold-1',
       activeSeconds: 600,
       driveId: 'drive-1',
@@ -227,7 +276,7 @@ describe('defaultAppBillingDeps.trackUsage', () => {
 
   it('given no hold (a billing-disabled wake that took the unlimited path), should still settle', async () => {
     await defaultAppBillingDeps.trackUsage({
-      payerId: 'payer-1',
+      charge: { kind: 'user', userId: 'payer-1' },
       holdId: undefined,
       activeSeconds: 30,
       driveId: 'drive-1',
@@ -235,6 +284,22 @@ describe('defaultAppBillingDeps.trackUsage', () => {
     });
 
     expect(mockTrackUsage.mock.calls[0][0].holdId).toBeUndefined();
+  });
+});
+
+describe('defaultAppBillingDeps.trackUsage — org charge', () => {
+  it('WAL-9 (partial) WAL-2 (partial) settles the awake window on the ORG POOL, recorded under the lead, marked a drive accrual (never the lead\'s seat)', async () => {
+    mockFindOrgPoolWalletId.mockResolvedValue('pool-1');
+    mockTrackUsage.mockResolvedValue({ persisted: true, creditsSettled: true });
+    await defaultAppBillingDeps.trackUsage({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead', accrual: true }, holdId: 'h', activeSeconds: 60, driveId: 'd', publishedAppId: 'a' });
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'lead', walletId: 'pool-1', spendKind: 'drive_compute' }));
+  });
+
+  it('WAL-9 (partial) an org pool gone since the wake settles nothing and keeps the window open — never onto the lead', async () => {
+    mockFindOrgPoolWalletId.mockResolvedValue(null);
+    const outcome = await defaultAppBillingDeps.trackUsage({ charge: { kind: 'org', orgId: 'org-1', userId: 'lead' }, activeSeconds: 60, driveId: 'd', publishedAppId: 'a' });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockTrackUsage).not.toHaveBeenCalled();
   });
 });
 

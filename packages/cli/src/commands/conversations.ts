@@ -90,7 +90,7 @@ export const conversationsListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.conversations.list({ agentId }));
+  const result = await callSdk(ctx, () => ctx.sdk.conversations.list({ agentId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -108,7 +108,7 @@ export const conversationsReadHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.conversations.read({ agentId, conversationId }));
+  const result = await callSdk(ctx, () => ctx.sdk.conversations.read({ agentId, conversationId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

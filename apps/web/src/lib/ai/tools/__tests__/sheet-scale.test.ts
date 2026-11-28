@@ -32,6 +32,7 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 }));
 
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorViewPage: vi.fn(async () => true),
   canActorEditPage: vi.fn(async () => true),
 }));

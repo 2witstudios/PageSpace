@@ -38,6 +38,7 @@ import {
 import { sessionConversationLimitExceeded } from '@/lib/agent-workspaces/quota-response';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -62,7 +63,7 @@ export async function POST(request: Request, context: RouteContext) {
   // The session must already EXIST — a conversation joins a workspace, it
   // never mints one (spawning a session is the collection route's act). Not
   // found and denied answer THE SAME 404 (family policy, review #2261/5).
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE);
   }
@@ -108,7 +109,7 @@ export async function POST(request: Request, context: RouteContext) {
   try {
     await createConversationInSession({
       conversationId,
-      userId: auth.userId,
+      actor: actorFromAuth(auth),
       agentPageId,
       workspaceId,
       ...(activeNodeId === null ? {} : { activeNodeId }),

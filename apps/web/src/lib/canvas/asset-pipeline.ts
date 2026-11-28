@@ -8,6 +8,9 @@ import { and, eq, inArray } from '@pagespace/db/operators';
 import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 import { buildAssetKey, buildAssetUrlFromKey, copyObjectToPublishBucket } from './published-storage';
 import { extractInterPageLinks, rewriteInterPageLinks } from './file-view-links';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import type { PublishGateEntryPoint } from '@pagespace/lib/content-safety/publish-gate';
+import { gateAssetForPublish } from '@/lib/content-safety/publish-gate-service';
 
 type FileReferenceKind = 'view' | 'thumbnail';
 
@@ -246,16 +249,16 @@ function resolvePublishAsset(row: FilePageRow, kind: FileReferenceKind): Publish
  * images — turns the reference into a URL that actually loads publicly.
  *
  * Returns null when the page doesn't exist, is trashed, isn't viewable by
- * `userId`, isn't in `driveId`, or has no resolvable asset (e.g. no
- * contentHash yet).
+ * `userId`, isn't in `driveId`, has no resolvable asset (e.g. no
+ * contentHash yet), or the publish gate holds it (see `promoteAsset`).
  */
 export async function resolveUploadedImageAssetUrl(params: {
   fileId: string;
   driveId: string;
-  userId: string;
+  actor: AccessActor;
   db: Pick<typeof DbType, 'query'>;
 }): Promise<string | null> {
-  const { fileId, driveId, userId, db } = params;
+  const { fileId, driveId, actor, db } = params;
 
   const row = (await db.query.pages.findFirst({
     where: and(eq(pages.id, fileId), eq(pages.isTrashed, false)),
@@ -269,21 +272,80 @@ export async function resolveUploadedImageAssetUrl(params: {
   // another drive's OG image/favicon — view access isn't consent to publish.
   if (row.driveId !== driveId) return null;
 
-  const canView = await canUserViewPage(userId, fileId).catch(() => false);
+  const canView = await canUserViewPage(actor, fileId).catch(() => false);
   if (!canView) return null;
 
   const asset = resolvePublishAsset(row, 'view');
   if (!asset) return null;
 
-  await copyObjectToPublishBucket(asset);
+  // Held by the publish gate (blocked, flagged, unscanned under enforce, …): null, like any unavailable file.
+  if (!(await promoteAsset(asset, [row], actor, 'uploaded_image'))) return null;
   return buildAssetUrlFromKey(asset.assetKey);
 }
 
-async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<FilePageRow[]> {
+/** How many assets one publish gates and copies at a time. */
+const PROMOTE_CONCURRENCY = 4;
+
+/** The hash a public asset's bytes derive from: the original's, for a thumbnail too. */
+const ASSET_SOURCE_HASH_RE = /^(?:files|cache)\/([a-f0-9]{64})\//i;
+
+/**
+ * Run the publish gate, then copy. The gate goes first because the copy's HEAD
+ * shortcut returns early when the asset is already public: a check inside the
+ * copy would never see a file that is already being served.
+ *
+ * A thumbnail is gated as its ORIGINAL (the hash in its key, the original's
+ * type): the derived image is never what is scanned. Returns whether the asset
+ * is now public; a refusal or a failed copy is logged and returns false.
+ */
+/**
+ * Gate, then copy. `rows` are the files that share this asset (identical bytes): the asset is copied only when
+ * the gate passes it under every one's declared type. The public object sits at one hash-based key, so a file
+ * held under its own declared type would otherwise be exposed through a sibling that was allowed.
+ */
+async function promoteAsset(
+  asset: PublishAsset,
+  rows: FilePageRow[],
+  actor: AccessActor,
+  entryPoint: PublishGateEntryPoint,
+): Promise<boolean> {
+  const contentHash = ASSET_SOURCE_HASH_RE.exec(asset.sourceKey)?.[1]?.toLowerCase();
+  if (!contentHash) return false;
+
+  // One gate per distinct declared type, in turn: a later one reuses the verdict the first recorded.
+  const byType = new Map(rows.map((row) => [row.mimeType, row]));
+  for (const row of byType.values()) {
+    const gate = await gateAssetForPublish({
+      contentHash,
+      originalKey: `files/${contentHash}/original`,
+      declaredContentType: row.mimeType,
+      fileId: row.id,
+      userId: actor.userId,
+      entryPoint,
+    });
+    if (!gate.promote) return false;
+  }
+
+  try {
+    await copyObjectToPublishBucket(asset);
+    return true;
+  } catch (err) {
+    loggers.api.warn('asset-pipeline: failed to copy asset', {
+      fileId: asset.id,
+      kind: asset.kind,
+      sourceKey: asset.sourceKey,
+      assetKey: asset.assetKey,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+async function filterViewableRows(actor: AccessActor, rows: FilePageRow[]): Promise<FilePageRow[]> {
   const checks = await Promise.all(
     rows.map(async (row) => ({
       row,
-      canView: await canUserViewPage(userId, row.id).catch((err) => {
+      canView: await canUserViewPage(actor, row.id).catch((err) => {
         loggers.api.warn('asset-pipeline: failed to authorize referenced asset', {
           fileId: row.id,
           error: err instanceof Error ? err.message : String(err),
@@ -305,17 +367,20 @@ async function filterViewableRows(userId: string, rows: FilePageRow[]): Promise<
  *   left as-is — publish still succeeds; the image just won't load publicly.
  * - DB is queried once for all IDs (batch, not N+1).
  * - Copy is idempotent (HeadObject dedup in copyAssetToPublishBucket).
+ * - Every asset passes the publish gate first (`promoteAsset`). One the gate
+ *   holds, or whose copy fails, stays unrewritten and its file ID is returned in
+ *   `heldAssets` so the publisher sees a neutral "some files couldn't be published".
  */
 export async function rewriteCanvasAssets(params: {
   html: string;
-  userId: string;
+  actor: AccessActor;
   db: Pick<typeof DbType, 'query'>;
-}): Promise<{ html: string }> {
-  const { html, userId, db } = params;
+}): Promise<{ html: string; heldAssets: string[] }> {
+  const { html, actor, db } = params;
 
   const references = extractFileReferences(html);
   const fileIds = Array.from(new Set(references.map(({ id }) => id)));
-  if (fileIds.length === 0) return { html };
+  if (fileIds.length === 0) return { html, heldAssets: [] };
 
   // Batch-query referenced page rows; permission checks below decide which assets can publish.
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -324,9 +389,9 @@ export async function rewriteCanvasAssets(params: {
     columns: { id: true, driveId: true, contentHash: true, mimeType: true, extractionMetadata: true },
   })) as FilePageRow[];
 
-  const rowsById = new Map((await filterViewableRows(userId, rows)).map((row) => [row.id, row]));
+  const rowsById = new Map((await filterViewableRows(actor, rows)).map((row) => [row.id, row]));
   const resolved = new Map<string, PublishAsset>();
-  const uniqueAssets = new Map<string, PublishAsset>();
+  const uniqueAssets = new Map<string, { asset: PublishAsset; rows: FilePageRow[] }>();
 
   for (const ref of references) {
     const row = rowsById.get(ref.id);
@@ -335,26 +400,24 @@ export async function rewriteCanvasAssets(params: {
     const asset = resolvePublishAsset(row, ref.kind);
     if (!asset) continue;
     resolved.set(referenceKey(ref), asset);
-    uniqueAssets.set(asset.assetKey, asset);
+    const shared = uniqueAssets.get(asset.assetKey);
+    if (shared) shared.rows.push(row);
+    else uniqueAssets.set(asset.assetKey, { asset, rows: [row] });
   }
 
-  if (resolved.size === 0) return { html };
+  if (resolved.size === 0) return { html, heldAssets: [] };
 
-  // Copy each distinct source object to the publish bucket; only successful copies are rewritten.
+  // Gate and copy each distinct source object; only promoted assets are rewritten. The rest keep
+  // their private reference (it won't load publicly) and are reported by file ID, never with a reason.
+  // At most PROMOTE_CONCURRENCY at once: each one may read a file of up to the scan bound and call the vendor.
   const copiedAssetKeys = new Set<string>();
+  const queue = Array.from(uniqueAssets.values());
   await Promise.all(
-    Array.from(uniqueAssets.values()).map(async (asset) => {
-      try {
-        await copyObjectToPublishBucket(asset);
-        copiedAssetKeys.add(asset.assetKey);
-      } catch (err) {
-        loggers.api.warn('asset-pipeline: failed to copy asset', {
-          fileId: asset.id,
-          kind: asset.kind,
-          sourceKey: asset.sourceKey,
-          assetKey: asset.assetKey,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    Array.from({ length: Math.min(PROMOTE_CONCURRENCY, queue.length) }, async () => {
+      for (let next = queue.shift(); next; next = queue.shift()) {
+        const { asset, rows } = next;
+        const promoted = await promoteAsset(asset, rows, actor, asset.kind === 'thumbnail' ? 'canvas_thumbnail' : 'canvas_asset');
+        if (promoted) copiedAssetKeys.add(asset.assetKey);
       }
     }),
   );
@@ -374,7 +437,10 @@ export async function rewriteCanvasAssets(params: {
     return asset && copiedAssetKeys.has(asset.assetKey) ? buildAssetUrlFromKey(asset.assetKey) : match;
   });
 
-  return { html: rewritten };
+  // Every file whose asset was not copied, including files that share a hash with another: the gate ran once per
+  // distinct asset, but each of those files stays private.
+  const held = new Set([...resolved.values()].filter((asset) => !copiedAssetKeys.has(asset.assetKey)).map((asset) => asset.id));
+  return { html: rewritten, heldAssets: [...held] };
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   createDriveEventPayload,
 } from '@/lib/websocket';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -61,7 +62,7 @@ export async function GET(
   });
 
   try {
-    const preview = await previewRollbackToPoint(activityId, userId, rollbackContext);
+    const preview = await previewRollbackToPoint(activityId, actorFromAuth(auth), rollbackContext);
 
     if (!preview) {
       return NextResponse.json({ error: 'Activity not found or preview failed' }, { status: 404 });
@@ -135,14 +136,14 @@ export async function POST(
   });
 
   // Get preview first to know what we're rolling back
-  const preview = await previewRollbackToPoint(activityId, userId, rollbackContext);
+  const preview = await previewRollbackToPoint(activityId, actorFromAuth(auth), rollbackContext);
   if (!preview) {
     return NextResponse.json({ error: 'Activity not found or preview failed' }, { status: 404 });
   }
 
   // Execute in transaction
   loggers.api.debug('[RollbackToPoint:Route] Executing rollback in transaction');
-  const result = await executeRollbackToPoint(activityId, userId, rollbackContext, preview, {
+  const result = await executeRollbackToPoint(activityId, actorFromAuth(auth), rollbackContext, preview, {
     force,
   });
 

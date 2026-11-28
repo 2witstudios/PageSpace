@@ -1,9 +1,13 @@
 import path from 'path';
 import fs from 'fs';
 
+import type { NorthwindSeed } from './northwind';
+
 export interface SeedState {
   userId: string;
   driveId: string;
+  /** Northwind Labs fixture ids (Sequence Spec Part 2); absent only in seed files written before lane A4. */
+  northwind?: NorthwindSeed;
 }
 
 let cachedSeedState: SeedState | null = null;

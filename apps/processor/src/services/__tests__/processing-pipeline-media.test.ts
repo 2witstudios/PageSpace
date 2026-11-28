@@ -13,6 +13,8 @@ vi.mock('tesseract.js', () => ({
 import {
   generateImageVariants,
   extractTextContent,
+  extractPdfContent,
+  withPdf,
 } from '../processing-pipeline';
 
 const PNG_BYTES = Buffer.from([
@@ -76,8 +78,8 @@ describe('extractTextContent', () => {
     expect(text).toContain('"a": 1');
   });
 
-  it('returns a string (not null) for a valid PDF without throwing', async () => {
-    const text = await extractTextContent(PDF_BYTES, 'application/pdf');
+  it('extracts a string from a valid PDF without throwing', async () => {
+    const { text } = await withPdf(PDF_BYTES, extractPdfContent);
     expect(typeof text).toBe('string');
   }, 15000);
 

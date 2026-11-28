@@ -47,6 +47,7 @@ import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-creat
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 import { createConversationInSession, spawnSession } from '../agent-workspaces-runtime';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 let dbAvailable = false;
 
@@ -72,14 +73,14 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
 
     // The OWNER's drive-scoped workspace, hosting three threads: the owner's
     // private one, the owner's deliberately shared one, and the member's own.
-    const spawned = await spawnSession({ userId: owner.id, driveId: drive.id, name: 'team workspace' });
+    const spawned = await spawnSession({ actor: credentialActor(owner.id, null), driveId: drive.id, name: 'team workspace' });
     if (!spawned.ok) throw new Error(`spawnSession failed: ${spawned.reason}`);
     const workspaceId = spawned.session.id;
 
     const ownerPrivateId = createId();
     await createConversationInSession({
       conversationId: ownerPrivateId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       workspaceId: workspaceId,
       title: 'owner secret plans',
@@ -87,7 +88,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const ownerSharedId = createId();
     await createConversationInSession({
       conversationId: ownerSharedId,
-      userId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       workspaceId: workspaceId,
       title: 'team notes',
@@ -96,7 +97,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const memberThreadId = createId();
     await createConversationInSession({
       conversationId: memberThreadId,
-      userId: member.id,
+      actor: credentialActor(member.id, null),
       agentPageId: null,
       workspaceId: workspaceId,
       title: 'member research',
@@ -105,7 +106,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const deps = buildSessionToolsDeps();
 
     // 1. DISCOVERY — the member's shared listing carries the workspace…
-    const memberShared = await deps.listSharedWorkspaces({ userId: member.id });
+    const memberShared = await deps.listSharedWorkspaces({ actor: credentialActor(member.id, null) });
     const listed = memberShared.find((w) => w.workspaceId === workspaceId);
     expect(listed).toBeDefined();
     if (!listed) return;
@@ -136,7 +137,7 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const spawnedInto = await deps.createWorkerSession({
       conversationId: memberWorkerId,
       callerConversationId: memberCallerId,
-      ownerId: member.id,
+      actor: credentialActor(member.id, null),
       agentPageId: null,
       name: 'member worker',
       workspace: workspaceId,
@@ -166,20 +167,20 @@ describe('discovery symmetry + shared-metadata redaction (issue #2262 finding 6,
     const ownerTitles = new Map(ownerDetail.workers.map((w) => [w.sessionId, w.name]));
     expect(ownerTitles.get(ownerPrivateId)).toBe('owner secret plans');
     expect(ownerTitles.get(memberThreadId)).toBe('member research');
-    const ownerSharedListing = await deps.listSharedWorkspaces({ userId: owner.id });
+    const ownerSharedListing = await deps.listSharedWorkspaces({ actor: credentialActor(owner.id, null) });
     expect(ownerSharedListing.find((w) => w.workspaceId === workspaceId)).toBeUndefined();
 
     // 4. A NON-member's workspace appears in NEITHER: absent from discovery,
     // and its id reads as nonexistent to the spawn — the same one decision
     // refusing both.
-    const strangerShared = await deps.listSharedWorkspaces({ userId: stranger.id });
+    const strangerShared = await deps.listSharedWorkspaces({ actor: credentialActor(stranger.id, null) });
     expect(strangerShared.find((w) => w.workspaceId === workspaceId)).toBeUndefined();
     const strangerCallerId = createId();
     await resolveOrCreateConversation(stranger.id, strangerCallerId);
     const refused = await deps.createWorkerSession({
       conversationId: createId(),
       callerConversationId: strangerCallerId,
-      ownerId: stranger.id,
+      actor: credentialActor(stranger.id, null),
       agentPageId: null,
       name: 'trespasser',
       workspace: workspaceId,

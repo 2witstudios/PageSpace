@@ -56,6 +56,7 @@ import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorizati
 import { buildPreviewOpenPath } from './preview-grant';
 import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT } from './preview-relay';
 import { SPRITE_NAME_MAX } from '../sandbox-client/sprites';
+import type { AccessActor } from '../../../permissions/access-actor';
 
 // -----------------------------------------------------------------------------
 // The read model
@@ -290,15 +291,15 @@ export type DevPreviewStatusResult =
 export async function gatherDevPreviewStatus({
   authorizeAs,
   holder,
-  userId,
+  actor,
   deps,
 }: {
   authorizeAs: DevPreviewHolderRef;
   holder: DevPreviewHolderRef;
-  userId: string;
+  actor: AccessActor;
   deps: DevPreviewStatusDeps;
 }): Promise<DevPreviewStatusResult> {
-  const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, userId, deps });
+  const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, actor, deps });
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
   const openPath = buildPreviewOpenPath(authorizeAs, authorization.driveId);
 
@@ -370,7 +371,7 @@ export interface DevPreviewUserActionDeps {
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   readListeners: DevPreviewListenersReader;
   /** The centralized code-execution gate — consulted on every RESUME (see below). */
-  canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
+  canRunCode(input: { actor: AccessActor; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
   /**
    * Serializes this holder's read → plan → apply against the realtime
    * detector's. Defaults to no serialization (pure unit surfaces); the web
@@ -459,7 +460,7 @@ export type DevPreviewUserActionResult =
 export async function applyDevPreviewUserAction({
   holder,
   action,
-  userId,
+  actor,
   wakeSubject,
   sandboxId,
   deps,
@@ -467,7 +468,7 @@ export async function applyDevPreviewUserAction({
   holder: DevPreviewHolderRef;
   action: DevPreviewUserAction;
   /** Who is acting — the subject of the wake gate. */
-  userId: string;
+  actor: AccessActor;
   /** Who PAYS for compute in this holder's drive — `PreviewAuthorization.wakeSubject`, the same input a session ensure gives `canRunCode`. */
   wakeSubject: { driveId: string | null; ownerId: string };
   /**
@@ -481,10 +482,10 @@ export async function applyDevPreviewUserAction({
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
   const lock = deps.lock ?? unlocked;
-  if (action.kind === 'select') return applyDevPreviewSelect({ holder, action, userId, wakeSubject, sandboxId: sandboxId ?? null, deps, now, lock });
+  if (action.kind === 'select') return applyDevPreviewSelect({ holder, action, actor, wakeSubject, sandboxId: sandboxId ?? null, deps, now, lock });
   // Bound once: the locked path and the contended fallback make the SAME
   // write, and only where it happens differs.
-  const writeIntent = () => writeDevPreviewIntent({ holder, action, now, userId, store: deps.previewStore });
+  const writeIntent = () => writeDevPreviewIntent({ holder, action, now, userId: actor.userId, store: deps.previewStore });
 
   // RESUME IS COMPUTE. `services.start` brings a process up inside the sprite
   // and, on a suspended sprite, is a billed wake — the same posture the proxy
@@ -499,7 +500,7 @@ export async function applyDevPreviewUserAction({
   // An APPROVE is the same kind of act — it exists to make the relay start —
   // so it is gated identically.
   if (action.kind === 'resume' || action.kind === 'approve') {
-    const wake = await deps.canRunCode({ userId, ...wakeSubject });
+    const wake = await deps.canRunCode({ actor, ...wakeSubject });
     if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   }
 
@@ -586,18 +587,18 @@ export type DevPreviewPortsResult =
  */
 export async function probeDevPreviewPorts({
   holder,
-  userId,
+  actor,
   wakeSubject,
   sandboxId,
   deps,
 }: {
   holder: DevPreviewHolderRef;
-  userId: string;
+  actor: AccessActor;
   wakeSubject: { driveId: string | null; ownerId: string };
   sandboxId: string | null;
   deps: DevPreviewUserActionDeps;
 }): Promise<DevPreviewPortsResult> {
-  const wake = await deps.canRunCode({ userId, ...wakeSubject });
+  const wake = await deps.canRunCode({ actor, ...wakeSubject });
   if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   const row = await deps.previewStore.findByHolder(holder);
   const target = row?.sandboxId ?? sandboxId;
@@ -652,7 +653,7 @@ export async function probeDevPreviewPorts({
 async function applyDevPreviewSelect({
   holder,
   action,
-  userId,
+  actor,
   wakeSubject,
   sandboxId,
   deps,
@@ -661,7 +662,7 @@ async function applyDevPreviewSelect({
 }: {
   holder: DevPreviewHolderRef;
   action: Extract<DevPreviewUserAction, { kind: 'select' }>;
-  userId: string;
+  actor: AccessActor;
   wakeSubject: { driveId: string | null; ownerId: string };
   sandboxId: string | null;
   deps: DevPreviewUserActionDeps;
@@ -671,7 +672,7 @@ async function applyDevPreviewSelect({
   // A SELECT is compute — it exists to start a relay, and the probe itself is
   // an exec that wakes a paused sprite. Gated exactly like resume and
   // approve, BEFORE the lock and before any exec.
-  const wake = await deps.canRunCode({ userId, ...wakeSubject });
+  const wake = await deps.canRunCode({ actor, ...wakeSubject });
   if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
 
   const probe = deps.probe ?? probeListeningPorts;
@@ -692,7 +693,7 @@ async function applyDevPreviewSelect({
     const classified = classifyDetectedDevServer({ event: { type: 'port_opened', port: action.port, ...(listener.pid !== undefined ? { pid: listener.pid } : {}) }, relay });
     if (classified.kind === 'ignored') return { ok: false, reason: 'port-refused', port: action.port, detail: classified.reason };
 
-    const row = await deps.previewStore.selectPort(holder, { port: action.port, spriteInstanceId: handle.spriteInstanceId, sandboxId: handle.sandboxId, at: now, byUserId: userId });
+    const row = await deps.previewStore.selectPort(holder, { port: action.port, spriteInstanceId: handle.spriteInstanceId, sandboxId: handle.sandboxId, at: now, byUserId: actor.userId });
     if (row === null) return { ok: false, reason: 'instance-changed' };
 
     const plan = planDevServerService({

@@ -6,7 +6,8 @@
  * A scheduled run retries it on the next tick.
  * `terminal`: it will not clear within the retry cadence — a human must add
  * credits (out_of_credits) or claim the agent (requires_funding), the account
- * itself is unusable (needs_init, which a missing users row maps to), or the
+ * itself is unusable (needs_init, which a missing users row maps to), the source
+ * refused to fund it (source_refused — a policy, not a balance), or the
  * per-user daily cap is spent (daily_cap_exceeded), which holds until the UTC
  * day rolls. Retrying that every tick would keep a bulk burst (e.g. dozens of
  * completion triggers) at the head of the due batch, starving other users'
@@ -33,6 +34,7 @@ export function classifyGateRefusal(reason: DeniedGateReason): GateRefusalKind {
     case 'out_of_credits':
     case 'requires_funding':
     case 'needs_init':
+    case 'source_refused':
       return 'terminal';
   }
 }

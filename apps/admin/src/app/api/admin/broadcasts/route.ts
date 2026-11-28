@@ -16,6 +16,7 @@ import { resolveBaseUrl } from '@pagespace/lib/services/broadcast/core';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import type { BroadcastAudienceDefinition } from '@pagespace/db/schema/email-broadcasts';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * POST /api/admin/broadcasts — create a broadcast (dry-run or live).
@@ -174,7 +175,7 @@ export const POST = withAdminAuth(async (admin, request) => {
     // broadcast already exists — same outcome, id unknown).
     let jobId: string | null;
     try {
-      ({ jobId } = await enqueueBroadcast({ broadcastId: broadcast.id, callerUserId: admin.id }));
+      ({ jobId } = await enqueueBroadcast({ broadcastId: broadcast.id, caller: credentialActor(admin.id, admin.authentication) }));
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
 

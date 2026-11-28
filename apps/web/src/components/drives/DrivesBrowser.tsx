@@ -28,6 +28,7 @@ import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import CreateDriveDialog from "@/components/layout/left-sidebar/CreateDriveDialog";
 import { DriveContextMenu } from "./DriveContextMenu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { LockedOrgDrives } from "./LockedOrgDrives";
 
 type ViewMode = "grid" | "list";
 type SortKey = "name" | "role" | "lastAccessedAt" | "createdAt";
@@ -325,6 +326,8 @@ export default function DrivesBrowser() {
             </Button>
           </div>
         </div>
+
+        <LockedOrgDrives />
 
         {noActiveDrives ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">

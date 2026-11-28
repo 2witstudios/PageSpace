@@ -255,6 +255,7 @@ describe('useCapacitor', () => {
           nativeAuth: false,
           push: false,
           badge: false,
+          storeKit: false,
         });
       });
     });
@@ -277,6 +278,7 @@ describe('useCapacitor', () => {
         nativeAuth: true,
         push: true,
         badge: true,
+        storeKit: true,
       });
     });
 
@@ -297,6 +299,7 @@ describe('useCapacitor', () => {
         nativeAuth: true,
         push: true,
         badge: true,
+        storeKit: false,
       });
     });
 
@@ -339,6 +342,7 @@ describe('useCapacitor', () => {
         nativeAuth: false,
         push: false,
         badge: false,
+        storeKit: false,
       });
     });
   });

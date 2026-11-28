@@ -28,8 +28,11 @@ import {
   isServerError,
   isTimeoutError,
   isValidationError,
+  orgSignInRequirementOf,
   type Operation,
 } from '@pagespace/sdk';
+import { orgSignInHint } from '../format-error.js';
+import type { CredentialKind } from '../auth/credential-kind.js';
 
 export interface McpJsonSchema {
   readonly type: 'object';
@@ -125,7 +128,12 @@ export function formatSuccessResult(output: unknown): McpCallResult {
  * anything (the old api.js body/token stderr-logging pattern this phase's
  * law bans).
  */
-export function formatSdkErrorResult(op: Operation, error: unknown): McpCallResult {
+export function formatSdkErrorResult(op: Operation, error: unknown, credentialKind?: CredentialKind): McpCallResult {
+  // D-OW-45: an organization's sign-in policy refused the credential. Name the code and the fix.
+  const signIn = orgSignInRequirementOf(error);
+  if (signIn) {
+    return textResult(`Refused by an organization's sign-in policy for "${op.name}" (${signIn}). ${orgSignInHint(signIn, credentialKind)}`, true);
+  }
   if (isPermissionDeniedError(error)) {
     const scope = op.requiredScope ? ` Requires "${op.requiredScope}" scope.` : '';
     return textResult(`Permission denied for "${op.name}".${scope}`, true);

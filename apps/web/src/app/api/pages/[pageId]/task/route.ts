@@ -6,6 +6,7 @@ import { taskLists, taskItems, taskStatusConfigs } from '@pagespace/db/schema/ta
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalViewPage } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -47,9 +48,9 @@ export async function GET(
 
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this page',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const [page] = await db

@@ -24,7 +24,8 @@ import {
 import { StatCard, PageHeader, DataState } from "@/components/admin/kit";
 import { useAdminQuery } from "@/hooks/use-admin-query";
 import { num } from "@/lib/format";
-import { isOnPrem } from "@/lib/deployment-mode";
+import { isBillingEnabled, isOnPrem } from "@/lib/deployment-mode";
+import { OrgGiftCard } from "@/components/admin/orgs/org-gift-card";
 import type { UsersListResponse } from "@/components/admin/users/types";
 
 const PAGE_SIZE = 25;
@@ -126,6 +127,8 @@ export default function AdminUsersPage() {
           </CardContent>
         </Card>
       )}
+
+      {isBillingEnabled() && <OrgGiftCard />}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative min-w-[220px] flex-1">

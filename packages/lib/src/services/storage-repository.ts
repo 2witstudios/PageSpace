@@ -4,12 +4,25 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, sql, and, inArray, desc } from '@pagespace/db/operators';
+import { eq, sql, and, inArray, desc, isNull, isNotNull, or } from '@pagespace/db/operators';
+import type { DriveBillingFacts } from '../billing/sandbox-payer';
 import { users } from '@pagespace/db/schema/auth';
 import { pages, drives, storageEvents } from '@pagespace/db/schema/core';
 import { files } from '@pagespace/db/schema/storage';
+import { subscriptions } from '@pagespace/db/schema/subscriptions';
+import { orgSubscriptions } from '@pagespace/db/schema/organizations';
 
 export type DrizzleTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** A payer's mirrored storage add-on (blocks, and paid-through grace after a decrease). */
+export interface StorageAddonRecord {
+  blocks: number;
+  graceBlocks: number;
+  graceUntil: Date | null;
+}
+
+/** Subscription statuses whose storage add-on still counts (the plan itself still applies). */
+const ADDON_ENTITLED_STATUSES = ['active', 'trialing', 'past_due'];
 
 export interface StorageUserRecord {
   id: string;
@@ -21,11 +34,62 @@ export interface StorageDriftCandidate {
   userId: string;
   /** users.storageUsedBytes — the cached counter. */
   materializedBytes: number;
-  /** SUM(files.sizeBytes) for files.createdBy = userId — the source of truth. */
+  /** SUM(files.sizeBytes) over the files billed to the user (billedToUser) — the source of truth. */
   derivedBytes: number;
 }
 
+/** Rows of one drive's stored bytes, by uploader — the re-attribution population (O-9). */
+export interface DriveFileBytes {
+  createdBy: string | null;
+  sizeBytes: number;
+}
+
+/**
+ * WAL-9, O-9: the files a person's quota counts — the payer seam "org if drives.orgId, else
+ * owner" applied to bytes. A file in one of their PERSONAL drives (no org) bills them as the
+ * drive's owner, whoever uploaded it; a drive-less file (a DM attachment) bills its uploader.
+ * Bytes in an org drive bill the org, whose usage is derived from its drives' files rows. Used
+ * as a filter on a `files` LEFT JOIN `drives`.
+ */
+const billedToUser = (userId: string) => or(
+  and(isNotNull(files.driveId), eq(drives.ownerId, userId), isNull(drives.orgId)),
+  and(isNull(files.driveId), eq(files.createdBy, userId)),
+);
+
+const STORAGE_EVENT_CHUNK = 500;
+
 export const storageRepository = {
+  /** The person's storage add-on on their live personal subscription; undefined when none. */
+  findUserStorageAddon: async (userId: string): Promise<StorageAddonRecord | undefined> => {
+    const [row] = await db
+      .select({
+        blocks: subscriptions.storageBlocks,
+        graceBlocks: subscriptions.storageGraceBlocks,
+        graceUntil: subscriptions.storageGraceUntil,
+      })
+      .from(subscriptions)
+      .where(and(eq(subscriptions.userId, userId), inArray(subscriptions.status, ADDON_ENTITLED_STATUSES)))
+      .orderBy(desc(subscriptions.updatedAt))
+      .limit(1);
+    return row;
+  },
+
+  /** The org's storage add-on on its active Business subscription; undefined when none. */
+  findOrgStorageAddon: async (orgId: string): Promise<StorageAddonRecord | undefined> => {
+    const [row] = await db
+      .select({
+        blocks: orgSubscriptions.storageBlocks,
+        graceBlocks: orgSubscriptions.storageGraceBlocks,
+        graceUntil: orgSubscriptions.storageGraceUntil,
+      })
+      .from(orgSubscriptions)
+      // Only an active org subscription grants capability (SEAT-8/9): a lapsed org keeps its
+      // files readable but its add-on bytes stop counting, so new uploads wait for payment.
+      .where(and(eq(orgSubscriptions.orgId, orgId), eq(orgSubscriptions.status, 'active')))
+      .limit(1);
+    return row;
+  },
+
   findUserForStorage: async (userId: string): Promise<StorageUserRecord | undefined> => {
     return db.query.users.findFirst({
       where: eq(users.id, userId),
@@ -70,11 +134,15 @@ export const storageRepository = {
              COALESCE(f.total, 0) AS "derivedBytes"
       FROM users u
       LEFT JOIN (
-        SELECT "createdBy", SUM("sizeBytes") AS total, MAX("createdAt") AS "lastCreatedAt"
-        FROM files
-        WHERE "createdBy" IS NOT NULL
-        GROUP BY "createdBy"
-      ) f ON f."createdBy" = u.id
+        -- WAL-9, O-9: a personal drive's bytes bill its OWNER; a drive-less attachment its
+        -- uploader; org-drive bytes bill the org, never a personal quota.
+        SELECT COALESCE(d."ownerId", fi."createdBy") AS payer, SUM(fi."sizeBytes") AS total, MAX(fi."createdAt") AS "lastCreatedAt"
+        FROM files fi
+        LEFT JOIN drives d ON d.id = fi."driveId"
+        WHERE d."orgId" IS NULL
+          AND COALESCE(d."ownerId", fi."createdBy") IS NOT NULL
+        GROUP BY COALESCE(d."ownerId", fi."createdBy")
+      ) f ON f.payer = u.id
       WHERE ABS(ROUND(u."storageUsedBytes") - COALESCE(f.total, 0)) > ${Math.max(0, Math.round(toleranceBytes))}
         AND (f."lastCreatedAt" IS NULL OR f."lastCreatedAt" < now() - make_interval(secs => ${Math.max(0, cooldownSeconds)}))
     `);
@@ -104,31 +172,38 @@ export const storageRepository = {
     const [row] = await db
       .select({ createdAt: files.createdAt })
       .from(files)
-      .where(eq(files.createdBy, userId))
+      .leftJoin(drives, eq(drives.id, files.driveId))
+      .where(billedToUser(userId))
       .orderBy(desc(files.createdAt))
       .limit(1);
     return row?.createdAt ?? null;
   },
 
+  /**
+   * The drives whose FILE pages count against the user's personal file-count limit: the ones
+   * they own that are not org drives (an org drive's files count against the org, WAL-9).
+   */
   findUserDriveIds: async (userId: string): Promise<string[]> => {
     const userDrives = await db.query.drives.findMany({
-      where: eq(drives.ownerId, userId),
+      where: and(eq(drives.ownerId, userId), isNull(drives.orgId)),
       columns: { id: true },
     });
     return userDrives.map((d: { id: string }) => d.id);
   },
 
   /**
-   * H4: the reconcile population — every `files` row the user uploaded
-   * (createdBy = userId), across all drives, including trashed-but-unpurged
-   * files (the `files` row outlives a trashed page until the reaper deletes it).
-   * Returns raw byte values; the pure `sumStorageBytes` does the integer-safe sum.
+   * H4: the reconcile population — every `files` row billed to the user (billedToUser: their
+   * personal drives' files, whoever uploaded them, and their own drive-less attachments),
+   * including trashed-but-unpurged files (the `files` row outlives a trashed page until the
+   * reaper deletes it). Returns raw byte values; the pure `sumStorageBytes` does the
+   * integer-safe sum.
    */
-  findFilesByCreator: async (userId: string): Promise<Array<{ sizeBytes: number }>> => {
+  findFilesBilledToUser: async (userId: string): Promise<Array<{ sizeBytes: number }>> => {
     const rows = await db
       .select({ sizeBytes: files.sizeBytes })
       .from(files)
-      .where(eq(files.createdBy, userId));
+      .leftJoin(drives, eq(drives.id, files.driveId))
+      .where(billedToUser(userId));
     return rows.map((r: { sizeBytes: number | string | null }) => ({
       sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
     }));
@@ -154,6 +229,56 @@ export const storageRepository = {
       )
     `);
     return result.rows.length > 0;
+  },
+
+  /** The drive's billing facts (owner, org); undefined when the drive does not exist. */
+  findDriveBillingFacts: async (driveId: string): Promise<DriveBillingFacts | undefined> => {
+    const [row] = await db.select({ ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+    return row ? { ownerId: row.ownerId, orgId: row.orgId ?? null } : undefined;
+  },
+
+  /** An org's derived storage usage: SUM(files.sizeBytes) over files in its drives (WAL-9). */
+  sumOrgFileBytes: async (orgId: string): Promise<number> => {
+    const [row] = await db
+      .select({ total: sql<string | number | null>`COALESCE(SUM(${files.sizeBytes}), 0)` })
+      .from(files)
+      .innerJoin(drives, eq(drives.id, files.driveId))
+      .where(eq(drives.orgId, orgId));
+    return Number(row?.total ?? 0);
+  },
+
+  findOrgDriveIds: async (orgId: string): Promise<string[]> => {
+    const rows = await db.select({ id: drives.id }).from(drives).where(eq(drives.orgId, orgId));
+    return rows.map((r: { id: string }) => r.id);
+  },
+
+  /** The billing facts (owner, org) of each existing drive among `driveIds` (a missing drive is absent). */
+  findDriveBillingFactsMap: async (driveIds: string[]): Promise<Map<string, DriveBillingFacts>> => {
+    if (driveIds.length === 0) return new Map();
+    const rows = await db.select({ id: drives.id, ownerId: drives.ownerId, orgId: drives.orgId }).from(drives).where(inArray(drives.id, driveIds));
+    return new Map(rows.map((r: { id: string; ownerId: string; orgId: string | null }) => [r.id, { ownerId: r.ownerId, orgId: r.orgId ?? null }]));
+  },
+
+  /** One drive's files rows, read inside the move's transaction (O-9 re-attribution). */
+  findDriveFileBytesInTx: async (tx: DrizzleTx, driveId: string): Promise<DriveFileBytes[]> => {
+    const rows = await tx
+      .select({ createdBy: files.createdBy, sizeBytes: files.sizeBytes })
+      .from(files)
+      .where(eq(files.driveId, driveId));
+    return rows.map((r: { createdBy: string | null; sizeBytes: number | string | null }) => ({
+      createdBy: r.createdBy,
+      sizeBytes: typeof r.sizeBytes === 'string' ? Number(r.sizeBytes) : (r.sizeBytes ?? 0),
+    }));
+  },
+
+  /** Insert storage events in chunks: one statement per ~500 rows stays far below 65535 binds. */
+  insertStorageEventsInTx: async (
+    tx: DrizzleTx,
+    events: Array<typeof storageEvents.$inferInsert>,
+  ): Promise<void> => {
+    for (let i = 0; i < events.length; i += STORAGE_EVENT_CHUNK) {
+      await tx.insert(storageEvents).values(events.slice(i, i + STORAGE_EVENT_CHUNK));
+    }
   },
 
   countFiles: async (driveIds: string[]): Promise<number> => {

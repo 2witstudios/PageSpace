@@ -55,6 +55,8 @@ function harness(now: Date = NOW) {
   const deps = {
     store: fake.store,
     resolvePayer,
+    getDriveOrgPolicies: async () => null,
+    admitCreator: async () => ({ allowed: true as const }),
     now: () => now,
     identity,
     mintToken: async (policy: { type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }) => {

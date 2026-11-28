@@ -1,6 +1,6 @@
 import { describe, it, vi, beforeEach, afterEach, expect } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { isRichContentEmpty, isDirty, usePageContent } from '../usePageContent';
 
 vi.mock('@/lib/auth/auth-fetch', () => ({

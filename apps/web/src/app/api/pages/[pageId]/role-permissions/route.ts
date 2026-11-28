@@ -4,6 +4,9 @@ import { z } from 'zod/v4';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { permissionManagementService, rolePermissionService } from '@/services/api';
+import { isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -15,7 +18,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   const { pageId } = await params;
 
   try {
-    const canView = await permissionManagementService.canUserViewPermissions(auth.userId, pageId);
+    const canView = await permissionManagementService.canUserViewPermissions(actorFromAuth(auth), pageId);
     if (!canView) {
       return NextResponse.json(
         { error: 'You need share permission to view role access for this page' },
@@ -53,7 +56,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ pageId: 
     const { roleId, canView, canEdit, canShare } = parsed.data;
 
     const result = await rolePermissionService.setRolePagePermission(
-      auth.userId,
+      actorFromAuth(auth),
       pageId,
       roleId,
       { canView, canEdit, canShare },
@@ -73,6 +76,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ pageId: 
 
     return NextResponse.json({ success: true });
   } catch (error) {
+    // [D-OW-33] widening a role its holders use, while the drive's org is lapsed.
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
     loggers.api.error('Error setting role permission:', error as Error);
     return NextResponse.json({ error: 'Failed to set role permission' }, { status: 500 });
   }
@@ -96,7 +101,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
     }
 
     const result = await rolePermissionService.removeRolePagePermission(
-      auth.userId,
+      actorFromAuth(auth),
       pageId,
       parsed.data.roleId,
     );

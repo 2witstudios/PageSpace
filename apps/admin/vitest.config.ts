@@ -4,6 +4,8 @@ import path from 'path';
 const repoRoot = path.resolve(__dirname, '../..');
 
 export default defineConfig({
+  // Components use the automatic JSX runtime (no `import React`), as Next compiles them.
+  esbuild: { jsx: 'automatic' },
   test: {
     globals: true,
     environment: 'node',

@@ -6,7 +6,16 @@ import {
   type ToolUIPart,
 } from 'ai';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { uploadChatAttachment, getChatAttachmentUrl, parseChatAttachmentStorageKey } from '@/lib/upload/chat-attachment-storage';
+import {
+  uploadChatAttachment,
+  getChatAttachmentUrl,
+  parseChatAttachmentStorageKey,
+  parseChatAttachmentContentHash,
+  hashAttachmentBuffer,
+  isChatAttachmentStorageKey,
+} from '@/lib/upload/chat-attachment-storage';
+import { findBlockedUploads } from '@pagespace/lib/content-safety/upload-gate';
+import { findBlockedHashes } from '@pagespace/lib/content-safety/blocklist';
 
 /** Parse a `data:<mediaType>;base64,<data>` URL into its raw bytes and media type. */
 function decodeDataUrl(dataUrl: string): { buffer: Buffer; mediaType: string } | null {
@@ -391,6 +400,40 @@ function parseStructuredContent(content: string | null | undefined): StructuredC
   }
 }
 
+/** The content hash a persisted attachment points at, from its storage key or a stored URL of ours. */
+function persistedAttachmentHash(part: PersistedFilePart): string | null {
+  const reference = part.storageKey ?? part.url;
+  return reference ? parseChatAttachmentContentHash(reference) : null;
+}
+
+/**
+ * Which of a message's persisted attachments have been taken down (their hash
+ * is on the content blocklist). One query per message, and none at all for a
+ * message with no stored attachment. A read is not an upload attempt, so
+ * nothing is audited here.
+ */
+async function findRemovedAttachmentHashes(fileParts: readonly PersistedFilePart[]): Promise<Set<string>> {
+  const hashes = fileParts.flatMap((part) => persistedAttachmentHash(part) ?? []);
+  return hashes.length === 0 ? new Set() : findBlockedHashes(hashes);
+}
+
+/**
+ * Make text that will be stored RAW in a message `content` column safe from
+ * being read back as an envelope: the reader recognises envelopes by shape
+ * alone, and anyone can type that shape. Such text is wrapped in a real
+ * envelope whose single text part is the raw string; anything else is returned
+ * unchanged. Tests with `parseStructuredContent` itself, so writer and reader
+ * cannot disagree about what counts as an envelope.
+ */
+export function neutralizeEnvelopeShapedText(text: string): string {
+  if (!parseStructuredContent(text)) return text;
+  return JSON.stringify({
+    textParts: [text],
+    partsOrder: [{ index: 0, type: 'text' }],
+    originalContent: text,
+  });
+}
+
 /**
  * Shared helper: reconstruct a UIMessage from structured content data and
  * the common fields present on both DatabaseMessage and GlobalAssistantMessage.
@@ -417,6 +460,7 @@ async function reconstructFromStructuredContent(
 
   const fileParts = structuredData.fileParts || [];
   const dataParts = structuredData.dataParts || [];
+  const removedAttachments = await findRemovedAttachmentHashes(fileParts);
 
   // Reconstruct parts in original order
   for (const partOrder of structuredData.partsOrder) {
@@ -434,6 +478,20 @@ async function reconstructFromStructuredContent(
     } else if (partOrder.type === 'file') {
       if (filePartIndex < fileParts.length) {
         const fp = fileParts[filePartIndex];
+        filePartIndex++;
+        // A key the signer would refuse (see getChatAttachmentUrl) drops this
+        // part rather than failing the whole read.
+        if (fp.storageKey && !isChatAttachmentStorageKey(fp.storageKey)) {
+          loggers.security.warn('Refused to sign chat attachment: storage key outside chat-attachments prefix', {
+            messageId: msg.id,
+            role: msg.role,
+            keyPreview: String(fp.storageKey).slice(0, 96),
+          });
+          continue;
+        }
+        // Taken down: the bytes are gone, so the part is dropped rather than
+        // handed to the client (or the model) as a dead link.
+        if (removedAttachments.has(persistedAttachmentHash(fp) ?? '')) continue;
         const url = fp.storageKey ? await getChatAttachmentUrl(fp.storageKey) : fp.url;
         parts.push({
           type: 'file',
@@ -441,7 +499,6 @@ async function reconstructFromStructuredContent(
           mediaType: fp.mediaType || 'application/octet-stream',
           filename: fp.filename,
         });
-        filePartIndex++;
       }
     } else if (partOrder.type.startsWith('tool-') && partOrder.toolCallId) {
       const toolCall = toolCallsMap.get(partOrder.toolCallId);
@@ -487,7 +544,56 @@ async function reconstructFromStructuredContent(
 }
 
 /**
- * Extract structured content data from UIMessage parts for database storage
+ * The content hash a file part would store or reference when persisted: the
+ * hash inside an echoed chat-attachment key, or the hash of a new data: URL's
+ * bytes. Null for anything else (an externally hosted URL is not our storage).
+ */
+function filePartContentHash(part: FileUIPart): string | null {
+  const echoed = parseChatAttachmentContentHash(part.url);
+  if (echoed) return echoed;
+  const decoded = decodeDataUrl(part.url);
+  return decoded ? hashAttachmentBuffer(decoded.buffer) : null;
+}
+
+/**
+ * Screen a message's file parts against the content blocklist with ONE query,
+ * before any bytes are written. Covers new uploads (data: URLs) and echoed
+ * storage keys alike — an echoed key is a client-supplied reference to stored
+ * bytes, so it gets the same check as the bytes themselves.
+ *
+ * Returns the parts with blocked file parts removed, and the blocked hashes
+ * (each already audited). The caller decides what a block means: refuse the
+ * message, or keep it without the part.
+ *
+ * Call this BEFORE opening the save transaction: it reads on the shared pool.
+ */
+export async function screenFilePartsAgainstBlocklist(
+  uiParts: UIMessage['parts'],
+  context: { userId?: string | null } = {},
+): Promise<{ parts: UIMessage['parts']; blockedHashes: string[] }> {
+  const hashByPart = new Map<UIMessage['parts'][number], string>();
+  for (const part of uiParts) {
+    if (!isFilePart(part)) continue;
+    const hash = filePartContentHash(part);
+    if (hash) hashByPart.set(part, hash);
+  }
+  if (hashByPart.size === 0) return { parts: uiParts, blockedHashes: [] };
+
+  const blocked = await findBlockedUploads([...hashByPart.values()], {
+    entryPoint: 'chat-attachment',
+    userId: context.userId ?? undefined, // null = no user in scope (system write)
+  });
+  if (blocked.size === 0) return { parts: uiParts, blockedHashes: [] };
+
+  return {
+    parts: uiParts.filter((part) => !blocked.has(hashByPart.get(part) ?? '')),
+    blockedHashes: [...blocked],
+  };
+}
+
+/**
+ * Extract structured content data from UIMessage parts for database storage.
+ * Callers screen the parts with `screenFilePartsAgainstBlocklist` first.
  */
 export async function extractStructuredContentFromParts(uiParts: UIMessage['parts'], originalContent: string): Promise<string> {
   const textParts = uiParts

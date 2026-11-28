@@ -64,8 +64,43 @@ const SPEC = path.join(repoRoot(), 'docs/2.0-architecture/agent-sessions.md');
  * The epilogue (stream construction, `onFinish`, terminal persist, hold
  * settle, telemetry) is where most of it lives and is the extraction that
  * would pay first; see the entry's docblock.
+ *
+ * 158 → 161 (lane ow-c3, wallet-aware gate): the turn's credit state (wallet, source,
+ * funding tier) was EXTRACTED to `turn-credit.ts` rather than copied into both turns;
+ * the three new identical lines are the two imports of that shared module and the one
+ * declaration of its value, which any extraction shared by both files adds.
+ *
+ * 161 → 160 (lane ow-fix-2720): the global turn's spend-target import now also names
+ * PERSONAL_SPEND (its spend drive comes only from the server-resolved contextRef), so that
+ * import line is no longer identical to the page turn's.
+ *
+ * 160 → 159 (D-OW-42 final cutover): the turns' personal-tier reads (gate tier and
+ * deployment capability) moved into `personalTurnTiers` in `turn-credit.ts`, replacing the
+ * identical subscription-tier type import each turn carried.
+ *
+ * 159 → 160 (spend-gate, SPEND-8 cutover): the global turn no longer names PERSONAL_SPEND (a
+ * turn with no server-resolved drive has no drive, so conversationSpend covers it), which makes
+ * its spend-target import byte-identical to the page turn's again — the 161 → 160 step undone.
+ * Both turns need that one import; there is nothing to extract.
+ *
+ * 160 → 161 (POL-8 tool boundary): both turns hand their tools the model they resolved
+ * through the shared `toolModelContext` (tool-model-context.ts) rather than a copied pair;
+ * the one new identical line is that shared module's import.
+ *
+ * 161 → 163 (POL-8 command pages): both turns judge their command chips against the
+ * model they resolved through the shared `commandsForModel` (command-model-policy.ts);
+ * the two new identical lines are its import and its one call.
+ * 163 → 153 (assistant-surface extraction): master's Imago work extracted the
+ * assistant context/tool assembly the Global Assistant shared with Imago into
+ * `assistant-surface.ts`; ten formerly duplicated lines now have one home.
+ *
+ * 153 → 154 (content-safety PR 1, re-upload block): a blocklisted chat attachment is refused
+ * at the user-message save. That mapping was EXTRACTED to `user-message-save-refusal.ts`
+ * together with the deleted-conversation 404 both turns already copied, so one identical
+ * line (the `instanceof` branch) left and two arrived: the shared module's import and its
+ * one call.
  */
-const RECORDED_IDENTICAL_LINES = 158;
+const RECORDED_IDENTICAL_LINES = 154;
 
 /** Substantive lines: no blanks, no comments, trimmed. */
 const substantiveLines = (file: string): string[] =>

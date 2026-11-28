@@ -89,6 +89,33 @@ describe('resolveSigninNext', () => {
     });
   });
 
+  describe('imago return paths (IMG-1.9)', () => {
+    it('returns the user to the /imago path carried on next=', () => {
+      expect(
+        resolveSigninNext({ paramNext: '/imago/drv_abc/files/pg_xyz', browserPath: '/auth/signin' }),
+      ).toBe('/imago/drv_abc/files/pg_xyz');
+    });
+
+    it('round-trips an /imago path through buildSigninRoute', () => {
+      const route = buildSigninRoute('/imago/drv_abc/tasks?filter=open');
+      expect(route).toBe('/auth/signin?next=%2Fimago%2Fdrv_abc%2Ftasks%3Ffilter%3Dopen');
+
+      const params = new URL(route, 'https://pagespace.invalid').searchParams;
+      expect(resolveSigninNext({ paramNext: params.get('next'), browserPath: route })).toBe(
+        '/imago/drv_abc/tasks?filter=open',
+      );
+    });
+
+    it.each([
+      ['look-alike prefix', '/imagoevil'],
+      ['look-alike host-shaped segment', '/imago.evil.com'],
+      ['absolute URL with an /imago path', 'https://evil.example/imago'],
+      ['protocol-relative URL with an /imago path', '//evil.example/imago'],
+    ])('drops a %s supplied via next=', (_label, path) => {
+      expect(resolveSigninNext({ paramNext: path, browserPath: '/auth/signin' })).toBeUndefined();
+    });
+  });
+
   describe('open-redirect safety', () => {
     it.each([
       ['absolute off-origin URL', 'https://evil.example/x'],

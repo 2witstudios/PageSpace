@@ -71,8 +71,15 @@ export interface ClaimConversationInSessionDeps<Tx = unknown> {
   findWorkspaceOfConversation: (conversationId: string) => Promise<string | null>;
   /** The agent page's drive, or null when the page is missing/trashed/not an agent. */
   findAgentDriveId: (agentPageId: string) => Promise<string | null>;
-  /** The target workspace's drive and liveness, or null when the workspace is missing. */
-  findSession: (workspaceId: string) => Promise<{ driveId: string | null; endedAt: Date | null } | null>;
+  /**
+   * The target workspace's drive and liveness, or null when the workspace is
+   * missing. `hostsAgentsFromAnyDrive` is `sessionHostsAgentsFromAnyDrive` for
+   * this row: true for a global-assistant session (null drive, or its owner's
+   * own Home drive), which is exempt from the cross-drive rule.
+   */
+  findSession: (
+    workspaceId: string,
+  ) => Promise<{ driveId: string | null; endedAt: Date | null; hostsAgentsFromAnyDrive: boolean } | null>;
   /**
    * THE MEMBERSHIP WRITE — mint the node that makes this thread a member,
    * inside the workspace's own locked transaction.
@@ -150,10 +157,10 @@ export async function claimConversationInSessionWith<Tx>(
     if (row.contextId === null) return 'not_found';
     const agentDriveId = await deps.findAgentDriveId(row.contextId);
     if (agentDriveId === null) return 'not_found';
-    // A GLOBAL session (driveId null) is exempt — see
-    // `AgentNotInSessionDriveError`'s doc comment in the create module for
+    // A GLOBAL session (null drive, or its owner's own Home drive) is exempt —
+    // see `AgentNotInSessionDriveError`'s doc comment in the create module for
     // the full rationale; the same exemption applies here.
-    if (sessionRow.driveId !== null && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
+    if (!sessionRow.hostsAgentsFromAnyDrive && sessionRow.driveId !== agentDriveId) return 'cross_drive_denied';
   }
 
   const admitted = await deps.admitConversation({

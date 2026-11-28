@@ -6,6 +6,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 interface PageProps {
   params: Promise<{ pageId: string }>;
@@ -57,7 +58,7 @@ export default async function PageRedirect({ params, searchParams }: PageProps) 
   }
 
   // Check user has access to the page
-  const accessLevel = await getUserAccessLevel(userId, pageId);
+  const accessLevel = await getUserAccessLevel(credentialActor(userId, session.authentication), pageId);
   if (!accessLevel) {
     notFound();
   }

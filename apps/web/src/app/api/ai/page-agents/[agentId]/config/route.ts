@@ -10,8 +10,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { applyPageMutation, orgModelPolicyErrorResponse, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
@@ -68,6 +69,8 @@ export async function PUT(
       return auth.error;
     }
     const { userId } = auth;
+    // Read once, up front: whether a drive-scoped MCP token is calling decides which tools it may enable.
+    const mcpScoped = isScopedMCPAuth(auth);
 
     const { agentId } = await context.params;
     const body = await request.json();
@@ -113,10 +116,10 @@ export async function PUT(
     const canEdit = await canPrincipalEditPage(auth, agentId);
     if (!canEdit) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'page_agent', resourceId: agentId, details: { reason: 'no_edit_permission', method: 'PUT' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to update this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     const parsedEnabledTools = parseEnabledToolsInput(enabledTools);
@@ -136,7 +139,7 @@ export async function PUT(
     // newly enable an account-level-only tool (e.g. create_drive) — mirrors
     // the runtime chat/consult tool-list filtering.
     if (Array.isArray(requestedEnabledTools.sanitized) && requestedEnabledTools.sanitized.length > 0) {
-      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth)));
+      const availableToolNames = Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped));
       const invalidTools = requestedEnabledTools.sanitized.filter(
         (toolName: string) => !availableToolNames.includes(toolName)
       );
@@ -262,6 +265,9 @@ export async function PUT(
       });
       updatedAgent = { ...agent, ...updateData };
     } catch (error) {
+      // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+      const refused = orgModelPolicyErrorResponse(error);
+      if (refused) return NextResponse.json(refused.body, { status: refused.status });
       if (error instanceof PageRevisionMismatchError) {
         return NextResponse.json(
           {
@@ -286,7 +292,7 @@ export async function PUT(
       enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
       sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
-      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, mcpScoped)),
     });
     const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 

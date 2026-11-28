@@ -11,7 +11,7 @@
  * drive-level workspace, so the bill lands on the DRIVE's owner (`driveId`
  * set), or on the session's own `ownerId` for a user-scoped global-assistant
  * session (`driveId` null) — the payer of last resort, with no lookup at all
- * (mirrors `resolveSessionPayerId` in `billing/sandbox-payer.ts`, which
+ * (mirrors `resolveSessionPayer` in `billing/sandbox-payer.ts`, which
  * applies the same rule at charge time — both the runtime and storage charge
  * streams bill one payer for one session — with one deliberate difference: it
  * falls back to the session owner on a failed drive lookup, where the storage
@@ -32,7 +32,7 @@ export interface StorageSubject {
  * Who ultimately gets billed for a subject's storage. A drive-scoped session
  * bills its drive's owner; a global-assistant session (null `driveId`) has no
  * drive, so billing falls straight through to its `ownerId` with no lookup at
- * all (mirrors `resolveSessionPayerId` in `billing/sandbox-payer.ts`, which
+ * all (mirrors `resolveSessionPayer` in `billing/sandbox-payer.ts`, which
  * the storage reconcile's IO composition uses for the `ownerId` case, and
  * which the runtime billing seam now uses for the SAME session-level rule).
  */

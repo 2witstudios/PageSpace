@@ -16,6 +16,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 interface SearchResult {
   id: string;
@@ -346,7 +347,7 @@ export async function GET(request: Request) {
 
       // Batch check permissions for all pages at once (eliminates N+1 queries)
       const pageIds = pageResults.map(page => page.id);
-      const permissionsMap = await getBatchPagePermissions(user.id, pageIds);
+      const permissionsMap = await getBatchPagePermissions(actorFromVerifiedUser(user), pageIds);
 
       // One query for every visible sheet's excerpt, not one per sheet.
       //

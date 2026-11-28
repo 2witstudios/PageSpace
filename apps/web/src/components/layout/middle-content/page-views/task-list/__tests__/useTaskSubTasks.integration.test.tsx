@@ -22,7 +22,7 @@
  */
 import React from 'react';
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import { db } from '@pagespace/db/db';

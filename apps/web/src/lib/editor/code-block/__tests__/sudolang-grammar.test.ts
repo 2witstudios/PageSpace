@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { createHighlighter, type Highlighter, type BundledLanguage } from 'shiki';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { sudolangGrammar } from '../sudolang-grammar';
 
 let highlighter: Highlighter;

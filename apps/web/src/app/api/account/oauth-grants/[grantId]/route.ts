@@ -48,7 +48,7 @@ export async function DELETE(req: NextRequest, context: { params: Promise<{ gran
       missingReason: 'oauth_grant_revoke_missing_step_up',
       invalidReason: 'oauth_grant_revoke_step_up_invalid',
     });
-    if (stepUpRejection) return stepUpRejection;
+    if ('error' in stepUpRejection) return stepUpRejection.error;
 
     const grant = await findOAuthGrantById(grantId);
     if (!isGrantOwnedByUser(grant, userId)) {

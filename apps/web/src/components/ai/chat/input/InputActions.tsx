@@ -35,6 +35,12 @@ export interface InputActionsProps {
   queuedCount?: number;
   /** The queue is at its cap — the affordance says so rather than going silently inert. */
   isQueueFull?: boolean;
+  /**
+   * Compact (sidebar) mode: 32px buttons, and the queue button only appears once there is
+   * something to queue (or the queue is full), so the idle toolbar stays a single button. It must
+   * stay reachable: on phones Enter inserts a newline, so this button is the only way to queue.
+   */
+  compact?: boolean;
   /** Additional class names */
   className?: string;
 }
@@ -60,19 +66,22 @@ export function InputActions({
   canQueue = false,
   queuedCount = 0,
   isQueueFull = false,
+  compact = false,
   className,
 }: InputActionsProps) {
   const shouldReduceMotion = useReducedMotion();
+  const size = compact ? 'h-8 w-8' : 'h-9 w-9';
 
   const queueSendButton =
-    isStreaming && onQueueSend ? (
+    isStreaming && onQueueSend && (!compact || canQueue || isQueueFull) ? (
       <button
         type="button"
         data-testid="chat-queue-send"
         onClick={onQueueSend}
         disabled={!canQueue}
         className={cn(
-          'group relative flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50',
+          'group relative flex items-center justify-center shrink-0 rounded-full disabled:opacity-50',
+          size,
           'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground',
         )}
         title={
@@ -122,7 +131,7 @@ export function InputActions({
         aria-busy={isStopping}
         variant="destructive"
         size="icon"
-        className="h-9 w-9 shrink-0 aria-disabled:cursor-not-allowed"
+        className={cn(size, 'shrink-0 aria-disabled:cursor-not-allowed', compact && 'rounded-full')}
         title={isStopping ? 'Stopping…' : 'Stop generating'}
         aria-label={isStopping ? 'Stopping' : 'Stop generating'}
       >
@@ -140,7 +149,8 @@ export function InputActions({
       onClick={onSend}
       disabled={disabled}
       className={cn(
-        "group flex items-center justify-center h-9 w-9 shrink-0 rounded-full disabled:opacity-50",
+        'group flex items-center justify-center shrink-0 rounded-full disabled:opacity-50',
+        size,
         // Primary blue in light mode, muted in dark mode (consistent across variants)
         'bg-primary text-primary-foreground dark:bg-muted dark:text-muted-foreground'
       )}

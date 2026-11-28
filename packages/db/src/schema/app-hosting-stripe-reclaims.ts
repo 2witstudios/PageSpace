@@ -40,6 +40,15 @@ export const appHostingStripeReclaims = pgTable('app_hosting_stripe_reclaims', {
    */
   publishedAppId: text('publishedAppId'),
 
+  /**
+   * HOW the subscription stops. `now` (the default): the app was destroyed, so nobody should
+   * keep paying for it — cancel immediately. `period_end` (WAL-9, D-OW-64): the app's drive left
+   * the org that pays for its dedicated hosting, so the org stops paying at the end of the period
+   * it has already paid for, never beyond it. A later `now` for the same subscription (the app is
+   * destroyed meanwhile) overrides a pending `period_end`, never the other way round.
+   */
+  cancelAt: text('cancelAt').default('now').notNull(),
+
   /** When the pointer was rescued — i.e. when its `published_apps` row was deleted. */
   recordedAt: timestamp('recordedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 
@@ -53,6 +62,7 @@ export const appHostingStripeReclaims = pgTable('app_hosting_stripe_reclaims', {
   // The cron drains oldest-first, so it can be capped without starving a row.
   recordedAtIdx: index('app_hosting_stripe_reclaims_recorded_at_idx').on(table.recordedAt),
   attemptsNonNeg: check('app_hosting_stripe_reclaims_attempts_nonneg', sql`${table.attempts} >= 0`),
+  cancelAtKnown: check('app_hosting_stripe_reclaims_cancel_at_known', sql`${table.cancelAt} IN ('now', 'period_end')`),
 }));
 
 export type AppHostingStripeReclaim = typeof appHostingStripeReclaims.$inferSelect;

@@ -1,3 +1,5 @@
+import { filterResourcesForActor } from '@pagespace/lib/permissions/actor-authentication';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
@@ -7,6 +9,7 @@ import {
   authenticateRequestWithOptions,
   isAuthError,
   getAllowedDriveIds,
+  isPrincipalDriveMember,
 } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
@@ -33,6 +36,13 @@ export async function POST(request: Request): Promise<Response> {
   const result = buildCreateConversationPayload(rawBody, authResult.userId, allowedDriveIds, id);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: result.status });
+  }
+  // A thread's drive is the session its calls spend in and are attributed to (SPEND-7), so the
+  // caller must be a member of it — never just any id an unscoped token names (D-OW-64).
+  if (result.data.contextId !== null && !(await isPrincipalDriveMember(authResult, result.data.contextId))) {
+    auditRequest(request, { eventType: 'authz.access.denied', userId: authResult.userId, resourceType: 'drive', resourceId: result.data.contextId, details: { reason: 'thread_drive_denied', action: 'create_conversation' }, riskScore: 0.5 });
+    // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+    return deniedResponse(actorFromAuth(authResult), result.data.contextId, NextResponse.json({ error: 'drive_id names a drive you cannot use' }, { status: 403 }));
   }
 
   // Through the repository, so this creator emits its lifecycle event like the
@@ -94,11 +104,18 @@ export async function GET(request: Request): Promise<Response> {
     .limit(limit)
     .offset(offset);
 
+  // SEC-2/3 (D-OW-45): a page or drive conversation is that org's content, so one whose org's sign-in policy refuses
+  // this credential is not listed (its title and drive are org content too).
+  const actor = actorFromAuth(authResult);
+  const contextIds = rows.flatMap((row) => (row.type !== 'global' && row.contextId ? [row.contextId] : []));
+  const reachable = await filterResourcesForActor(actor, contextIds);
+  const listed = rows.filter((row) => row.type === 'global' || !row.contextId || reachable.has(row.contextId));
+
   auditRequest(request, { eventType: 'data.read', userId: authResult.userId, resourceType: 'conversation', resourceId: 'list', details: { driveId: queryResult.data.driveId }, riskScore: 0 });
 
   return NextResponse.json({
     object: 'list',
-    data: rows.map((row) => ({
+    data: listed.map((row) => ({
       id: row.id,
       object: 'conversation',
       created_at: Math.floor(row.createdAt.getTime() / 1000),

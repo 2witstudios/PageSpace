@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
 }));
 
@@ -48,6 +49,11 @@ vi.mock('@/lib/canvas/file-view-token', async () => {
   };
 });
 
+const mockIsHashBlocked = vi.fn().mockResolvedValue(false);
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 import { GET } from '../route';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
@@ -61,6 +67,7 @@ const params = (driveId = 'drive-1', pageId = 'file-1') =>
 describe('GET /dashboard/[driveId]/[pageId]/view', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsHashBlocked.mockResolvedValue(false);
     vi.mocked(verifyAuth).mockResolvedValue({ id: 'user-1' } as never);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
     vi.mocked(db.query.pages.findFirst).mockResolvedValue({
@@ -82,7 +89,7 @@ describe('GET /dashboard/[driveId]/[pageId]/view', () => {
 
     expect(response.status).toBe(307);
     expect(response.headers.get('location')).toBe('https://files.example.com/signed-file-url');
-    expect(canUserViewPage).toHaveBeenCalledWith('user-1', 'file-1');
+    expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'file-1');
     expect(generatePresignedUrl).toHaveBeenCalledWith(
       'a'.repeat(64),
       'original',
@@ -250,5 +257,40 @@ describe('GET /dashboard/[driveId]/[pageId]/view', () => {
       undefined,
       'image/png',
     );
+  });
+
+  it('given a file whose hash was taken down, should answer a neutral 410 instead of redirecting to a dead link', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    const request = new Request('https://pagespace.ai/dashboard/drive-1/file-1/view');
+
+    const response = await GET(request, { params: params() });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ error: 'This file has been removed' });
+    expect(mockIsHashBlocked).toHaveBeenCalledWith('a'.repeat(64));
+    expect(generatePresignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('given a taken-down file and a valid canvas view token, should still answer 410', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    vi.mocked(verifyAuth).mockResolvedValue(null as never);
+    vi.mocked(verifyCanvasFileViewToken).mockReturnValue(true);
+    const request = new Request('https://pagespace.ai/dashboard/drive-1/file-1/view?token=t');
+
+    const response = await GET(request, { params: params() });
+
+    expect(response.status).toBe(410);
+    expect(generatePresignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('given a taken-down file and a viewer with no access, should answer 403 and not consult the blocklist', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    vi.mocked(canUserViewPage).mockResolvedValue(false);
+    const request = new Request('https://pagespace.ai/dashboard/drive-1/file-1/view');
+
+    const response = await GET(request, { params: params() });
+
+    expect(response.status).toBe(403);
+    expect(mockIsHashBlocked).not.toHaveBeenCalled();
   });
 });

@@ -48,6 +48,7 @@ function fakeMeter(): CallMeter & { stops: MeterStopReason[] } {
     }),
     billedDollars: 0,
     stopped: false,
+    spend: { kind: 'personal' },
   };
 }
 
@@ -75,6 +76,7 @@ function deps(overrides: Partial<AttachHandlerDeps> = {}): AttachHandlerDeps {
     startMeter: vi.fn(async (_options: CallMeterOptions) => ({
       ok: true as const,
       meter: fakeMeter(),
+      spendFallback: null,
     })),
     startRuntime: vi.fn(
       (_options: VoiceCallRuntimeOptions): VoiceCallRuntime => ({ stop: vi.fn(async () => {}) }),
@@ -92,8 +94,15 @@ describe('handleRealtimeAttachRequest — admission', () => {
     const result = await handleRealtimeAttachRequest(d, JSON.stringify(VALID));
 
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ success: true, callId: VALID.callId });
+    expect(result.body).toEqual({ success: true, callId: VALID.callId, spendFallback: null });
     expect(d.registry.get(VALID.callId)?.userId).toBe('u1');
+  });
+
+  it('SPEND-4 (partial) a call whose opening gate fell back answers the attach with the fallback, from and to', async () => {
+    const spendFallback = { from: 'drive_wallet', to: 'own_credits', walletId: 'w-own' } as const;
+    const d = deps({ startMeter: vi.fn(async () => ({ ok: true as const, meter: fakeMeter(), spendFallback })) });
+    const result = await handleRealtimeAttachRequest(d, JSON.stringify(VALID));
+    expect(result.body).toEqual({ success: true, callId: VALID.callId, spendFallback });
   });
 
   it('given a valid payload, should pass the secret and tools straight through to the attach', async () => {
@@ -481,6 +490,7 @@ describe('handleRealtimeAttachRequest — metering and the runtime', () => {
     const startMeter = vi.fn(async (_options: CallMeterOptions) => ({
       ok: true as const,
       meter: fakeMeter(),
+      spendFallback: null,
     }));
 
     await handleRealtimeAttachRequest(
@@ -499,11 +509,29 @@ describe('handleRealtimeAttachRequest — metering and the runtime', () => {
     );
   });
 
+  it('SPEND-1 (partial) given the drive the web tier resolved for the bound conversation, should meter on that drive\'s conversation target', async () => {
+    const startMeter = vi.fn(async (_options: CallMeterOptions) => ({ ok: true as const, meter: fakeMeter(), spendFallback: null }));
+
+    await handleRealtimeAttachRequest(deps({ startMeter }), JSON.stringify({ ...VALID, spendDriveId: 'drive-1' }));
+
+    expect(startMeter).toHaveBeenCalledWith(
+      expect.objectContaining({ spend: { kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv1' } }),
+    );
+  });
+
+  it('SPEND-8 (partial) given no drive, should meter on the caller\'s personal credits', async () => {
+    const startMeter = vi.fn(async (_options: CallMeterOptions) => ({ ok: true as const, meter: fakeMeter(), spendFallback: null }));
+
+    await handleRealtimeAttachRequest(deps({ startMeter }), JSON.stringify(VALID));
+
+    expect(startMeter).toHaveBeenCalledWith(expect.objectContaining({ spend: { kind: 'personal' } }));
+  });
+
   it('given the attach fails AFTER the hold was taken, should stop the meter so the hold is released', async () => {
     const meter = fakeMeter();
     const result = await handleRealtimeAttachRequest(
       deps({
-        startMeter: vi.fn(async () => ({ ok: true as const, meter })),
+        startMeter: vi.fn(async () => ({ ok: true as const, meter, spendFallback: null })),
         attach: vi.fn(async () => {
           throw new RealtimeAttachError('socket_error', 'nope');
         }),
@@ -547,7 +575,7 @@ describe('handleRealtimeAttachRequest — metering and the runtime', () => {
       deps({
         startMeter: vi.fn(async (options: CallMeterOptions) => {
           onLimit = options.onLimit;
-          return { ok: true as const, meter: fakeMeter() };
+          return { ok: true as const, meter: fakeMeter(), spendFallback: null };
         }),
         startRuntime: vi.fn(() => ({ stop })),
       }),

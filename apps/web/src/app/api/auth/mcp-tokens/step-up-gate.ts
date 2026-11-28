@@ -1,3 +1,4 @@
+import type { VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextRequest, NextResponse } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { consumeStepUpGrant } from '@pagespace/lib/auth/step-up-service';
@@ -28,17 +29,17 @@ export async function requireStepUpGrant({
   actionBinding,
   missingReason,
   invalidReason,
-}: RequireStepUpGrantParams): Promise<NextResponse | null> {
+}: RequireStepUpGrantParams): Promise<{ error: NextResponse } | { authentication: VerifiedAuthentication }> {
   if (!stepUpToken) {
     auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: missingReason } });
-    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    return { error: NextResponse.json({ error: 'step_up_required' }, { status: 401 }) };
   }
 
   const stepUpResult = await consumeStepUpGrant({ userId, token: stepUpToken, actionBinding });
   if (!stepUpResult.ok) {
     auditRequest(req, { eventType: 'authz.access.denied', userId, details: { reason: invalidReason } });
-    return NextResponse.json({ error: 'step_up_required' }, { status: 401 });
+    return { error: NextResponse.json({ error: 'step_up_required' }, { status: 401 }) };
   }
 
-  return null;
+  return { authentication: stepUpResult.authentication };
 }

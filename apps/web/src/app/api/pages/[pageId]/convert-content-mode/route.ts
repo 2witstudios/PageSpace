@@ -1,9 +1,10 @@
+import { canPrincipalEditPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core';
-import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
+
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -12,6 +13,7 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import TurndownService from 'turndown';
 import { marked } from 'marked';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,12 +35,12 @@ export async function POST(
     const { targetMode } = convertSchema.parse(body);
 
     // Check permissions
-    const canEdit = await canUserEditPage(userId, pageId);
+    const canEdit = await canPrincipalEditPage(auth, pageId);
     if (!canEdit) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json(
         { error: 'You need edit permission to convert this page' },
         { status: 403 }
-      );
+      ));
     }
 
     // Fetch current page
@@ -91,7 +93,7 @@ export async function POST(
     }
 
     // Atomic update: content + contentMode
-    await applyPageMutation({
+    const mutation = await applyPageMutation({
       pageId: page.id,
       operation: 'update',
       updates: {
@@ -110,18 +112,14 @@ export async function POST(
       })
     );
 
-    // Refetch updated page
-    const updatedPage = await db.query.pages.findFirst({
-      where: eq(pages.id, pageId),
-    });
-
     auditRequest(request, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { operation: 'convert_content_mode' } });
 
     return NextResponse.json({
       success: true,
-      content: updatedPage?.content,
-      contentMode: updatedPage?.contentMode,
-      revision: updatedPage?.revision,
+      content: convertedContent,
+      contentMode: targetMode,
+      revision: mutation.nextRevision,
+      contentRevision: mutation.nextContentRevision,
     });
   } catch (error) {
     loggers.api.error('Error converting page content mode:', error as Error);

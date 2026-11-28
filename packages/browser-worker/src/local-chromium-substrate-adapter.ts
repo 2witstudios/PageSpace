@@ -13,9 +13,10 @@
  * server secret reaches the process that renders untrusted pages.
  */
 import { spawn } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
-import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.js';
+import type { BrowserSessionShape, BrowserSessionSpec, BrowserSubstrate, ProvisionedBrowserSession, WorkerRequest, WorkerResponse } from './browser-substrate.ts';
 
 export type LocalWorkerProcess = {
   readonly url: string;
@@ -25,7 +26,7 @@ export type LocalWorkerProcess = {
 export type LocalChromiumSubstrateOptions = {
   /** Starts one worker for a session. Defaults to spawning the built entry point. */
   readonly launch?: (spec: BrowserSessionSpec) => Promise<LocalWorkerProcess>;
-  /** Path of `standalone-browser-worker.js`; defaults to the sibling in this package's dist. */
+  /** Path of `standalone-browser-worker.js`; defaults to `defaultWorkerEntry()`. */
   readonly entryPath?: string;
   /** The Chromium executable the workers launch; `undefined` uses Playwright's own browser cache. */
   readonly executablePath?: string;
@@ -90,9 +91,19 @@ const sendTo = async (baseUrl: string, request: WorkerRequest): Promise<WorkerRe
   return { status: response.status, body: await response.text() };
 };
 
+/**
+ * The compiled worker beside this module. It exists only where this module is
+ * the Node-run dist; a caller that bundles the source (any `next dev`) finds
+ * no worker here and must pass `entryPath`. Joined at runtime, not
+ * `new URL('./…', import.meta.url)`: bundlers treat that form as an asset to
+ * resolve and emit.
+ */
+export const defaultWorkerEntry = (): string =>
+  join(dirname(fileURLToPath(import.meta.url)), 'standalone-browser-worker.js');
+
 export const createLocalChromiumSubstrate = ({
   launch,
-  entryPath = fileURLToPath(new URL('./standalone-browser-worker.js', import.meta.url)),
+  entryPath = defaultWorkerEntry(),
   executablePath,
   shape = { cpus: 1, memoryGB: 1 },
   clock = Date.now,

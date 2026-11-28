@@ -181,7 +181,7 @@ export async function runBackfill({
             // their erasure sticks rather than lying in wait for a later run.
             const updated = await tx
               .update(pages)
-              .set({ content, contentMode: 'markdown', updatedAt: new Date() })
+              .set({ content, contentMode: 'markdown', contentRevision: 1, updatedAt: new Date() })
               .where(
                 and(
                   eq(pages.id, pageIdFor[field]),

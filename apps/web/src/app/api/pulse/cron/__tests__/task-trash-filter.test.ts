@@ -65,8 +65,18 @@ vi.mock('ai', () => ({
 
 vi.mock('../../calendar-context', () => ({
   fetchCalendarContext: vi.fn().mockResolvedValue({
-    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [],
+    happeningNow: [], upcomingToday: [], tomorrow: [], pendingInvites: [], allEvents: [], sourceDriveIds: [],
   }),
+  pulseSourceOrgIds: vi.fn(async () => []),
+}));
+
+// The one member-drive set (org-aware).
+// POL-8: the scope the digest's model may read. Default: all of it (no org restricts the model).
+vi.mock('@/lib/ai/core/org-model-policy', () => ({
+  scopeReadableByModel: vi.fn(async (_use: unknown, scope: { driveIds: readonly string[]; pageIds?: readonly string[] }) => ({ driveIds: [...scope.driveIds], pageIds: [...(scope.pageIds ?? [])] })),
+}));
+vi.mock('@pagespace/lib/permissions/member-drives', () => ({
+  getMemberDriveIds: vi.fn(async () => []),
 }));
 
 vi.mock('@pagespace/lib/permissions/accessible-page-ids', () => ({

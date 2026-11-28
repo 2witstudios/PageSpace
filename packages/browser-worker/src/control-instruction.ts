@@ -19,7 +19,7 @@
  * public half, so a compromised worker cannot mint instructions for another
  * session.
  */
-import type { BrowserOperation } from './browser-operation.js';
+import type { BrowserOperation } from './browser-operation.ts';
 
 export const CONTROL_INSTRUCTION_VERSION = 1;
 export const CONTROL_INSTRUCTION_AUDIENCE = 'pagespace-browser-worker';

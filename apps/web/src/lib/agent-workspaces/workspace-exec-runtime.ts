@@ -14,7 +14,8 @@ import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
 import {
   runBashInSandbox,
   type BashToolResult,
@@ -22,6 +23,8 @@ import {
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { AgentSessionRecord } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
 import { buildRealSandboxRunDeps, productionSandboxGate } from '@/lib/ai/tools/sandbox-tools-runtime';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** The opaque conversation scope key an exec run carries (it has no chat conversation). */
 const workspaceExecScopeKey = (workspaceId: string): string => `workspace-exec:${workspaceId}`;
@@ -38,7 +41,7 @@ export async function resolveWorkspaceExecActorContext(
 ): Promise<SandboxActorContext | { error: string }> {
   const [drive, actorInfo] = await Promise.all([
     session.driveId
-      ? db.query.drives.findFirst({ where: eq(drives.id, session.driveId), columns: { ownerId: true } })
+      ? db.query.drives.findFirst({ where: eq(drives.id, session.driveId), columns: { ownerId: true, orgId: true } })
       : Promise.resolve(undefined),
     getActorInfo(userId),
   ]);
@@ -59,7 +62,8 @@ export async function resolveWorkspaceExecActorContext(
     requestOrigin: 'user',
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
-    tier: toSubscriptionTier(payer?.subscriptionTier),
+    // WAL-9: an org drive's compute runs on the org's tier, not the lead's own plan.
+    tier: computeTierForDrive(drive, toPersonalSubscriptionTier(payer?.subscriptionTier), await isOrgLapsedForDrive(drive)),
   };
 }
 
@@ -71,11 +75,13 @@ type WorkspaceExecResult =
 export async function execInWorkspace(input: {
   session: AgentSessionRecord;
   ctx: SandboxActorContext;
+  /** The requester's credential: the gate and the provisioning re-check both ask code execution of it. */
+  actor: AccessActor;
   command: string;
   cwd?: string;
   timeoutMs?: number;
 }): Promise<WorkspaceExecResult> {
-  const decision = await productionSandboxGate(input.ctx);
+  const decision = await productionSandboxGate(input.ctx, input.actor);
   if (!decision.ok) {
     return {
       success: false,
@@ -90,6 +96,6 @@ export async function execInWorkspace(input: {
     cwd: input.cwd,
     timeoutMs: input.timeoutMs,
     ctx: input.ctx,
-    deps: buildRealSandboxRunDeps({ resolveSession: async () => ({ ok: true, session }) }),
+    deps: buildRealSandboxRunDeps({ actor: input.actor, resolveSession: async () => ({ ok: true, session }) }),
   });
 }

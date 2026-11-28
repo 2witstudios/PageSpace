@@ -5,6 +5,7 @@ import {
   redeemPageShareLink,
 } from '@pagespace/lib/permissions/share-link-service';
 import { securityAudit } from '@pagespace/lib/audit/security-audit';
+import { GUESTS_HELD_MESSAGE } from '@pagespace/lib/organizations/sharing-decisions';
 import { buildAcceptancePorts } from '@/lib/auth/invite-acceptance-adapters';
 import { emitAcceptanceSideEffects } from '@pagespace/lib/services/invites';
 import type { AcceptedInviteData } from '@pagespace/lib/services/invites';
@@ -47,6 +48,12 @@ export async function POST(
     return NextResponse.json({ type: 'drive', driveId: driveResult.driveId });
   }
 
+  // POL-2: the org's guests policy is `approve`. The request is queued for an Owner or Admin and nothing has been
+  // granted: 202, with no drive id for the client to navigate to.
+  if (driveResult.error === 'PENDING_APPROVAL') {
+    return NextResponse.json({ type: 'drive', status: 'pending_approval', message: GUESTS_HELD_MESSAGE }, { status: 202 });
+  }
+
   if (driveResult.error !== 'NOT_FOUND') {
     return NextResponse.json({ error: 'Failed to redeem share link' }, { status: 500 });
   }
@@ -64,6 +71,10 @@ export async function POST(
       pageId: pageResult.data.pageId,
       driveId: pageResult.data.driveId,
     });
+  }
+
+  if (pageResult.error === 'PENDING_APPROVAL') {
+    return NextResponse.json({ type: 'page', status: 'pending_approval', message: GUESTS_HELD_MESSAGE }, { status: 202 });
   }
 
   if (pageResult.error === 'NOT_FOUND') {

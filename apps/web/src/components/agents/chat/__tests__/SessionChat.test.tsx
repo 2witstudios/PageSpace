@@ -16,6 +16,30 @@ const chatState = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
 }));
 
+// JOURNEYS-2 gating reads this hook; the tests drive it through `spendHook` below.
+const spendHook = vi.hoisted(() => ({
+  current: {
+    spend: null as unknown,
+    isPending: false,
+    error: null as unknown,
+    isLoading: false,
+    choose: vi.fn(async () => undefined),
+    refresh: vi.fn(async () => undefined),
+  },
+}));
+const resolvedSpend = {
+  conversationId: 'conv-1', driveId: 'drive-1', chosenWalletId: null, options: [],
+  resolved: { kind: 'spend', walletId: 'w-1', reason: null, fallbackFromWalletId: null, followOn: false },
+};
+function spendResolved() {
+  spendHook.current = { ...spendHook.current, spend: resolvedSpend, isPending: false, error: null };
+}
+function spendFailed() {
+  spendHook.current = { ...spendHook.current, spend: null, isPending: false, error: new Error('503') };
+}
+vi.mock('@/hooks/useConversationSpend', () => ({
+  useConversationSpend: () => spendHook.current,
+}));
 vi.mock('../useAgentSessionChat', () => ({
   useAgentSessionChat: vi.fn(() => chatState.current),
 }));
@@ -133,6 +157,7 @@ function baseChatState(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   chatState.current = baseChatState();
   assistantChatState.current = baseChatState();
+  spendResolved();
 });
 
 describe('SessionChat', () => {
@@ -190,6 +215,43 @@ describe('SessionChat', () => {
 
     expect(input.value).toBe('');
     await waitFor(() => expect(handleSend).toHaveBeenCalledWith('hello'));
+  });
+
+  it('JOURNEYS-2 an unresolved spend preview pauses the send — no dispatch, no charge — until the source resolves, with the strip’s retry offered on failure', async () => {
+    const handleSend = vi.fn(async () => true);
+    chatState.current = baseChatState({ handleSend });
+    spendFailed();
+    const view = render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+
+    const input = screen.getByTestId('chat-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    // Paused: nothing dispatched, the draft kept, and the failed preview is visible with its retry.
+    expect(handleSend).not.toHaveBeenCalled();
+    expect(input.value).toBe('hello');
+    expect(screen.getByTestId('composer-spend-strip-error')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('composer-spend-retry'));
+    expect(spendHook.current.refresh).toHaveBeenCalled();
+
+    // The preview resolves (retry succeeded): the same draft sends.
+    spendResolved();
+    view.rerender(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+    fireEvent.click(screen.getByTestId('chat-send'));
+    await waitFor(() => expect(handleSend).toHaveBeenCalledWith('hello'));
+  });
+
+  it('JOURNEYS-2 a still-resolving preview shows the pending strip and pauses the send too', async () => {
+    const handleSend = vi.fn(async () => true);
+    chatState.current = baseChatState({ handleSend });
+    spendHook.current = { ...spendHook.current, spend: null, isPending: true, error: null };
+    render(<SessionChat agent={agentFixture()} conversationId="conv-1" context="page" />);
+
+    fireEvent.change(screen.getByTestId('chat-input'), { target: { value: 'hello' } });
+    fireEvent.click(screen.getByTestId('chat-send'));
+
+    expect(handleSend).not.toHaveBeenCalled();
+    expect(screen.getByTestId('composer-spend-strip-pending')).toBeTruthy();
   });
 
   it('restores the draft when handleSend refuses (returns false) and the composer is still empty', async () => {

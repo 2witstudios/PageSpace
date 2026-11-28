@@ -4,6 +4,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokePendingInvite } from '@pagespace/lib/services/invites';
 import { buildRevokePorts } from '@/lib/auth/revoke-adapters';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -26,7 +27,7 @@ export async function DELETE(
 
     const { driveId, inviteId } = await context.params;
 
-    const result = await revokePendingInvite(buildRevokePorts(request))({
+    const result = await revokePendingInvite(buildRevokePorts(request, actorFromAuth(auth)))({
       inviteId,
       driveId,
       actorId: auth.userId,

@@ -4,8 +4,10 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth';
 import { isPublishConfigured } from '@/lib/canvas/published-storage';
-import { publishCanvasPage, clearPublishedHomeRoot, regeneratePublishedSiteFiles, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
-import { deletePageFromCustomHosts, getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
+import { publishCanvasPage, PublishError, PUBLISH_HOST } from '@/lib/canvas/publish-page';
+import { PublishHiddenError } from '@pagespace/lib/organizations/published-visibility';
+import { getActiveDomainRecords } from '@/lib/canvas/custom-domain-mirror';
+import { unpublishPage } from '@/lib/canvas/unpublish-page';
 import { resolvePrimaryPublishedHost } from '@pagespace/lib/canvas/primary-host';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -13,6 +15,7 @@ import { publishedPages } from '@pagespace/db/schema/published-pages';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { resolveUploadedImageAssetUrl } from '@/lib/canvas/asset-pipeline';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -177,7 +180,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to publish this page' }, { status: 403 }));
   }
 
   if (process.env.CANVAS_PUBLISHING_DISABLED === 'true') {
@@ -217,7 +220,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
     let ogImageUrl = parsedBody?.ogImageUrl;
     if (parsedBody?.ogImageFileId) {
-      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, driveId: pageCheck.driveId, userId, db });
+      const resolved = await resolveUploadedImageAssetUrl({ fileId: parsedBody.ogImageFileId, driveId: pageCheck.driveId, actor: actorFromAuth(auth), db });
       if (!resolved) {
         return NextResponse.json({ error: 'Selected image is unavailable or not accessible' }, { status: 400 });
       }
@@ -227,7 +230,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const result = await publishCanvasPage({
       pageId,
       driveId: pageCheck.driveId,
-      userId,
+      actor: actorFromAuth(auth),
       path: parsedBody?.path,
       subdomain: parsedBody?.subdomain,
       title: parsedBody?.title,
@@ -252,7 +255,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }
     const message = error instanceof Error ? error.message : 'Failed to publish page';
-    const statusCode = error instanceof PublishError ? error.statusCode : 500;
+    // POL-4: a write refused because the org's policy hides this site answers 403, like the up-front refusal.
+    const statusCode = error instanceof PublishError || error instanceof PublishHiddenError ? error.statusCode : 500;
     return NextResponse.json({ error: message }, { status: statusCode });
   }
 }
@@ -271,45 +275,15 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to unpublish this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to unpublish this page' }, { status: 403 }));
   }
 
   try {
-    const row = await db.query.publishedPages.findFirst({
-      where: eq(publishedPages.pageId, pageId),
-      columns: { id: true, artifactKey: true, driveId: true, path: true },
-    });
-
-    if (!row) {
+    // The unpublish itself is shared with the content-safety scoped takedown.
+    const result = await unpublishPage(pageId);
+    if (!result.unpublished) {
       return NextResponse.json({ error: 'Page is not published' }, { status: 404 });
     }
-
-    // If this page is the drive's home page it was also mirrored to the
-    // subdomain root. Clear that mirror BEFORE deleting the DB row so a failed
-    // root delete surfaces as an error with the row still present — i.e. the
-    // unpublish is retryable and never reports success while the page is still
-    // publicly reachable at the root.
-    const drv = await db.query.drives.findFirst({
-      where: eq(drives.id, row.driveId),
-      columns: { homePageId: true },
-    });
-
-    const isHomePage = drv?.homePageId === pageId;
-    const { deletePublishedArtifact } = await import('@/lib/canvas/published-storage');
-    await deletePublishedArtifact(row.artifactKey);
-    if (isHomePage) {
-      await clearPublishedHomeRoot(row.driveId);
-    }
-    // Remove the page artifact (and root mirror) from every active custom-domain
-    // host prefix before deleting the DB row. Best-effort: failures are logged
-    // internally and do not block the unpublish.
-    await deletePageFromCustomHosts({ driveId: row.driveId, pageId, path: row.path, isHomePage });
-    await db.delete(publishedPages).where(eq(publishedPages.pageId, pageId));
-
-    // Rebuild the drive's sitemap so it no longer advertises the route we just
-    // removed (and refresh robots/404 alongside it). Best-effort — the page is
-    // already unpublished and the row deleted.
-    await regeneratePublishedSiteFiles(row.driveId);
 
     auditRequest(req, {
       eventType: 'data.delete',

@@ -16,6 +16,7 @@
  * cannot see, and that a first cut of it got wrong in both directions.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const { findWorkspaceOfChat, membershipWrite, logged } = vi.hoisted(() => ({
   findWorkspaceOfChat: vi.fn(),
@@ -55,7 +56,7 @@ describe('expelAfterDelete', () => {
     // and leave the pane exactly where the race put it.
     findWorkspaceOfChat.mockResolvedValue('ws-somewhere-else');
 
-    await expelAfterDelete({ conversationId: 'conv-1', actingUserId: 'user-1' });
+    await expelAfterDelete({ conversationId: 'conv-1', actor: credentialActor('user-1', null) });
 
     expect(membershipWrite).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceId: 'ws-somewhere-else' }),
@@ -67,7 +68,7 @@ describe('expelAfterDelete', () => {
     // workspace to address and no write to make.
     findWorkspaceOfChat.mockResolvedValue(null);
 
-    await expelAfterDelete({ conversationId: 'conv-1', actingUserId: 'user-1' });
+    await expelAfterDelete({ conversationId: 'conv-1', actor: credentialActor('user-1', null) });
 
     expect(membershipWrite).not.toHaveBeenCalled();
     expect(logged.error).toEqual([]);
@@ -82,7 +83,7 @@ describe('expelAfterDelete', () => {
     // audit record is a compliance hole. It is reported, not raised.
     findWorkspaceOfChat.mockRejectedValue(new Error('lock timeout'));
 
-    await expect(expelAfterDelete({ conversationId: 'conv-1', actingUserId: 'user-1' })).resolves.toBeUndefined();
+    await expect(expelAfterDelete({ conversationId: 'conv-1', actor: credentialActor('user-1', null) })).resolves.toBeUndefined();
     expect(logged.error).toHaveLength(1);
     expect(logged.error[0]).toContain('Post-delete expel failed');
   });
@@ -91,7 +92,7 @@ describe('expelAfterDelete', () => {
     findWorkspaceOfChat.mockResolvedValue('ws-1');
     membershipWrite.mockRejectedValue(new Error('deadlock detected'));
 
-    await expect(expelAfterDelete({ conversationId: 'conv-1', actingUserId: 'user-1' })).resolves.toBeUndefined();
+    await expect(expelAfterDelete({ conversationId: 'conv-1', actor: credentialActor('user-1', null) })).resolves.toBeUndefined();
     expect(logged.error).toHaveLength(1);
   });
 });

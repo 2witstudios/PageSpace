@@ -42,6 +42,8 @@ export interface ChatInputProps {
   isStopping?: boolean;
   /** Whether the input is disabled */
   disabled?: boolean;
+  /** Pause dispatch while the spend source resolves, keeping the draft editable. */
+  sendDisabled?: boolean;
   /** Placeholder text */
   placeholder?: string;
   /** Drive ID for mention suggestions */
@@ -148,6 +150,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       isStreaming,
       isStopping = false,
       disabled = false,
+      sendDisabled = false,
       placeholder = 'Type your message...',
       driveId,
       commandDriveId,
@@ -244,12 +247,12 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
     // Issue #2676: during a stream the send verb is QUEUE, so the gate is no
     // longer `!isStreaming` — only the observer lock (`effectiveDisabled`)
     // blocks, exactly as before. Attachments still never send mid-stream.
-    const canSend = (hasText || hasImages) && !effectiveDisabled && (!isStreaming || queueWired);
+    const canSend = (hasText || hasImages) && !effectiveDisabled && !sendDisabled && (!isStreaming || queueWired);
     // Queued = text-only v1: images keep their existing disabled-during-stream rule.
-    const canQueue = queueWired && hasText && !hasImages && !effectiveDisabled && !isQueueFull;
+    const canQueue = queueWired && hasText && !hasImages && !effectiveDisabled && !sendDisabled && !isQueueFull;
 
     const handleSend = () => {
-      if (effectiveDisabled) return;
+      if (effectiveDisabled || sendDisabled) return;
       if (!hasText && !hasImages) return;
 
       if (!isStreaming) {
@@ -311,9 +314,34 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       }
     }, [onAddFiles, hasVision]);
 
+    // Sidebar: one self-contained card — text on top, a single toolbar row below
+    // holding attach, tools, model and ONE action button. Everything shrinks
+    // before it wraps, so a thin panel never grows a second row of buttons.
+    const compact = variant === 'sidebar';
+
+    const actions = (
+      <InputActions
+        isStreaming={isStreaming}
+        isStopping={isStopping}
+        onSend={handleSend}
+        onStop={onStop}
+        disabled={!canSend}
+        onQueueSend={queueWired ? handleSend : undefined}
+        canQueue={canQueue}
+        queuedCount={queuedMessages?.length ?? 0}
+        isQueueFull={isQueueFull}
+        compact={compact}
+        className={compact ? 'self-center' : undefined}
+      />
+    );
+
     return (
       <div
-        className={cn('flex flex-col relative min-w-0')}
+        className={cn(
+          'flex flex-col relative min-w-0',
+          compact &&
+            'rounded-2xl border border-border/60 bg-background shadow-sm transition-shadow focus-within:border-ring/50 focus-within:shadow-md'
+        )}
         onDragOver={handleDragOver}
         onDrop={handleDrop}
         onKeyDown={handleComposerKeyDown}
@@ -352,9 +380,9 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
         )}
 
         {/* Input row */}
-        <div className="flex items-start gap-2 p-3 min-w-0">
+        <div className={cn('flex items-start min-w-0', compact ? 'px-1.5 pt-2' : 'gap-2 p-3')}>
           {/* Attach button (shown when model supports vision) */}
-          {hasVision && onAddFiles && (
+          {!compact && hasVision && onAddFiles && (
             <AttachButton
               onFiles={onAddFiles}
               disabled={isStreaming || effectiveDisabled}
@@ -382,17 +410,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onPasteFiles={hasVision && onAddFiles ? onAddFiles : undefined}
           />
 
-          <InputActions
-            isStreaming={isStreaming}
-            isStopping={isStopping}
-            onSend={handleSend}
-            onStop={onStop}
-            disabled={!canSend}
-            onQueueSend={queueWired ? handleSend : undefined}
-            canQueue={canQueue}
-            queuedCount={queuedMessages?.length ?? 0}
-            isQueueFull={isQueueFull}
-          />
+          {!compact && actions}
         </div>
 
         {/* Footer menu */}
@@ -423,7 +441,19 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
           selectedModel={currentModel}
           onProviderModelChange={handleProviderModelChange}
           hideModelSelector={hideModelSelector}
+          modelPolicyDriveId={commandDriveId ?? driveId ?? null}
           disabled={isStreaming || effectiveDisabled}
+          compact={compact}
+          leading={
+            compact && hasVision && onAddFiles ? (
+              <AttachButton
+                onFiles={onAddFiles}
+                disabled={isStreaming || effectiveDisabled}
+                className="h-8 w-8 self-center"
+              />
+            ) : undefined
+          }
+          trailing={compact ? actions : undefined}
         />
       </div>
     );

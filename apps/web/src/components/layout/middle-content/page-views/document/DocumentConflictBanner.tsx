@@ -68,11 +68,12 @@ const DocumentConflictBanner = ({
         <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="text-sm text-amber-900 dark:text-amber-100">
             <p className="font-medium">
-              Someone else saved this document while you were editing it.
+              This document changed somewhere else while you were editing it.
             </p>
             <p className="mt-0.5 text-amber-800 dark:text-amber-200">
+              Another person, an AI agent, or another of your tabs or devices may have saved it.
               Your unsaved changes are still in the editor and have not been sent. Saving is
-              paused until you choose. <strong>Keep mine</strong> replaces their version in the
+              paused until you choose. <strong>Keep mine</strong> replaces that version in the
               document; <strong>Use theirs</strong> discards your unsaved changes.
             </p>
           </div>
@@ -98,7 +99,7 @@ const DocumentConflictBanner = ({
 
         <Collapsible open={showRemote} onOpenChange={setShowRemote}>
           <CollapsibleTrigger className="text-sm underline text-amber-900 dark:text-amber-100">
-            {showRemote ? 'Hide their version' : 'View their version'}
+            {showRemote ? 'Hide the other version' : 'View the other version'}
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div

@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // FIFO queue of result sets; each db.select() terminal resolves to the next set.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every builder call any query made, as [method, ...args], in call order.
+const chainCalls = vi.hoisted(() => [] as unknown[][]);
+const PERSONAL_ROOT = vi.hoisted(() => ({ personalRoot: true }));
 
 const mockSql = vi.hoisted(() => {
   const tag = vi.fn(() => 'SQL') as unknown as { (..._a: unknown[]): string; raw: (s: string) => string };
@@ -17,7 +20,10 @@ const makeChain = vi.hoisted(() => () => {
   const promise = Promise.resolve(rows);
   const chain: Record<string, unknown> = {};
   for (const m of ['from', 'innerJoin', 'leftJoin', 'where', 'groupBy', 'having', 'orderBy', 'limit']) {
-    chain[m] = vi.fn(() => chain);
+    chain[m] = vi.fn((...args: unknown[]) => {
+      chainCalls.push([m, ...args]);
+      return chain;
+    });
   }
   chain.then = (resolve: (v: unknown[]) => void, reject?: (e: unknown) => void) => promise.then(resolve, reject);
   return chain;
@@ -32,13 +38,17 @@ vi.mock('@pagespace/db/schema/monitoring', () => ({
 }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: {
-    userId: 'CL_USER', entryType: 'CL_TYPE', amountCents: 'CL_AMOUNT', appliedCents: 'CL_APPLIED',
+    userId: 'CL_USER', walletId: 'CL_WALLET', entryType: 'CL_TYPE', amountCents: 'CL_AMOUNT', appliedCents: 'CL_APPLIED',
     chargeMillicents: 'CL_CHARGE_MC', realCostCents: 'CL_REAL', aiUsageLogId: 'CL_AI_ID', createdAt: 'CL_CREATED',
   },
-  creditBalances: {
-    userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT',
-  },
   creditHolds: {},
+}));
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: {
+    id: 'W_ID', userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT',
+  },
+  isPersonalRootWallet: vi.fn(() => PERSONAL_ROOT),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'U_ID', name: 'U_NAME', email: 'U_EMAIL' } }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({ subscriptions: {} }));
@@ -56,6 +66,9 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((col: unknown, vals: unknown[]) => ({ type: 'inArray', col, vals })),
 }));
 
+const mockWalletDriftAlerts = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/billing/wallet-reconcile', () => ({ walletDriftAlerts: mockWalletDriftAlerts }));
+
 import { getBalanceDriftAlerts, getNegativeMarginAccounts } from '../monitoring-queries';
 
 function resetQueue(...sets: unknown[][]) {
@@ -66,34 +79,31 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  chainCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
 describe('getBalanceDriftAlerts', () => {
-  it('returns only flagged accounts, worst drift first, with expected/drift computed', async () => {
-    resetQueue([
-      // drift 0 → not flagged
-      { userId: 'a', userName: null, userEmail: 'a@x', materializedSpendableCents: 700, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-      // drift +100 → flagged
-      { userId: 'b', userName: null, userEmail: 'b@x', materializedSpendableCents: 800, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-      // drift -50 → flagged
-      { userId: 'c', userName: null, userEmail: 'c@x', materializedSpendableCents: 650, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
+  it('WAL-5 (partial) reads every drifted WALLET through the one lib reader and names the person behind a personal one', async () => {
+    mockWalletDriftAlerts.mockResolvedValueOnce([
+      { walletId: 'w-root', kind: 'personal_root', ownerType: 'user', userId: 'u1', orgId: null, subjectType: null, subjectId: null, expectedNetCents: 700, materializedNetCents: 800, driftCents: 100, debtCents: 0 },
+      { walletId: 'w-pool', kind: 'org_pool', ownerType: 'org', userId: null, orgId: 'o1', subjectType: null, subjectId: null, expectedNetCents: 5000, materializedNetCents: 4950, driftCents: -50, debtCents: 0 },
     ]);
+    resetQueue([{ userId: 'u1', userName: 'Una', userEmail: 'u1@x' }]);
 
-    const rows = await getBalanceDriftAlerts(10);
+    const rows = await getBalanceDriftAlerts(10, 20);
 
-    expect(rows.map((r) => r.userId)).toEqual(['b', 'c']); // sorted by |drift| desc
-    expect(rows[0]).toMatchObject({ userId: 'b', expectedSpendableCents: 700, driftCents: 100 });
-    expect(rows[1]).toMatchObject({ userId: 'c', driftCents: -50 });
-    // The flagged helper field is stripped from the returned shape.
-    expect('flagged' in rows[0]).toBe(false);
+    expect(mockWalletDriftAlerts).toHaveBeenCalledWith({ toleranceCents: 10, limit: 20 });
+    expect(rows).toEqual([
+      { walletId: 'w-root', walletKind: 'personal_root', userId: 'u1', userName: 'Una', userEmail: 'u1@x', orgId: null, subjectId: null, expectedNetCents: 700, materializedNetCents: 800, driftCents: 100, debtCents: 0 },
+      { walletId: 'w-pool', walletKind: 'org_pool', userId: null, userName: null, userEmail: null, orgId: 'o1', subjectId: null, expectedNetCents: 5000, materializedNetCents: 4950, driftCents: -50, debtCents: 0 },
+    ]);
   });
 
-  it('returns nothing when every account is within tolerance', async () => {
-    resetQueue([
-      { userId: 'a', userName: null, userEmail: null, materializedSpendableCents: 705, debtCents: 0, grantCents: 1000, appliedUsageCents: 300, adjustmentCents: 0 },
-    ]);
+  it('reads no people when no wallet drifted', async () => {
+    mockWalletDriftAlerts.mockResolvedValueOnce([]);
     expect(await getBalanceDriftAlerts(10)).toEqual([]);
+    expect(mockSelect).not.toHaveBeenCalled();
   });
 });
 

@@ -22,7 +22,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: documentRef.current ? { ...documentRef.current } : undefined,
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(),
+    initializeAndActivate: vi.fn(() => Promise.resolve(true)),
     updateContent: updateContentSpy,
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),
@@ -175,5 +175,46 @@ describe('useSheetPersistence', () => {
 
     expect(result.current.loadError).toBeNull();
     expect(resetHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports loaded only after the stored sheet has been handed to history', () => {
+    const resetHistory = vi.fn();
+    const { result, rerender } = renderPersistence(resetHistory);
+    expect(result.current.isLoaded).toBe(false);
+
+    documentRef.current = { content: sheetContent({ A1: '1' }), isDirty: false };
+    rerender();
+
+    expect(resetHistory).toHaveBeenCalledTimes(1);
+    expect(result.current.isLoaded).toBe(true);
+  });
+
+  it('is not loaded while the stored content cannot be read', () => {
+    documentRef.current = { content: '#%PAGESPACE_SHEETDOC v1\nthis is [not toml', isDirty: false };
+
+    const { result } = renderPersistence(vi.fn());
+
+    expect(result.current.isLoaded).toBe(false);
+  });
+
+  it('never renders loaded before history holds the stored sheet, across a deferred fetch', () => {
+    // Every render is recorded, so an intermediate commit with an editable
+    // placeholder would show up here, not just the settled final state.
+    let historyHasStoredSheet = false;
+    const resetHistory = vi.fn(() => {
+      historyHasStoredSheet = true;
+    });
+    const renders: Array<{ isLoaded: boolean; historyHasStoredSheet: boolean }> = [];
+    const { rerender } = renderHook(() => {
+      const value = useSheetPersistence({ pageId: 'page-1', socket: null, resetHistory: resetHistory as never });
+      renders.push({ isLoaded: value.isLoaded, historyHasStoredSheet });
+      return value;
+    });
+
+    documentRef.current = { content: sheetContent({ A1: 'stored' }), isDirty: false };
+    rerender();
+
+    expect(renders.some((r) => r.isLoaded)).toBe(true);
+    expect(renders.filter((r) => r.isLoaded && !r.historyHasStoredSheet)).toEqual([]);
   });
 });

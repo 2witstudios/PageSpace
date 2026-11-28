@@ -27,7 +27,7 @@
  * on-demand TTS (Read Aloud) is a separate feature that still bills through them.
  */
 
-import { MARKUP_BPS } from '../billing/credit-pricing';
+import { chargedCentsFromProviderDollars } from '../billing/money-model';
 
 /** Parse a non-negative float env override; fall back to `fallback` on absence/garbage. */
 function envFloat(name: string, fallback: number): number {
@@ -77,7 +77,7 @@ export function calculateVoiceCostDollars(model: string, quantity: VoiceUsageQua
  * instead of relying on a flat estimate that a long TTS request would blow past.
  */
 export function estimateVoiceHoldCents(model: string, quantity: VoiceUsageQuantity): number {
-  const charged = calculateVoiceCostDollars(model, quantity) * (MARKUP_BPS / 10_000) * 100;
+  const charged = chargedCentsFromProviderDollars(calculateVoiceCostDollars(model, quantity));
   if (!Number.isFinite(charged) || charged <= 0) return 1;
   return Math.max(1, Math.ceil(charged));
 }

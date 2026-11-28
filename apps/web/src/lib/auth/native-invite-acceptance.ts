@@ -1,7 +1,8 @@
 /**
- * Unified invite-acceptance dispatcher across the three pending-invite
- * surfaces (drive, page, connection). Hashes the token once, runs the three
- * repository lookups in parallel, and dispatches to the matching pipe.
+ * Unified invite-acceptance dispatcher across the pending-invite surfaces
+ * (drive, page, connection, and org invitations — ORG-3). Hashes the token
+ * once, runs the repository lookups in parallel, and dispatches to the
+ * matching pipe.
  *
  * `consumeAllInvitesForEmail` is the post-signup multi-invite resolver that
  * auto-accepts every drive + page invite waiting for the email. Connection
@@ -33,8 +34,11 @@ import { connectionInviteRepository } from '@/lib/repositories/connection-invite
 import { buildAcceptancePorts } from './invite-acceptance-adapters';
 import { buildPageAcceptancePorts } from './page-invite-acceptance-adapters';
 import { buildConnectionAcceptancePorts } from './connection-invite-acceptance-adapters';
+import { findInvitationByToken, type AcceptInvitationResult } from '@pagespace/lib/organizations/invitations';
+import { acceptOrgInviteForUser } from '@/lib/orgs/accept-org-invite';
+import { orgHubPath, orgInvitePagePath } from '@/lib/orgs/org-invite-view';
 
-export type InviteKind = 'drive' | 'page' | 'connection';
+export type InviteKind = 'drive' | 'page' | 'connection' | 'org';
 
 // Surfaces every error code the three pipes can return, plus the connection
 // and page-specific extras. Routes that surface this in a query param should
@@ -62,6 +66,15 @@ export interface NativeInviteAcceptanceResult {
   invitedPageId: string | null;
   /** Connection id if the consumed invite was connection-kind. */
   connectionId: string | null;
+  /** Org id if the consumed invite was an org invitation (ORG-3). */
+  invitedOrgId: string | null;
+  /**
+   * For an org invitation only, accepted or refused: where the person lands. Accepted, the org's
+   * hub; refused, the invite page again, which shows why (wrong account, expired, …) — the org
+   * kind is set on a refusal too, unlike the other kinds, so no route drops the person on the
+   * dashboard with only an unread `inviteError`.
+   */
+  orgLandingPath: string | null;
   /** Error code from the matching pipe — only set when no invite was
    *  successfully consumed. */
   inviteError?: AnyInviteErrorCode;
@@ -72,7 +85,27 @@ const EMPTY_RESULT: NativeInviteAcceptanceResult = {
   invitedDriveId: null,
   invitedPageId: null,
   connectionId: null,
+  invitedOrgId: null,
+  orgLandingPath: null,
 };
+
+/** acceptInvitation's refusals, in the dispatcher's shared error vocabulary. */
+const ORG_REFUSAL_CODES: Record<Extract<AcceptInvitationResult, { ok: false }>['reason'], AnyInviteErrorCode> = {
+  not_found: 'TOKEN_NOT_FOUND',
+  expired: 'TOKEN_EXPIRED',
+  already_accepted: 'TOKEN_CONSUMED',
+  email_mismatch: 'EMAIL_MISMATCH',
+  org_lapsed: 'ORG_LAPSED',
+};
+
+/** The org arm: the invitation is accepted for the account that just signed in or up, or refused with the page to explain it. */
+async function consumeOrgInvite(request: Request, token: string, userId: string): Promise<NativeInviteAcceptanceResult> {
+  const result = await acceptOrgInviteForUser({ request, token, userId });
+  if (result.ok) {
+    return { ...EMPTY_RESULT, kind: 'org', invitedOrgId: result.orgId, orgLandingPath: orgHubPath(result.orgId) };
+  }
+  return { ...EMPTY_RESULT, kind: 'org', orgLandingPath: orgInvitePagePath(token), inviteError: ORG_REFUSAL_CODES[result.reason] };
+}
 
 /**
  * Hash the token once, look it up across all three pending-invite tables in
@@ -93,11 +126,15 @@ export const consumeAnyInviteIfPresent = async ({
   try {
     const tokenHash = hashToken(inviteToken);
 
-    const [driveRow, pageRow, connectionRow] = await Promise.all([
+    const [driveRow, pageRow, connectionRow, orgInvite] = await Promise.all([
       driveInviteRepository.findPendingInviteByTokenHash(tokenHash),
       pageInviteRepository.findPendingInviteByTokenHash(tokenHash),
       connectionInviteRepository.findPendingInviteByTokenHash(tokenHash),
+      findInvitationByToken(inviteToken),
     ]);
+
+    // ORG-3: acceptInvitation is the whole decision (address, expiry, lapse), in its own transaction.
+    if (orgInvite) return await consumeOrgInvite(request, inviteToken, user.id);
 
     const acceptInput = {
       token: inviteToken,
@@ -129,12 +166,7 @@ export const consumeAnyInviteIfPresent = async ({
         ? await acceptInviteForNewUser(ports)(acceptInput)
         : await acceptInviteForExistingUser(ports)(acceptInput);
       if (result.ok) {
-        return {
-          kind: 'drive',
-          invitedDriveId: result.data.driveId,
-          invitedPageId: null,
-          connectionId: null,
-        };
+        return { ...EMPTY_RESULT, kind: 'drive', invitedDriveId: result.data.driveId };
       }
       return { ...EMPTY_RESULT, inviteError: result.error };
     }
@@ -148,12 +180,7 @@ export const consumeAnyInviteIfPresent = async ({
         ? await acceptPageInviteForNewUser(ports)(acceptInput)
         : await acceptPageInviteForExistingUser(ports)(acceptInput);
       if (result.ok) {
-        return {
-          kind: 'page',
-          invitedDriveId: result.data.driveId,
-          invitedPageId: result.data.pageId,
-          connectionId: null,
-        };
+        return { ...EMPTY_RESULT, kind: 'page', invitedDriveId: result.data.driveId, invitedPageId: result.data.pageId };
       }
       return { ...EMPTY_RESULT, inviteError: result.error };
     }
@@ -167,12 +194,7 @@ export const consumeAnyInviteIfPresent = async ({
         ? await acceptConnectionInviteForNewUser(ports)(acceptInput)
         : await acceptConnectionInviteForExistingUser(ports)(acceptInput);
       if (result.ok) {
-        return {
-          kind: 'connection',
-          invitedDriveId: null,
-          invitedPageId: null,
-          connectionId: result.data.connectionId,
-        };
+        return { ...EMPTY_RESULT, kind: 'connection', connectionId: result.data.connectionId };
       }
       return { ...EMPTY_RESULT, inviteError: result.error };
     }

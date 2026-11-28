@@ -13,9 +13,8 @@
 
 import type { LanguageModel } from 'ai';
 import { generateText } from 'ai';
-import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { isAllowedImageType } from '@/lib/validation/image-validation';
-import { getManagedProviderKey } from './ai-utils';
+import type { OpenRouterImageClient } from './provider-factory';
 
 /** Result of a successful image generation. */
 export interface GeneratedImage {
@@ -92,36 +91,26 @@ export function extractImageGenerationIds(result: ImageGenResult): string[] {
   return typeof id === 'string' && id.length > 0 ? [id] : [];
 }
 
-export type OpenRouterImageClient = ReturnType<typeof createOpenRouter>;
 type ImageGenerateFn = (args: { model: LanguageModel; prompt: string }) => Promise<ImageGenResult>;
 
-/** Build the managed OpenRouter client (mirrors provider-factory's config). Throws if unconfigured. */
-export function createOpenRouterImageClient(): OpenRouterImageClient {
-  const managed = getManagedProviderKey('openrouter');
-  if (!managed?.apiKey) {
-    throw new ImageGenerationError('OpenRouter provider is not configured on this deployment.');
-  }
-  return createOpenRouter({
-    apiKey: managed.apiKey,
-    ...(process.env.OPENROUTER_BASE_URL ? { baseURL: process.env.OPENROUTER_BASE_URL } : {}),
-    headers: { 'X-OpenRouter-Cache': 'true' },
-  });
-}
-
 export interface GenerateImageBytesDeps {
-  client?: OpenRouterImageClient;
+  /**
+   * The OpenRouter client, built ONLY by the provider factory (createImageProvider), which judges the image model
+   * against the drive's org allowlists (POL-8) first. Required: this module never builds a provider of its own.
+   */
+  client: OpenRouterImageClient;
   generate?: ImageGenerateFn;
 }
 
 /**
  * Generate one image via OpenRouter and return its bytes + mediaType + cost. The
- * OpenRouter client and generate fn are injectable so unit tests avoid the network.
+ * generate fn is injectable so unit tests avoid the network.
  */
 export async function generateImageBytes(
   { prompt, model, aspectRatio }: { prompt: string; model: string; aspectRatio?: string },
-  deps: GenerateImageBytesDeps = {},
+  deps: GenerateImageBytesDeps,
 ): Promise<GeneratedImage> {
-  const client = deps.client ?? createOpenRouterImageClient();
+  const { client } = deps;
   // Default to the real generateText; the single cast is confined to this DI boundary
   // (the real result is a structural superset of ImageGenResult).
   const generate: ImageGenerateFn =

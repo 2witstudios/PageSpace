@@ -18,9 +18,9 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import useSWR, { useSWRConfig } from 'swr';
+import useSWR, { useSWRConfig, type ScopedMutator } from 'swr';
 
-import EndSessionDialog from '@/components/agents/EndSessionDialog';
+import EndSessionDialog, { EndPreviousSessionsDialog } from '@/components/agents/EndSessionDialog';
 import { RenameDialog } from '@/components/dialogs/RenameDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
 import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
@@ -60,7 +60,7 @@ import {
 } from '@/components/agents/panes/workspace-conversations';
 import { decideClosePane } from '@/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
-import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
+import { partitionSessionsByEnv, splitPreviousSessions, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, EnrollmentCodeDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
 import type { LocalEnvEnrollmentIssue } from '@/components/agents/LocalEnvEnrollment';
@@ -230,6 +230,8 @@ interface SessionListEntry {
    * with every other session in it.
    */
   envId: string | null;
+  /** When the session was spawned (ISO). */
+  createdAt: string;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
@@ -720,6 +722,13 @@ function DriveGroupRows({
     () => (showEnvironments ? partitionSessionsByEnv(sessions, envs) : { envGroups: [], looseSessions: sessions }),
     [showEnvironments, sessions, envs],
   );
+  // Once the drive has a Home env, the ephemeral sessions from BEFORE it are
+  // the per-conversation pile-up the single-sandbox model replaced: kept (they
+  // may hold files), but listed apart with an explicit "End all".
+  const { current: currentLoose, previous: previousSessions } = useMemo(
+    () => splitPreviousSessions(looseSessions, showEnvironments ? envs : []),
+    [looseSessions, showEnvironments, envs],
+  );
 
   return (
     <>
@@ -758,10 +767,114 @@ function DriveGroupRows({
           onNewSession={() => onNewSessionInEnv(group.envId)}
         />
       ))}
-      {looseSessions.map((session) => (
+      {currentLoose.map((session) => (
         <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
       ))}
+      {previousSessions.length > 0 && (
+        <PreviousSessionsSection driveId={driveId} sessions={previousSessions} agentNamesById={agentNamesById} />
+      )}
     </>
+  );
+}
+
+/**
+ * End one workspace OPTIMISTICALLY — the sidebar's single "end a session"
+ * mechanism, shared by a row's own "End session" and "Previous sessions → End
+ * all": drop it from the local tree and the cached listing, then DELETE it.
+ * On failure the row is restored LOCALLY (a revalidate alone rides the same
+ * network that just failed) and its tree re-read; returns whether it ended.
+ * Selection is the caller's: the two callers restore it differently.
+ */
+async function endWorkspaceOptimistically(
+  session: SessionListEntry,
+  deps: { mutate: ScopedMutator; forgetWorkspace: (workspaceId: string) => void },
+  /**
+   * End all's opt-in: first free the threads that would auto-provision into
+   * Home (`POST …/release`), so reopening one lands in Home instead of
+   * re-provisioning this session's own Sprite.
+   */
+  options: { releaseConversations?: boolean } = {},
+): Promise<{ ok: true } | { ok: false; error: unknown }> {
+  const sessionPath = `/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`;
+  deps.forgetWorkspace(session.workspaceId);
+  forgetWorkspaceInCache(deps.mutate, session.workspaceId);
+  if (options.releaseConversations) {
+    // Best-effort: a failed release only means those threads stay bound to
+    // the session being ended, as they were before End all existed.
+    await post(`${sessionPath}/release`).catch((error: unknown) => {
+      console.error('Failed to release a previous session\'s conversations:', error);
+    });
+  }
+  try {
+    await del(sessionPath);
+    return { ok: true };
+  } catch (error) {
+    restoreWorkspaceInCache(deps.mutate, session);
+    void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(session.workspaceId);
+    return { ok: false, error };
+  }
+}
+
+/**
+ * "Previous sessions": the drive's ephemeral sessions from before it had a Home
+ * env, with one "End all". Each is ended through the SAME DELETE the row's own
+ * "End session" sends, after a confirm that says their files go with them.
+ * Ends run one at a time so a failure is reported without abandoning the rest,
+ * and the listing is refetched either way so whatever survived comes back.
+ */
+function PreviousSessionsSection({
+  driveId,
+  sessions,
+  agentNamesById,
+}: {
+  driveId: string;
+  sessions: SessionListEntry[];
+  agentNamesById: Map<string, string>;
+}) {
+  const { mutate } = useSWRConfig();
+  const forgetWorkspace = useAgentWorkspaceStore((state) => state.forgetWorkspace);
+  const selectSession = useAgentSurfaceStore((state) => state.selectSession);
+  const [confirming, setConfirming] = useState(false);
+  const [ending, setEnding] = useState(false);
+
+  const endAll = useCallback(async () => {
+    setConfirming(false);
+    setEnding(true);
+    const selected = useAgentSurfaceStore.getState().selectedSessionId;
+    if (sessions.some((session) => session.workspaceId === selected)) selectSession(null);
+    const results = await Promise.all(sessions.map((session) => endWorkspaceOptimistically(session, { mutate, forgetWorkspace }, { releaseConversations: true })));
+    setEnding(false);
+    void mutate(isWorkspaceListingKey);
+    const failed = results.filter((result) => !result.ok).length;
+    if (failed > 0) {
+      toast.error(`Could not end ${failed} of ${sessions.length} previous sessions`, { description: 'Please try again.' });
+    }
+  }, [forgetWorkspace, mutate, selectSession, sessions]);
+
+  return (
+    <div data-testid={`sidebar-previous-sessions-${driveId}`}>
+      <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-1.5 text-xs text-muted-foreground">
+        <span className="truncate font-medium">Previous sessions</span>
+        <button
+          type="button"
+          aria-label="End all previous sessions"
+          className="shrink-0 underline hover:text-foreground disabled:opacity-50"
+          disabled={ending}
+          onClick={() => setConfirming(true)}
+        >
+          {ending ? 'Ending…' : 'End all'}
+        </button>
+      </div>
+      {sessions.map((session) => (
+        <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
+      ))}
+      <EndPreviousSessionsDialog
+        open={confirming}
+        onOpenChange={setConfirming}
+        count={sessions.length}
+        onConfirm={() => void endAll()}
+      />
+    </div>
   );
 }
 
@@ -959,9 +1072,10 @@ function DriveEnvRow({
       ...(awaitingEnrollment ? [{ label: 'Show a new code', icon: KeyRound, onSelect: () => setShowingCode(true) }] : []),
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
       ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
-      { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
+      // Home is never deleted (the server refuses it too): Rebuild wipes it.
+      ...(group.isHome ? [] : [{ label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true }]),
     ],
-    [isLocal, awaitingEnrollment],
+    [isLocal, awaitingEnrollment, group.isHome],
   );
 
   const rowInner = (
@@ -1270,20 +1384,11 @@ function SessionRow({
     // The workspace leaves the sidebar; its conversations remain as history in
     // each agent's list. Drop the local tree too — its panes pointed at a
     // sandbox that no longer exists.
-    forgetWorkspace(session.workspaceId);
     if (wasSelected) selectSession(null);
     setConfirmingEnd(false);
-    forgetWorkspaceInCache(mutate, session.workspaceId);
-    try {
-      await del(`/api/agent-workspaces/${encodeURIComponent(session.workspaceId)}`);
-    } catch (error) {
-      // The optimistic assumption was wrong. Restore the row LOCALLY (a real
-      // revalidate alone isn't enough: it rides the same network whose failure is
-      // plausibly why the DELETE failed, so it could easily fail too and leave
-      // the row missing indefinitely) and re-read the tree, which the store no
-      // longer keeps a snapshot of — the server's copy is the only honest one.
-      restoreWorkspaceInCache(mutate, session);
-      void useAgentWorkspaceStore.getState().refreshWorkspaceSnapshot(session.workspaceId);
+    const ended = await endWorkspaceOptimistically(session, { mutate, forgetWorkspace });
+    if (!ended.ok) {
+      const { error } = ended;
       // Selection restore, and only if NOTHING has claimed it since:
       // `selectConversation`/`selectSession` also push a URL, so blindly
       // restoring would yank the user back here even if they have navigated

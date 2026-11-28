@@ -105,3 +105,18 @@ describe('sign-in page — in-app browser warning', () => {
     expect(screen.queryByText(BANNER)).not.toBeInTheDocument();
   });
 });
+
+describe('sign-in page — cookie preferences footer link', () => {
+  it('given the footer link, reopens the consent banner while signed out', async () => {
+    mockInAppSpy.mockReturnValue({ isInApp: false });
+    mockIsCapacitorApp.mockReturnValue(false);
+    const { useConsentStore } = await import('@/stores/useConsentStore');
+    expect(useConsentStore.getState().reopenRequested).toBe(false);
+
+    render(<SignInPage />);
+    const link = await screen.findByRole('button', { name: 'Cookie preferences' });
+    link.click();
+
+    expect(useConsentStore.getState().reopenRequested).toBe(true);
+  });
+});

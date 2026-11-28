@@ -8,6 +8,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getUserDrivePermissions: vi.fn(),
 }));
 
@@ -16,8 +17,8 @@ vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
 }));
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
-  getUserStorageQuota: vi.fn(),
-  checkStorageQuota: vi.fn(),
+  resolveUploadQuotaTarget: vi.fn(),
+  checkUploadQuotaTarget: vi.fn(),
   reserveConcurrentUploadSlot: vi.fn(),
   userReferencesContentHash: vi.fn(),
 }));
@@ -36,6 +37,8 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({ isUploadBlocked: vi.fn() }));
+
 vi.mock('@/lib/upload/s3-effects', () => ({
   checkObjectExists: vi.fn(),
   issuePresignedPutUrl: vi.fn(),
@@ -44,9 +47,10 @@ vi.mock('@/lib/upload/s3-effects', () => ({
 import { POST } from '../route';
 import { authenticateRequestWithOptions, checkMCPCreateScope } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
-import { getUserStorageQuota, checkStorageQuota, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
+import { resolveUploadQuotaTarget, checkUploadQuotaTarget, reserveConcurrentUploadSlot, userReferencesContentHash } from '@pagespace/lib/services/storage-limits';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
 import { checkObjectExists, issuePresignedPutUrl } from '@/lib/upload/s3-effects';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
 
 const VALID_HASH = 'a'.repeat(64);
 const MOCK_URL = 'https://tigris.example.com/files/aaa.../original?X-Amz-Signature=abc';
@@ -58,6 +62,10 @@ function makeAuth(userId = 'user-1') {
 
 function makeQuota(tier = 'free' as const) {
   return { userId: 'user-1', tier, quotaBytes: 500 * 1024 * 1024, usedBytes: 0, availableBytes: 500 * 1024 * 1024, utilizationPercent: 0, warningLevel: 'none' as const };
+}
+
+function makeTarget(tier = 'free' as const) {
+  return { payer: { kind: 'user' as const, userId: 'user-1' }, quota: makeQuota(tier) };
 }
 
 function makeRequest(body: Record<string, unknown>) {
@@ -80,8 +88,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(makeAuth());
   vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
-  vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota());
-  vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: true });
+  vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(makeTarget());
+  vi.mocked(checkUploadQuotaTarget).mockResolvedValue({ allowed: true });
   vi.mocked(checkObjectExists).mockResolvedValue(false);
   vi.mocked(issuePresignedPutUrl).mockResolvedValue(MOCK_URL);
   vi.mocked(uploadSemaphore.acquireUploadSlot).mockResolvedValue(MOCK_SLOT);
@@ -89,6 +97,7 @@ beforeEach(() => {
   // Default: caller already references the hash, so the dedup fast-path stays
   // available for the existing dedup tests. H3-specific tests override this.
   vi.mocked(userReferencesContentHash).mockResolvedValue(true);
+  vi.mocked(isUploadBlocked).mockResolvedValue(false);
 });
 
 describe('POST /api/upload/presign', () => {
@@ -113,10 +122,31 @@ describe('POST /api/upload/presign', () => {
 
   describe('storage quota', () => {
     it('returns 413 when the remaining storage/file-count quota is exceeded', async () => {
-      vi.mocked(checkStorageQuota).mockResolvedValue({ allowed: false, reason: 'Quota exceeded' });
+      vi.mocked(checkUploadQuotaTarget).mockResolvedValue({ allowed: false, reason: 'Quota exceeded' });
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(413);
       expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+    });
+
+    it('WAL-9 (partial) checks the quota of the drive being uploaded into, so an org drive checks the org, not the uploader', async () => {
+      await POST(makeRequest(VALID_BODY));
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledWith(expect.any(String), VALID_BODY.driveId);
+    });
+
+    it('WAL-9 (partial) resolves the payer and its usage once per request and checks against that same read (#2719 review P2-2)', async () => {
+      const orgTarget = {
+        payer: { kind: 'org' as const, orgId: 'org-1' },
+        quota: { orgId: 'org-1', tier: 'business' as const, quotaBytes: 50 * 1024 ** 3, usedBytes: 0, availableBytes: 50 * 1024 ** 3, utilizationPercent: 0, warningLevel: 'none' as const },
+      };
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(orgTarget);
+
+      const res = await POST(makeRequest(VALID_BODY));
+
+      expect(res.status).toBe(200);
+      expect(resolveUploadQuotaTarget).toHaveBeenCalledTimes(1);
+      expect(checkUploadQuotaTarget).toHaveBeenCalledTimes(1);
+      expect(checkUploadQuotaTarget).toHaveBeenCalledWith(orgTarget, VALID_BODY.fileSize);
+      expect(uploadSemaphore.acquireUploadSlot).toHaveBeenCalledWith('user-1', 'business', VALID_BODY.fileSize, expect.anything());
     });
   });
 
@@ -162,14 +192,14 @@ describe('POST /api/upload/presign', () => {
     });
 
     it('returns 413 when file size exceeds the tier limit', async () => {
-      vi.mocked(getUserStorageQuota).mockResolvedValue(makeQuota('free'));
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(makeTarget('free'));
       const overFreeLimit = { ...VALID_BODY, fileSize: 50 * 1024 * 1024 + 1 };
       const res = await POST(makeRequest(overFreeLimit));
       expect(res.status).toBe(413);
     });
 
-    it('returns 500 when getUserStorageQuota returns null', async () => {
-      vi.mocked(getUserStorageQuota).mockResolvedValue(null);
+    it('returns 500 when resolveUploadQuotaTarget returns null', async () => {
+      vi.mocked(resolveUploadQuotaTarget).mockResolvedValue(null);
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(500);
     });
@@ -206,11 +236,17 @@ describe('POST /api/upload/presign', () => {
       const res = await POST(makeRequest(VALID_BODY));
       expect(res.status).toBe(200);
       expect(issuePresignedPutUrl).toHaveBeenCalledWith(
-        `files/${VALID_HASH}/original`,
+        `uploads/staging/${MOCK_SLOT}`,
         'image/jpeg',
         1024,
         900,
       );
+    });
+
+    it('never signs a PUT for the content-addressed key itself (a re-PUT after /complete must not reach served bytes)', async () => {
+      await POST(makeRequest(VALID_BODY));
+      const signedKeys = vi.mocked(issuePresignedPutUrl).mock.calls.map((call) => call[0]);
+      expect(signedKeys).not.toContain(`files/${VALID_HASH}/original`);
     });
 
     it('returns url, jobId, key, and expiresAt in the response', async () => {
@@ -306,5 +342,60 @@ describe('POST /api/upload/presign', () => {
       await POST(makeRequest(VALID_BODY));
       expect(uploadSemaphore.releaseUploadSlot).toHaveBeenCalledWith(MOCK_SLOT);
     });
+  });
+});
+
+describe('POST /api/upload/presign — content blocklist', () => {
+  it('refuses a blocked hash with a neutral 422, before touching storage or reserving a slot', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+    expect(checkObjectExists).not.toHaveBeenCalled();
+    expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+    expect(issuePresignedPutUrl).not.toHaveBeenCalled();
+  });
+
+  it('refuses a blocked hash even when the caller already references it (dedup fast-path)', async () => {
+    vi.mocked(isUploadBlocked).mockResolvedValue(true);
+    vi.mocked(checkObjectExists).mockResolvedValue(true);
+    vi.mocked(userReferencesContentHash).mockResolvedValue(true);
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(422);
+    expect(uploadSemaphore.acquireUploadSlot).not.toHaveBeenCalled();
+  });
+
+  it('checks the canonical hash and names the user and drive for the audit trail', async () => {
+    const request = makeRequest({ ...VALID_BODY, contentHash: VALID_HASH.toUpperCase() });
+
+    await POST(request);
+
+    expect(isUploadBlocked).toHaveBeenCalledWith({
+      contentHash: VALID_HASH,
+      userId: 'user-1',
+      entryPoint: 'upload.presign',
+      request,
+      details: { driveId: 'drive-1' },
+    });
+  });
+
+  it('does not consult the blocklist for a caller without edit access to the drive', async () => {
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
+
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(403);
+    expect(isUploadBlocked).not.toHaveBeenCalled();
+  });
+
+  it('leaves an unblocked hash unaffected', async () => {
+    const res = await POST(makeRequest(VALID_BODY));
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ url: MOCK_URL, jobId: MOCK_SLOT });
   });
 });

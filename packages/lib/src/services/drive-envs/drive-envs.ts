@@ -47,6 +47,8 @@ import { issueEnrollmentCode, verifyEnrollmentCode, type RandomBytes, type Enrol
 import { issueChallenge, verifyChallengeResponse, type ChallengeDenyReason } from '../../env-bridge/challenge';
 import { decodeBase64, type Ed25519Verify, type HashBytes } from '../../env-bridge/grant';
 import { getEnvBridgeTokenPolicy, type EnvBridgeTokenPolicy } from '../../auth/token-lifecycle-policy';
+import type { OrgPolicies } from '../../organizations/policies-core';
+import { environmentsDecision } from '../../organizations/org-action-decisions';
 
 /**
  * Row → `DriveEnvStatus`, as a pure function (the ONE place the mapping exists)
@@ -103,6 +105,7 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
     id: row.id,
     driveId: row.driveId,
     name: row.name,
+    isHome: row.isHome,
     createdAt: row.createdAt.toISOString(),
   };
   if (row.substrate === 'local') {
@@ -148,8 +151,17 @@ export interface CreateDriveEnvDeps {
    */
   resolvePayer: (driveId: string) => Promise<{ payerId: string; tier: SubscriptionTier } | null>;
   now: () => Date;
+  /** POL-10: the drive's org policies, read live; null when the drive has no org (unrestricted). Required, never defaulted: the org's switch must not be skippable. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
   /** Required only for a LOCAL create (the one-time code needs randomness and a hash). */
   identity?: Pick<LocalEnvIdentityDeps, 'random' | 'hash' | 'newEnrollmentId'>;
+  /**
+   * [D-OW-28] Whether the creating member may add a billable env: its compute counts against their
+   * per-member cap on an org drive, so a member at their cap is refused (compute-gate
+   * `admitDriveComputeCreator`). Required, never defaulted: the cap must not be skippable. Not
+   * asked for a LOCAL env (it runs on the member's own machine) or a create with no creator.
+   */
+  admitCreator: (input: { driveId: string; userId: string }) => Promise<{ allowed: true } | { allowed: false; code?: 'org_lapsed' | 'org_member_cap_reached'; message: string }>;
 }
 
 /** What a local create hands back ONCE: the code is shown to the user and never stored. */
@@ -165,8 +177,14 @@ export type CreateDriveEnvResult =
   | { ok: false; reason: 'drive_not_found' }
   /** `(driveId, name)` is taken — the database refused, which is how concurrent creates are resolved. */
   | { ok: false; reason: 'name_taken' }
+  /** POL-10: the drive's organization does not allow persistent environments. */
+  | { ok: false; reason: 'org_policy'; message: string }
   /** The payer's tier forbids environments, or they are at their ceiling. `limit` is the ceiling that applied. */
-  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number };
+  | { ok: false; reason: 'quota_exceeded'; denial: DriveEnvAllowanceDenialReason; limit: number }
+  /** [D-OW-28] The creating member is at their cap of the org's credits. Nothing was created. */
+  | { ok: false; reason: 'member_cap_reached'; message: string }
+  /** SEAT-9: the drive's org is lapsed — it creates no new environment until it reactivates. */
+  | { ok: false; reason: 'org_lapsed'; message: string };
 
 /**
  * Create an environment: mint the row.
@@ -218,6 +236,16 @@ export async function createDriveEnv({
   const payer = await deps.resolvePayer(driveId);
   if (!payer) return { ok: false, reason: 'drive_not_found' };
 
+  const policy = environmentsDecision(await deps.getDriveOrgPolicies(driveId));
+  if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
+
+  if (!local && createdBy) {
+    const admitted = await deps.admitCreator({ driveId, userId: createdBy });
+    if (!admitted.allowed) {
+      return { ok: false, reason: admitted.code === 'org_lapsed' ? 'org_lapsed' : 'member_cap_reached', message: admitted.message };
+    }
+  }
+
   const allowance = await checkDriveEnvAllowance({
     payerId: payer.payerId,
     tier: payer.tier,
@@ -259,6 +287,61 @@ export async function createDriveEnv({
   }
   if (!issued) return { ok: true, env: created.env };
   return { ok: true, env: created.env, enrollment: { enrollmentId: issued.enrollmentId, code: issued.code, expiresAt: new Date(issued.exp) } };
+}
+
+// ---------------------------------------------------------------------------
+// Home: the owner's default env
+// ---------------------------------------------------------------------------
+
+export interface EnsureHomeDriveEnvDeps {
+  store: Pick<DriveEnvStore, 'ensureHomeEnv'>;
+  /** POL-10: the Home drive's org policies; null when it has no org. Required, never defaulted — same as `createDriveEnv`. */
+  getDriveOrgPolicies: (driveId: string) => Promise<OrgPolicies | null>;
+  now: () => Date;
+}
+
+export type EnsureHomeDriveEnvResult =
+  | { ok: true; env: DriveEnvRecord }
+  /** POL-10: the drive's organization does not allow persistent environments. Nothing was minted. */
+  | { ok: false; reason: 'org_policy'; message: string };
+
+/**
+ * The owner's Home env — the ONE machine their auto-created sessions (the
+ * Global Assistant's, Imago's) run in, so a user returns to one sandbox instead
+ * of minting a fresh Sprite per conversation. Minted on first use, in their
+ * Home drive, and returned as-is every time after.
+ *
+ * **What is deliberately NOT checked, and why.** `createDriveEnv` meters the
+ * payer's tier and env ceiling; this does not. Home is not an env anyone made
+ * on purpose — it REPLACES the ephemeral per-conversation Sprite every user
+ * already got — so the ceiling would either refuse a free-tier user the one
+ * sandbox they have today, or cost a paying user one of their deliberate envs.
+ * The store excludes Home from the ceiling's count for the same reason.
+ * Whether the payer may actually RUN code in it is still decided where it
+ * always is: at provision, by `canRunCode`'s tier gate.
+ *
+ * **What is kept.** The org's "persistent environments" switch: an org that
+ * turned envs off has said its members' work must not outlive a session, and
+ * a Home env is exactly such a machine. The caller falls back to an ephemeral
+ * session, as it would have before Home existed.
+ *
+ * No Sprite is touched — envs provision lazily, on the first session ensure.
+ */
+export async function ensureHomeDriveEnv({
+  homeDriveId,
+  ownerId,
+  deps,
+}: {
+  /** The owner's HOME drive (`provisionHomeDriveIfNeeded`). */
+  homeDriveId: string;
+  /** The Home drive's owner: recorded as creator and as the env's cost owner. */
+  ownerId: string;
+  deps: EnsureHomeDriveEnvDeps;
+}): Promise<EnsureHomeDriveEnvResult> {
+  const policy = environmentsDecision(await deps.getDriveOrgPolicies(homeDriveId));
+  if (!policy.ok) return { ok: false, reason: 'org_policy', message: policy.message };
+  const env = await deps.store.ensureHomeEnv({ driveId: homeDriveId, createdBy: ownerId, now: deps.now() });
+  return { ok: true, env };
 }
 
 // ---------------------------------------------------------------------------
@@ -808,7 +891,14 @@ export type DeleteDriveEnvResult =
   | { ok: true; spriteTornDown: boolean }
   | { ok: false; reason: 'not_found' }
   /** Sessions are still live in here and `force` was not given. Nothing was touched. */
-  | { ok: false; reason: 'live_sessions'; liveSessionCount: number };
+  | { ok: false; reason: 'live_sessions'; liveSessionCount: number }
+  /**
+   * The owner's Home env, which is never deleted (forced or not): every
+   * auto-created session runs in it, and its identity — `createdAt` included,
+   * which the sidebar's "Previous sessions" is keyed on — must stay stable.
+   * `rebuildDriveEnv` is how Home is wiped; a rename is still allowed.
+   */
+  | { ok: false; reason: 'is_home' };
 
 /**
  * Delete an environment — the destructive verb, and the only one that takes a
@@ -875,6 +965,7 @@ export async function deleteDriveEnv({
 }): Promise<DeleteDriveEnvResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
+  if (row.isHome) return { ok: false, reason: 'is_home' };
 
   // Step 1. Cheap and non-authoritative — see the docblock. Its only job is to
   // refuse the common "you have sessions open in here" case without taking a
@@ -1062,6 +1153,11 @@ export interface RebuildDriveEnvDeps {
    */
   ensureSandbox: (row: DriveEnvRecord) => Promise<EnsureSpriteHolderSandboxResult>;
   now: () => Date;
+  /**
+   * SEAT-9 (review #2761): whether the env's drive may start compute — a lapsed org rebuilds nothing.
+   * Required, never defaulted (compute-gate `admitDriveOrgActive`).
+   */
+  admitOrgActive: (input: { driveId: string }) => Promise<{ allowed: true } | { allowed: false; code: 'org_lapsed'; message: string }>;
 }
 
 export type RebuildDriveEnvResult =
@@ -1070,6 +1166,8 @@ export type RebuildDriveEnvResult =
   /** A LOCAL env has no Sprite to replace: rebuild is a Sprite verb (C1). Nothing is torn down or provisioned. */
   | { ok: false; reason: 'substrate_unsupported' }
   | { ok: false; reason: 'teardown_failed'; detail: string }
+  /** SEAT-9: the drive's org is lapsed. Nothing is torn down or provisioned. */
+  | { ok: false; reason: 'org_lapsed'; message: string }
   /** The old Sprite is gone but the new one could not be minted. The env survives, machineless, and the next ensure retries. */
   | { ok: false; reason: 'provision_failed'; detail: string };
 
@@ -1107,6 +1205,9 @@ export async function rebuildDriveEnv({
   // C1: the user's own machine has no Sprite to destroy and re-mint. Refuse
   // BEFORE the teardown and before the provisioner is ever consulted.
   if (row.substrate === 'local') return { ok: false, reason: 'substrate_unsupported' };
+  // SEAT-9: a lapsed org starts no compute — refused before the old machine is destroyed.
+  const active = await deps.admitOrgActive({ driveId: row.driveId });
+  if (!active.allowed) return { ok: false, reason: 'org_lapsed', message: active.message };
 
   if (row.sandboxId !== null && row.spriteTornDownAt === null) {
     const teardown = await teardownEnvSprite({

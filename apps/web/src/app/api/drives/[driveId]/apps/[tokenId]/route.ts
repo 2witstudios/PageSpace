@@ -3,12 +3,15 @@ import { z } from 'zod';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
+import { checkDriveAccess, isMemberOfDrive } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { mcpTokenDrives, driveRoles } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
 
@@ -33,12 +36,12 @@ export async function PATCH(
 
     const { driveId, tokenId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can update app members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can update app members' }, { status: 403 }));
     }
 
     const rawBody = await request.json();
@@ -67,7 +70,7 @@ export async function PATCH(
     // Clearing back to inherit requires the token's OWNER to be a drive member —
     // otherwise the row would resolve to nothing (confusing dead state).
     if (role === null) {
-      const ownerIsMember = await isUserDriveMember(existing[0].ownerUserId, driveId);
+      const ownerIsMember = await isMemberOfDrive(driveId, existing[0].ownerUserId);
       if (!ownerIsMember) {
         return NextResponse.json(
           { error: "Cannot set this app to inherit: its owner is not a member of this drive. Assign an explicit role instead." },
@@ -91,11 +94,22 @@ export async function PATCH(
     if (role !== undefined) updateValues.role = role;
     if (customRoleId !== undefined) updateValues.customRoleId = customRoleId;
 
-    const [updated] = await db
-      .update(mcpTokenDrives)
-      .set(updateValues)
-      .where(and(eq(mcpTokenDrives.driveId, driveId), eq(mcpTokenDrives.tokenId, tokenId)))
-      .returning();
+    // [D-OW-33] an explicit role is NOT bounded by the token owner's access: raising a key to ADMIN (from MEMBER or
+    // inherit), or to a wider custom role, loosens the drive. guardDriveAccess undoes it while the drive's org is
+    // lapsed (402); narrowing a key still applies.
+    let updated: typeof mcpTokenDrives.$inferSelect | undefined;
+    try {
+      [updated] = await guardDriveAccess(db, driveId, { members: false, grants: false, agents: false }, (tx) =>
+        tx
+          .update(mcpTokenDrives)
+          .set(updateValues)
+          .where(and(eq(mcpTokenDrives.driveId, driveId), eq(mcpTokenDrives.tokenId, tokenId)))
+          .returning(),
+      );
+    } catch (error) {
+      if (isOrgLapsedError(error)) return orgLapsedResponse();
+      throw error;
+    }
 
     auditRequest(request, {
       eventType: 'authz.role.assigned',
@@ -127,12 +141,12 @@ export async function DELETE(
 
     const { driveId, tokenId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isAdmin) {
-      return NextResponse.json({ error: 'Only drive owners and admins can remove app members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can remove app members' }, { status: 403 }));
     }
 
     const existing = await db

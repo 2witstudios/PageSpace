@@ -19,6 +19,7 @@ import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
 import type { ToolExecutionContext } from '../core/types';
 import { driveDeniedByAppToken } from './actor-permissions';
 import { getAiContextWithActor } from './task-helpers';
+import { toolActor } from '@/lib/ai/tools/actor-permissions';
 
 const driveIdSchema = z.string().regex(/^[a-z][a-z0-9]{1,31}$/, 'Invalid drive ID format');
 
@@ -40,7 +41,7 @@ async function requireDriveAdmin(
     return { ok: false, error: { success: false, error: 'This token does not have access to this drive' } };
   }
 
-  const access = await checkDriveAccessForRoles(driveId, context.userId);
+  const access = await checkDriveAccessForRoles(driveId, toolActor(context));
   if (!access.drive) return { ok: false, error: { success: false, error: 'Drive not found' } };
   if (!access.isOwner && !access.isAdmin) {
     return { ok: false, error: { success: false, error: 'You must be a drive admin or owner to manage roles' } };
@@ -82,7 +83,7 @@ export const roleManagementTools = {
         return { success: false, error: 'This token does not have access to this drive' };
       }
 
-      const access = await checkDriveAccessForRoles(driveId, userId);
+      const access = await checkDriveAccessForRoles(driveId, toolActor(context as ToolExecutionContext));
       if (!access.drive) return { success: false, error: 'Drive not found' };
       if (!access.isOwner && !access.isMember) {
         return { success: false, error: 'You must be a drive member to view roles' };
@@ -128,7 +129,7 @@ export const roleManagementTools = {
         return { success: false, error: 'This token does not have access to this drive' };
       }
 
-      const access = await checkDriveAccessForRoles(driveId, userId);
+      const access = await checkDriveAccessForRoles(driveId, toolActor(context as ToolExecutionContext));
       if (!access.drive) return { success: false, error: 'Drive not found' };
       if (!access.isOwner && !access.isMember) {
         return { success: false, error: 'You must be a drive member to view roles' };

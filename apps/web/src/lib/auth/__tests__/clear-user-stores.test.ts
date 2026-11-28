@@ -1,5 +1,5 @@
-import { describe, expect, test, beforeEach } from 'vitest';
-import { clearStoresIfUserChanged } from '../clear-user-stores';
+import { describe, expect, test, beforeEach, vi } from 'vitest';
+import { clearStoresIfUserChanged, removeKeysWithPrefixes } from '../clear-user-stores';
 
 const LAST_USER_KEY = 'ps-last-user-id';
 
@@ -118,5 +118,19 @@ describe('clearStoresIfUserChanged', () => {
     expect(store.get('open-tabs-storage')).toBeUndefined();
     expect(store.get(LAST_USER_KEY)).toBe('user-b');
     expect(localStorage.getItem(LAST_USER_KEY)).toBeNull();
+  });
+});
+
+describe('removeKeysWithPrefixes', () => {
+  test('given storage that cannot list its keys, should leave it alone', () => {
+    const storage = { getItem: () => null, setItem: () => undefined, removeItem: vi.fn() };
+    removeKeysWithPrefixes(storage, ['pagespace.orgSetup.']);
+    expect(storage.removeItem).not.toHaveBeenCalled();
+  });
+
+  test('given no prefixes, should remove nothing', () => {
+    localStorage.setItem('pagespace.orgSetup.u_a.org_1', '{}');
+    removeKeysWithPrefixes(localStorage, []);
+    expect(localStorage.getItem('pagespace.orgSetup.u_a.org_1')).toBe('{}');
   });
 });

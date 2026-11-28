@@ -1,0 +1,2 @@
+ALTER TABLE "users" ADD CONSTRAINT "users_personal_subscription_tier" CHECK ("users"."subscriptionTier" IN ('free', 'pro'));--> statement-breakpoint
+ALTER TABLE "users" ADD CONSTRAINT "users_retired_billing_cleared" CHECK ("users"."subscriptionGrandfathered" = false);

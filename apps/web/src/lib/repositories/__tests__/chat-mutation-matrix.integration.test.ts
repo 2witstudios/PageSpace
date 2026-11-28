@@ -74,6 +74,7 @@ import { conversationRepository } from '@/lib/repositories/conversation-reposito
 import { previewAiUndo, executeAiUndo } from '@/services/api/ai-undo-service';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { conversationEvents } from '@/lib/websocket/conversation-events';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** The conversation's current rev — the watermark every open pane compares. */
 async function revOf(conversationId: string): Promise<number> {
@@ -352,7 +353,7 @@ describe('chat mutation matrix — one message table', () => {
       });
       const undoFrom = thread.ids[2];
 
-      const preview = await previewAiUndo(undoFrom, thread.ownerId);
+      const preview = await previewAiUndo(undoFrom, credentialActor(thread.ownerId, null));
       expect(preview).not.toBeNull();
       // Derived from the conversation, not from which table answered first.
       expect(preview!.source).toBe('page_chat');
@@ -360,7 +361,7 @@ describe('chat mutation matrix — one message table', () => {
       // Turn two's two messages, counted off the unified table.
       expect(preview!.messagesAffected).toBe(2);
 
-      const result = await executeAiUndo(undoFrom, thread.ownerId, 'messages_only', preview!);
+      const result = await executeAiUndo(undoFrom, credentialActor(thread.ownerId, null), 'messages_only', preview!);
       expect(result.success).toBe(true);
 
       const history = await messageRepository.getPageConversationMessages(
@@ -379,8 +380,8 @@ describe('chat mutation matrix — one message table', () => {
         ],
       });
 
-      const first = await executeAiUndo(thread.ids[1], thread.ownerId, 'messages_only');
-      const second = await executeAiUndo(thread.ids[1], thread.ownerId, 'messages_only');
+      const first = await executeAiUndo(thread.ids[1], credentialActor(thread.ownerId, null), 'messages_only');
+      const second = await executeAiUndo(thread.ids[1], credentialActor(thread.ownerId, null), 'messages_only');
 
       expect(first.success).toBe(true);
       expect(second).toMatchObject({ success: true, messagesDeleted: 0, activitiesRolledBack: 0 });
@@ -401,7 +402,7 @@ describe('chat mutation matrix — one message table', () => {
       });
       const survivor = await messageRepository.getMessageById(thread.ids[1]);
 
-      const result = await executeAiUndo(thread.ids[2], thread.ownerId, 'messages_only');
+      const result = await executeAiUndo(thread.ids[2], credentialActor(thread.ownerId, null), 'messages_only');
       expect(result.success).toBe(true);
 
       const [conv] = await db

@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },

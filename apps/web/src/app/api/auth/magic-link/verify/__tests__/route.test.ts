@@ -110,7 +110,7 @@ vi.mock('@/lib/repositories/drive-invite-repository', () => ({
 }));
 
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({
-  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null }),
+  consumeAnyInviteIfPresent: vi.fn().mockResolvedValue({ kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({ drivesAccepted: 0, pagesAccepted: 0, connectionsCreated: 0 }),
 }));
 
@@ -688,7 +688,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await GET(inviteRequest('valid-token'));
@@ -712,7 +712,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, inviteError: 'TOKEN_CONSUMED',
+        kind: null, invitedDriveId: null, invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null, inviteError: 'TOKEN_CONSUMED',
       });
 
       const response = await GET(inviteRequest('valid-token'));
@@ -744,7 +744,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const url = `http://localhost/api/auth/magic-link/verify?token=valid&next=${encodeURIComponent('/dashboard/some_other_drive')}`;
@@ -765,7 +765,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null,
+        kind: 'drive', invitedDriveId: 'drive_invited_42', invitedPageId: null, connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
@@ -787,7 +787,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: 'page', invitedDriveId: 'drive_invited_42', invitedPageId: 'page_invited_7', connectionId: null,
+        kind: 'page', invitedDriveId: 'drive_invited_42', invitedPageId: 'page_invited_7', connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));
@@ -807,7 +807,7 @@ describe('GET /api/auth/magic-link/verify', () => {
         },
       });
       vi.mocked(consumeAnyInviteIfPresent).mockResolvedValueOnce({
-        kind: 'connection', invitedDriveId: null, invitedPageId: null, connectionId: 'conn_1',
+        kind: 'connection', invitedDriveId: null, invitedPageId: null, connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await GET(new Request('http://localhost/api/auth/magic-link/verify?token=valid', { method: 'GET' }));

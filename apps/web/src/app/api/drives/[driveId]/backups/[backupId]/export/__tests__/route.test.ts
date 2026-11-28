@@ -109,7 +109,7 @@ describe('GET /api/drives/[driveId]/backups/[backupId]/export', () => {
 
   it('calls streamBackupExport with correct backupId, driveId, userId', async () => {
     await GET(makeRequest(driveId, backupId), makeParams(driveId, backupId));
-    expect(streamBackupExport).toHaveBeenCalledWith(backupId, driveId, userId);
+    expect(streamBackupExport).toHaveBeenCalledWith(backupId, driveId, expect.objectContaining({ userId: userId }));
   });
 
   it('calls auditRequest with operation: export_backup_started on success', async () => {

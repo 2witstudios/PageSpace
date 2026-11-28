@@ -18,6 +18,10 @@ const driveMemberSchema = z.object({
   id: z.string(),
   userId: z.string(),
   role: memberRoleSchema,
+  /** How their standing came to be (DRV-5, DRV-8): an invitation, org membership, or the lead. Optional: older servers omit it. */
+  source: z.enum(['invite', 'org', 'lead']).optional(),
+  /** DRV-8: a member of an org drive with no role in its org (labeled a guest). Optional: older servers omit it. */
+  isGuest: z.boolean().optional(),
   invitedBy: z.string().nullable(),
   invitedAt: z.string().nullable(),
   acceptedAt: z.string().nullable(),
@@ -52,6 +56,17 @@ const driveMemberSchema = z.object({
     .optional(),
 });
 
+/** A page-link guest (D-OW-24): not a member; listed apart for the lead and admins. */
+const pageLinkGuestSchema = z.object({
+  userId: z.string(),
+  displayName: z.string(),
+  username: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+  acceptedAt: z.string().nullable(),
+  source: z.enum(['invite', 'org']),
+  pageGrantCount: z.number(),
+});
+
 const pendingInviteSchema = z.object({
   id: z.string(),
   email: z.string(),
@@ -73,6 +88,8 @@ export const listDriveMembers = defineOperation({
   outputSchema: z.object({
     members: z.array(driveMemberSchema),
     pendingInvites: z.array(pendingInviteSchema),
+    /** Page-link guests; empty for non-owner/admin callers. Optional: older servers omit it. */
+    guests: z.array(pageLinkGuestSchema).optional(),
     currentUserRole: memberRoleSchema,
   }),
   requiredScope: 'drive',

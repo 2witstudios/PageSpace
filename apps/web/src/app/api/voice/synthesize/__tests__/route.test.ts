@@ -33,9 +33,16 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   aiSettingsRepository: { getUserSettings: mockGetUserSettings },
 }));
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  PAID_TIERS: new Set(['pro', 'founder', 'business']),
+  PAID_TIERS: new Set(['pro', 'business']),
 }));
 vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: mockCanConsumeAI }));
+const { mockResolveVoiceSpend, mockResolveRequestContext } = vi.hoisted(() => ({
+  mockResolveVoiceSpend: vi.fn(),
+  mockResolveRequestContext: vi.fn(),
+}));
+vi.mock('@/lib/ai/realtime/voice-spend', () => ({ resolveVoiceSpend: mockResolveVoiceSpend }));
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceSpendDeps: () => ({}) }));
+vi.mock('@/lib/ai/core/resolve-request-context', () => ({ resolveRequestContext: mockResolveRequestContext }));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: mockReleaseHold }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: mockTrackUsage },
@@ -77,16 +84,67 @@ describe('POST /api/voice/synthesize — metering', () => {
     mockTrackUsage.mockResolvedValue(undefined);
     mockReleaseHold.mockResolvedValue(undefined);
     mockEmitCreditsUpdated.mockResolvedValue(undefined);
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
+    mockResolveRequestContext.mockResolvedValue(null);
   });
 
-  it('blocks free users with 403 before gating or calling the provider', async () => {
+  it('WAL-8 (partial) refuses a caller funding speech from a Free plan with 403: judged on the held source\'s funder, the hold freed, the provider never called', async () => {
     mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'free' });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', entitlementTier: 'free' });
     const fetchSpy = okAudioFetch();
     vi.stubGlobal('fetch', fetchSpy);
 
     const res = await POST(ttsRequest({ text: 'hello world' }));
 
     expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: 'Pro plan required' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mockTrackUsage).not.toHaveBeenCalled();
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_1');
+  });
+
+  it('WAL-8 (partial) a Free caller whose speech an org drive funds is served: the plan judged is the funder\'s', async () => {
+    mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'free' });
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'org-drive' });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w-org', entitlementTier: 'business' });
+    vi.stubGlobal('fetch', okAudioFetch());
+
+    const res = await POST(ttsRequest({ text: 'hello world', conversationId: 'conv1' }));
+
+    expect(res.status).toBe(200);
+  });
+
+  it('SPEND-1 (partial) speech read aloud from a drive conversation reserves in that drive — the conversation\'s stored source applies — and its usage is attributed there', async () => {
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok', holdId: 'hold_1', walletId: 'w-drive', entitlementTier: 'business' });
+    vi.stubGlobal('fetch', okAudioFetch());
+
+    await POST(ttsRequest({ text: 'hello', conversationId: 'conv1', agentPageId: 'agent1' }));
+
+    expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'conv1', agentPageId: 'agent1' });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', expect.objectContaining({ spend: { kind: 'drive', driveId: 'drive-1', chosen: null, conversationId: 'conv1' } }));
+    expect(mockTrackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w-drive', driveId: 'drive-1', conversationId: 'conv1' }));
+  });
+
+  it('SPEND-1 (partial) a Global Assistant reply read aloud spends in the drive the server resolves from the caller\'s contextRef, never an id the body claims', async () => {
+    mockResolveRequestContext.mockResolvedValue({ currentPage: null, currentDrive: { id: 'drive-verified', name: 'P', slug: 'p' }, breadcrumbs: [] });
+    vi.stubGlobal('fetch', okAudioFetch());
+
+    await POST(ttsRequest({ text: 'hello', conversationId: 'g1', contextRef: { routeType: 'drive', driveId: 'drive-claimed' }, driveId: 'drive-smuggled' }));
+
+    expect(mockResolveRequestContext).toHaveBeenCalledWith({ userId: 'u1' }, { routeType: 'drive', driveId: 'drive-claimed' });
+    expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'g1', contextDriveId: 'drive-verified' });
+  });
+
+  it('SPEND-4 (partial) speech whose drive cannot be resolved is refused by name, reserving and charging nothing', async () => {
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'refused', reason: 'voice_spend_unresolved' });
+    const fetchSpy = okAudioFetch();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const res = await POST(ttsRequest({ text: 'hello', conversationId: 'fresh', agentPageId: 'agent1' }));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ code: 'voice_spend_unresolved' });
     expect(mockCanConsumeAI).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
@@ -100,7 +158,7 @@ describe('POST /api/voice/synthesize — metering', () => {
     expect(res.status).toBe(200);
     // Gated with the exact per-call reservation: 1000 chars × $15/1M × 1.5 = $0.0225
     // → ceil to 3¢ (not a flat estimate), plus the voice concurrency cap.
-    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { estCostCents: 3, maxInFlight: 4 });
+    expect(mockCanConsumeAI).toHaveBeenCalledWith('u1', 'pro', { spend: { kind: 'personal' }, estCostCents: 3, maxInFlight: 4 });
     // Billed real cost: 1000 chars × $15/1M = $0.015, tagged as voice/list_price.
     expect(mockTrackUsage).toHaveBeenCalledTimes(1);
     const usage = mockTrackUsage.mock.calls[0][0];

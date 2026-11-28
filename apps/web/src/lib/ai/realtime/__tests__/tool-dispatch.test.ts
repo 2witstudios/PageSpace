@@ -226,9 +226,21 @@ describe('buildVoiceToolContext', () => {
       conversationId: 'conv1',
       timezone: 'America/New_York',
       locationContext: { currentPage: { id: 'p1' } },
-      aiProvider: 'openai_voice',
+      aiProvider: 'openai',
       aiModel: 'gpt-realtime-2.1',
     });
+  });
+
+  it('SPEND-1 (partial) given the call\'s drive source, a voice tool inherits it: the drive, the pinned source and the conversation', () => {
+    const context = buildVoiceToolContext(
+      request({ conversationId: 'conv1', spend: { driveId: 'drive-1', chosen: 'drive_wallet' } }),
+      'gpt-realtime-2.1',
+    );
+    expect(context.creditSpend).toEqual({ spend: { kind: 'drive', driveId: 'drive-1', chosen: 'drive_wallet', conversationId: 'conv1', followOn: true } });
+  });
+
+  it('SPEND-8 (partial) given a personal call, a voice tool spends personal credits', () => {
+    expect(buildVoiceToolContext(request(), 'gpt-realtime-2.1').creditSpend).toEqual({ spend: { kind: 'personal' } });
   });
 
   it('should mark the turn as a user request at depth zero, not a sub-agent run', () => {

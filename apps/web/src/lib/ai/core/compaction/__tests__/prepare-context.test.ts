@@ -51,6 +51,7 @@ const baseParams = {
   pageId: 'page-1',
   model: 'some-unknown-model',
   provider: 'openrouter',
+  spend: { kind: 'drive' as const, driveId: 'drive-1', chosen: 'drive_wallet' as const, conversationId: 'conv-1' },
 };
 
 beforeEach(() => {
@@ -151,7 +152,6 @@ describe('prepareConversationContext — admin path', () => {
       provider: 'openrouter',
       model: 'some-unknown-model',
     });
-
     result.scheduleCompaction();
     expect(mockAfter).toHaveBeenCalledTimes(1);
 
@@ -159,5 +159,14 @@ describe('prepareConversationContext — admin path', () => {
     const registered = mockAfter.mock.calls[0][0] as () => void;
     registered();
     expect(runCompaction).toHaveBeenCalledWith(result.pendingCompaction);
+  });
+
+  it('SPEND-1 (partial) the compaction a turn plans carries the turn\'s own spend target, so its gate reserves where the turn spent', async () => {
+    const result = await prepareConversationContext({
+      ...baseParams,
+      messages: hugeHistory(),
+      user: { id: 'u1', role: 'user' },
+    });
+    expect(result.pendingCompaction?.spend).toEqual(baseParams.spend);
   });
 });

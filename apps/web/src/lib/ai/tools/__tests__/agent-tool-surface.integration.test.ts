@@ -46,6 +46,7 @@ import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-creat
 import { ensureGlobalSandboxSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 let dbAvailable = false;
 
@@ -258,7 +259,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
     const workspaceFor = async (userId: string): Promise<string> => {
       const conversationId = createId();
       await resolveOrCreateConversation(userId, conversationId);
-      const ensured = await ensureGlobalSandboxSession(conversationId, userId);
+      const ensured = await ensureGlobalSandboxSession(conversationId, credentialActor(userId, null));
       if (!ensured.ok) throw new Error(`could not mint a workspace: ${ensured.reason}`);
       return ensured.session.id;
     };
@@ -271,7 +272,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
 
       const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
         workspaceId,
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         granted: ['read_page', 'spawn_session'],
       });
 
@@ -297,7 +298,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
 
       const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
         workspaceId,
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         granted: ['read_page', 'bash'],
       });
 
@@ -315,7 +316,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
 
       const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
         workspaceId,
-        userId: owner.id,
+        actor: credentialActor(owner.id, null),
         granted: null,
       });
 

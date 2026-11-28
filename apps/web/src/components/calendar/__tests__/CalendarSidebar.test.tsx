@@ -1,6 +1,6 @@
 import { describe, test, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { CalendarSidebar } from '../CalendarSidebar';
 import { DRIVE_CALENDAR_COLORS, PERSONAL_CALENDAR_COLOR } from '../calendar-types';
 

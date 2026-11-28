@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { tokenizeCode } from '../shiki-highlighter';
 
 describe('Shiki Highlighter Service', () => {

@@ -1,7 +1,7 @@
 'use client';
 
 import { CheckCircle2, Info, Loader2, ShieldAlert } from 'lucide-react';
-import { AuthShell } from '@/components/auth/AuthShell';
+import { AuthLayout } from '@/components/auth/AuthLayout';
 import { HandoffCompleteCard } from '@/components/auth/HandoffCompleteCard';
 import type { PasskeyRegisterExternalErrorCode } from '@/components/auth/runPasskeyRegisterExternalCeremony';
 
@@ -18,14 +18,14 @@ export function PasskeyRegisterExternalView({
 }) {
   if (status.kind === 'complete') {
     return (
-      <AuthShell>
+      <AuthLayout>
         <HandoffCompleteCard variant="passkey-added" />
-      </AuthShell>
+      </AuthLayout>
     );
   }
 
   return (
-    <AuthShell>
+    <AuthLayout>
       <div className="flex flex-col items-center gap-4 py-6 text-center">
         {status.kind === 'error' ? (
           <ErrorState status={status} />
@@ -45,7 +45,7 @@ export function PasskeyRegisterExternalView({
           </>
         )}
       </div>
-    </AuthShell>
+    </AuthLayout>
   );
 }
 

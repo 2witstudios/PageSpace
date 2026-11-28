@@ -42,7 +42,7 @@ describe('Canvas content persistence', () => {
       store.updateDocument(pageId, {
         content: savedContent,
         isDirty: false,
-        revision: 1,
+        contentRevision: 1,
         lastSaved: Date.now(),
       });
 
@@ -56,7 +56,7 @@ describe('Canvas content persistence', () => {
         ok: true,
         json: () => Promise.resolve({
           content: savedContent,
-          revision: 1,
+          contentRevision: 1,
           contentMode: 'html',
         }),
       });
@@ -70,7 +70,7 @@ describe('Canvas content persistence', () => {
         if (response.ok) {
           const page = await response.json();
           store.upsertDocument(pageId, page.content || '', page.contentMode || 'html');
-          store.updateDocument(pageId, { revision: page.revision });
+          store.updateDocument(pageId, { contentRevision: page.contentRevision });
         }
       }
 
@@ -78,7 +78,7 @@ describe('Canvas content persistence', () => {
       const doc = store.getDocument(pageId);
       expect(doc).toBeDefined();
       expect(doc?.content).toBe(savedContent);
-      expect(doc?.revision).toBe(1);
+      expect(doc?.contentRevision).toBe(1);
       // Verify: API was called (not relying on stale props)
       expect(mockFetchWithAuth).toHaveBeenCalledWith(`/api/pages/${pageId}`);
     });
@@ -90,7 +90,7 @@ describe('Canvas content persistence', () => {
       // Document still exists in store (e.g., quick navigation back)
       const store = useDocumentManagerStore.getState();
       store.upsertDocument(pageId, savedContent, 'html');
-      store.updateDocument(pageId, { revision: 2, isDirty: false });
+      store.updateDocument(pageId, { contentRevision: 2, isDirty: false });
 
       // On remount, should find existing document and skip API fetch
       const existing = store.getDocument(pageId);
@@ -107,7 +107,7 @@ describe('Canvas content persistence', () => {
       const pageId = 'canvas-page-3';
       const store = useDocumentManagerStore.getState();
       store.upsertDocument(pageId, '<p>original</p>', 'html');
-      store.updateDocument(pageId, { revision: 3, isDirty: true });
+      store.updateDocument(pageId, { contentRevision: 3, isDirty: true });
 
       // Save attempt: server returns 409 conflict
       mockFetchWithAuth.mockResolvedValueOnce({
@@ -115,8 +115,8 @@ describe('Canvas content persistence', () => {
         status: 409,
         json: () => Promise.resolve({
           error: 'Page was modified since your last read',
-          currentRevision: 5,
-          expectedRevision: 3,
+          currentContentRevision: 5,
+          expectedContentRevision: 3,
         }),
       });
 
@@ -125,7 +125,7 @@ describe('Canvas content persistence', () => {
         ok: true,
         json: () => Promise.resolve({
           content: '<p>server content after conflict</p>',
-          revision: 5,
+          contentRevision: 5,
           contentMode: 'html',
         }),
       });
@@ -133,7 +133,7 @@ describe('Canvas content persistence', () => {
       // Simulate useDocumentSaving.saveDocument 409 handling:
       const response = await mockFetchWithAuth(`/api/pages/${pageId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ content: '<p>my edit</p>', expectedRevision: 3 }),
+        body: JSON.stringify({ content: '<p>my edit</p>', expectedContentRevision: 3 }),
       });
 
       if (!response.ok && response.status === 409) {
@@ -143,7 +143,7 @@ describe('Canvas content persistence', () => {
           const freshPage = await freshResponse.json();
           store.updateDocument(pageId, {
             content: freshPage.content,
-            revision: freshPage.revision,
+            contentRevision: freshPage.contentRevision,
             isDirty: false,
             lastSaved: Date.now(),
             lastUpdateTime: Date.now(),
@@ -154,7 +154,7 @@ describe('Canvas content persistence', () => {
       // After 409 recovery: revision updated, content updated, not dirty
       const doc = store.getDocument(pageId);
       expect(doc?.content).toBe('<p>server content after conflict</p>');
-      expect(doc?.revision).toBe(5);
+      expect(doc?.contentRevision).toBe(5);
       expect(doc?.isDirty).toBe(false);
 
       // Next save attempt should use updated revision

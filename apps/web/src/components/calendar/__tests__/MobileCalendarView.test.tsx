@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { describe, test, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { MobileCalendarView } from '../MobileCalendarView';
 import type { CalendarEvent, CalendarHandlers } from '../calendar-types';
 

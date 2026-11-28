@@ -60,6 +60,7 @@ describe('middleware — pre-session auth + public asset/internal endpoints', ()
     ['/api/avatar/user123/photo.png', 'GET'],
     ['/api/provisioning-status/my-tenant', 'GET'],
     ['/api/contact', 'POST'],
+    ['/api/report', 'POST'],
   ])('lets %s through with no session cookie instead of 401ing before the route runs', async (path, method) => {
     createSecureResponse.mockClear();
     const req = new NextRequest(`https://pagespace.ai${path}`, { method });
@@ -73,6 +74,7 @@ describe('middleware — pre-session auth + public asset/internal endpoints', ()
   it.each([
     ['/api/notifications/read-all', 'control: a similar but non-unsubscribe notifications path still requires a session'],
     ['/api/account/avatar', 'control: the authenticated account-avatar-upload route (distinct from the public /api/avatar/ asset path) still requires a session'],
+    ['/api/user-reports', 'control: the signed-in report route (distinct from the public /api/report) still requires a session'],
   ])('%s: 401s with no session cookie', async (path) => {
     createSecureResponse.mockClear();
     const req = new NextRequest(`https://pagespace.ai${path}`, { method: 'POST' });

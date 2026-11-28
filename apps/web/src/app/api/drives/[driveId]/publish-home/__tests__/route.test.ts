@@ -128,7 +128,7 @@ describe('POST /api/drives/[driveId]/publish-home', () => {
   it('returns 200, the publish result, and audits on success', async () => {
     const res = await POST(makeReq(), { params });
     expect(res.status).toBe(200);
-    expect(publishHomePageAtRoot).toHaveBeenCalledWith('drive-1', 'user-1');
+    expect(publishHomePageAtRoot).toHaveBeenCalledWith('drive-1', expect.objectContaining({ userId: 'user-1' }));
     const json = await res.json();
     expect(json).toEqual({ url: 'https://acme.pagespace.site/', subdomain: 'acme', path: 'welcome', isHomePage: true });
     expect(auditRequest).toHaveBeenCalledWith(

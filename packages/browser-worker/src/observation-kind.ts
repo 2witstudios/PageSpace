@@ -1,4 +1,4 @@
-import type { BrowserOperationKind } from './browser-operation.js';
+import type { BrowserOperationKind } from './browser-operation.ts';
 
 /**
  * Everything a browser session can emit that tells a watcher what is on the

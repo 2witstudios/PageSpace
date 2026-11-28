@@ -25,6 +25,7 @@ export async function GET(request: Request) {
 
   const token = await sessionService.createSession({
     userId: auth.userId,
+    authentication: auth.authentication ?? null,
     type: 'socket',
     scopes: [],
     expiresInMs: SOCKET_TOKEN_TTL_MS,

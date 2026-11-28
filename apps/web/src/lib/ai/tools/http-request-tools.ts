@@ -21,6 +21,7 @@ import type { AgentPageId, ConversationId, RunId, SessionId, UserId } from '@pag
 import { toHttpRequestToolResult } from '@pagespace/lib/agent-accounts/to-http-request-tool-result';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import type { ToolExecutionContext } from '../core/types';
+import { toolActor } from './actor-permissions';
 
 const MAX_BODY_CHARS = 1_000_000;
 /** What a generic request carries (no provider registry entries yet): anything else is dropped before digesting. */
@@ -40,7 +41,7 @@ export const httpRequestTools = {
       const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
       // The same scoping as the settings list: an agent page's own accounts, or the person's own for the global assistant.
       const listed = await authority.listAccounts({
-        actorUserId: context.userId as UserId,
+        actor: toolActor(context),
         owner: agentPageId === null ? { kind: 'user' } : { kind: 'agent_page', agentPageId },
         // A drive-scoped credential never sees accounts outside its drives (second review MED-2).
         allowedDriveIds: context.mcpAllowedDriveIds ?? [],
@@ -69,6 +70,7 @@ export const httpRequestTools = {
       context.turnId ??= crypto.randomUUID();
       const agentPageId = context.chatSource?.type === 'page' ? (context.chatSource.agentPageId ?? null) : null;
       const result = await authority.requestOperation({
+        actor: toolActor(context),
         caller: {
           actorUserId: context.userId as UserId,
           actingHumanUserId: context.userId as UserId,

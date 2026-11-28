@@ -1,5 +1,5 @@
 import { z } from 'zod/v4';
-import { tierRank, toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { tierRank, toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 /**
  * Query-param parsing + in-memory search/sort helpers for the paginated
@@ -70,7 +70,7 @@ export function compareUsers(sort: ListUsersParams['sort']): (a: SortableUser, b
       return (a, b) => (a.lastActiveAt?.getTime() ?? 0) - (b.lastActiveAt?.getTime() ?? 0);
     case 'tier':
       return (a, b) =>
-        tierRank(toSubscriptionTier(a.subscriptionTier)) - tierRank(toSubscriptionTier(b.subscriptionTier));
+        tierRank(toPersonalSubscriptionTier(a.subscriptionTier)) - tierRank(toPersonalSubscriptionTier(b.subscriptionTier));
     case 'name':
     default:
       return (a, b) => (a.name ?? '').localeCompare(b.name ?? '');

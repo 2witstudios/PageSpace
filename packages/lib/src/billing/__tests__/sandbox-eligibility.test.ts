@@ -1,13 +1,15 @@
+import { DEPLOYMENT_CAPABILITY_TIER } from '../deployment-capability';
 import { readFileSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { describe, expect, it, vi, afterEach } from 'vitest';
 import {
   SANDBOX_ELIGIBLE_TIERS,
-  TENANT_EFFECTIVE_SANDBOX_TIER,
   isSandboxAvailable,
   isSandboxTierEligible,
   resolveEffectiveSandboxTier,
   resolveEffectiveSandboxTierForMode,
+  resolveSandboxPayerTier,
+  computeTierForDrive,
 } from '../sandbox-eligibility';
 import { TIERS, type SubscriptionTier } from '../subscription-tiers';
 import type { DeploymentMode } from '../../deployment-mode';
@@ -39,19 +41,16 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
     }
   });
 
-  it('leaves the stored tier alone on onprem — onprem is deliberately NOT exempt', () => {
+  it('given onprem personal tiers, should retain deployment compute capability', () => {
     for (const tier of ALL_TIERS) {
-      expect(resolveEffectiveSandboxTierForMode(tier, 'onprem')).toBe(tier);
+      expect(resolveEffectiveSandboxTierForMode(tier, 'onprem')).toBe('business');
     }
-    // The whole point, stated as a fact rather than an absence: a free-tier
-    // onprem payer is still refused, because onprem's answer to code execution
-    // is a local shell bridge, not a Sprite this deployment can reach.
-    expect(isSandboxTierEligible(resolveEffectiveSandboxTierForMode('free', 'onprem'))).toBe(false);
+    expect(isSandboxTierEligible(resolveEffectiveSandboxTierForMode('free', 'onprem'))).toBe(true);
   });
 
   it('normalizes every stored tier to the tenant effective tier on tenant', () => {
     for (const tier of ALL_TIERS) {
-      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(TENANT_EFFECTIVE_SANDBOX_TIER);
+      expect(resolveEffectiveSandboxTierForMode(tier, 'tenant')).toBe(DEPLOYMENT_CAPABILITY_TIER);
     }
   });
 
@@ -65,21 +64,21 @@ describe('resolveEffectiveSandboxTierForMode — the single seam', () => {
   });
 
   it('resolves to an ELIGIBLE tier on tenant — a bypass that lands on an ineligible tier is no bypass', () => {
-    expect(isSandboxTierEligible(TENANT_EFFECTIVE_SANDBOX_TIER)).toBe(true);
+    expect(isSandboxTierEligible(DEPLOYMENT_CAPABILITY_TIER)).toBe(true);
   });
 
   it('keeps a real ceiling on tenant rather than an unlimited sentinel', () => {
-    expect(ALL_TIERS).toContain(TENANT_EFFECTIVE_SANDBOX_TIER);
+    expect(ALL_TIERS).toContain(DEPLOYMENT_CAPABILITY_TIER);
   });
 });
 
 describe('resolveEffectiveSandboxTier — the env-reading edge', () => {
   it('reads DEPLOYMENT_MODE, and treats anything unrecognized as cloud', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
-    expect(resolveEffectiveSandboxTier('free')).toBe(TENANT_EFFECTIVE_SANDBOX_TIER);
+    expect(resolveEffectiveSandboxTier('free')).toBe(DEPLOYMENT_CAPABILITY_TIER);
 
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
-    expect(resolveEffectiveSandboxTier('free')).toBe('free');
+    expect(resolveEffectiveSandboxTier('free')).toBe('business');
 
     vi.stubEnv('DEPLOYMENT_MODE', '');
     expect(resolveEffectiveSandboxTier('free')).toBe('free');
@@ -94,7 +93,6 @@ describe('isSandboxAvailable — the gate', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
     expect(isSandboxAvailable('free')).toBe(false);
     expect(isSandboxAvailable('pro')).toBe(true);
-    expect(isSandboxAvailable('founder')).toBe(true);
     expect(isSandboxAvailable('business')).toBe(true);
   });
 
@@ -111,10 +109,59 @@ describe('isSandboxAvailable — the gate', () => {
     }
   });
 
-  it('still refuses free on onprem', () => {
+  it('given onprem personal Free, should allow deployment compute', () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
-    expect(isSandboxAvailable('free')).toBe(false);
+    expect(isSandboxAvailable('free')).toBe(true);
     expect(isSandboxAvailable('pro')).toBe(true);
+  });
+});
+
+describe('resolveSandboxPayerTier', () => {
+  it("WAL-9 (partial) an org drive's session runs on the org's tier, never the lead's or the owner's own plan", async () => {
+    const getUserSubscriptionTier = vi.fn(async (): Promise<SubscriptionTier> => 'free');
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd-org', ownerId: 'free-member' },
+      { lookupDriveBillingFacts: async () => ({ ownerId: 'free-lead', orgId: 'org-1' }), getUserSubscriptionTier },
+    );
+    expect(tier).toBe('business');
+    expect(getUserSubscriptionTier).not.toHaveBeenCalled();
+  });
+
+  it("a personal drive's session runs on its owner's tier", async () => {
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd1', ownerId: 'member' },
+      { lookupDriveBillingFacts: async () => ({ ownerId: 'owner', orgId: null }), getUserSubscriptionTier: async (id) => (id === 'owner' ? 'pro' : 'free') },
+    );
+    expect(tier).toBe('pro');
+  });
+});
+
+describe('resolveSandboxPayerTier — an unresolvable drive', () => {
+  it("WAL-9 (partial) a drive session whose drive cannot be resolved confers no paid tier — the owner's own plan never stands in for the drive's", async () => {
+    const getUserSubscriptionTier = vi.fn(async (): Promise<SubscriptionTier> => 'pro');
+    const tier = await resolveSandboxPayerTier(
+      { driveId: 'd-gone', ownerId: 'pro-owner' },
+      { lookupDriveBillingFacts: async () => null, getUserSubscriptionTier },
+    );
+    expect(tier).toBe('free');
+    expect(getUserSubscriptionTier).not.toHaveBeenCalled();
+  });
+});
+
+describe('computeTierForDrive', () => {
+  it("WAL-9 (partial) an org drive's compute follows the org's tier, not the lead's", () => {
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'free', false)).toBe('business');
+  });
+
+  it("a personal drive, or no drive, keeps the owner's tier", () => {
+    expect(computeTierForDrive({ orgId: null }, 'pro', false)).toBe('pro');
+    expect(computeTierForDrive(undefined, 'free', false)).toBe('free');
+  });
+
+  it("WAL-8 (partial) SEAT-9 (partial) a LAPSED org drive's compute has no Business entitlement: free, so no sandbox, whatever the lead's plan", () => {
+    expect(computeTierForDrive({ orgId: 'org-1' }, 'pro', true)).toBe('free');
+    expect(isSandboxAvailable(computeTierForDrive({ orgId: 'org-1' }, 'pro', true))).toBe(false);
+    expect(computeTierForDrive({ orgId: null }, 'pro', true)).toBe('pro');
   });
 });
 

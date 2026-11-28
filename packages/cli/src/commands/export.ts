@@ -86,7 +86,7 @@ export function createPagesExportHandler(deps: PagesExportDeps): CommandHandler 
       }
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       format === 'md' ? ctx.sdk.export.pageMarkdown({ pageId }) : ctx.sdk.export.sheetCsv({ pageId }),
     );
     if (!result.ok) return EXIT_RUNTIME_ERROR;

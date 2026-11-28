@@ -88,6 +88,7 @@ services:
       ADMIN_PROCESSOR_PASSWORD: ${ADMIN_PROCESSOR_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_READER_PASSWORD: ${ADMIN_READER_PASSWORD:?ADMIN_APP/PROCESSOR/READER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 admin login users)}
       ADMIN_ERASER_PASSWORD: ${ADMIN_ERASER_PASSWORD:?ADMIN_ERASER_PASSWORD missing from .env - see infrastructure/UPGRADE.md (Phase 2 GDPR eraser login user)}
+      BILLING_CUTOVER_OFFLINE: ${BILLING_CUTOVER_OFFLINE:-false}
     command: >
       sh -c "
         echo 'Starting database migrations...' &&
@@ -153,6 +154,11 @@ services:
       PROCESSOR_AUTH_REQUIRED: ${PROCESSOR_AUTH_REQUIRED:-true}
       PROCESSOR_UPLOAD_RATE_LIMIT: ${PROCESSOR_UPLOAD_RATE_LIMIT:-100}
       PROCESSOR_UPLOAD_RATE_WINDOW: ${PROCESSOR_UPLOAD_RATE_WINDOW:-3600}
+      # Content safety (PR 5): avatar uploads ask the web app to run the scan gate before the old
+      # avatar is replaced. CONTENT_SCAN_MODE is used only when the web app can't be reached.
+      CONTENT_SCAN_MODE: ${CONTENT_SCAN_MODE:-off}
+      SERVICE_API_SECRET: ${SERVICE_API_SECRET:-}
+      WEB_APP_INTERNAL_URL: http://web:3000
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3003/health', (r) => {r.statusCode === 200 ? process.exit(0) : process.exit(1)})"]
       interval: 30s
@@ -219,6 +225,14 @@ services:
       STORAGE_MIN_FREE_MEMORY_MB: ${STORAGE_MIN_FREE_MEMORY_MB:-500}
       STORAGE_ENABLE_QUOTAS: ${STORAGE_ENABLE_QUOTAS:-true}
       NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB: ${NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB:-20}
+      # Content safety: the web app runs the scan gate (publishes, and avatars at the processor's request). The
+      # same SERVICE_API_SECRET and CONTENT_SCAN_MODE as the processor's, or every avatar gate call is refused.
+      CONTENT_SCAN_MODE: ${CONTENT_SCAN_MODE:-off}
+      CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO: ${CONTENT_SCAN_ALLOW_UNCLASSIFIED_VIDEO:-false}
+      SERVICE_API_SECRET: ${SERVICE_API_SECRET:-}
+      HIVE_API_KEY: ${HIVE_API_KEY:-}
+      EVIDENCE_BUCKET: ${EVIDENCE_BUCKET:-}
+      ABUSE_EMAIL: ${ABUSE_EMAIL:-}
     deploy:
       resources:
         limits:

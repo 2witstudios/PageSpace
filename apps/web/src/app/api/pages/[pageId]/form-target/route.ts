@@ -33,6 +33,7 @@ import {
   FormTargetAlreadyActiveError,
   FormTargetArchivedError,
 } from '@/services/api/form-target-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -80,7 +81,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to view this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to view this page' }, { status: 403 }));
   }
 
   try {
@@ -106,7 +107,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 }));
   }
 
   try {
@@ -167,7 +168,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ pageId
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 }));
   }
 
   try {
@@ -236,7 +237,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ pageI
 
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'You do not have permission to edit this page' }, { status: 403 }));
   }
 
   const formTargetId = new URL(req.url).searchParams.get('formTargetId');

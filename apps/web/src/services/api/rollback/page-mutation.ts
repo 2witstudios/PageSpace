@@ -59,6 +59,12 @@ export async function applyPageUpdateWithRevision(
     .set({
       ...updateData,
       revision: nextRevision,
+      // An editor still holding the text being undone has to be stopped rather
+      // than save it straight back. A rollback of a rename or a move has no
+      // bearing on the content, so it leaves the lock alone.
+      ...(updateData.content !== undefined || updateData.contentMode !== undefined
+        ? { contentRevision: currentPage.contentRevision + 1 }
+        : {}),
       stateHash: stateHashAfter,
       updatedAt: deps.clock(),
     })

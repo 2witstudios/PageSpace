@@ -21,6 +21,118 @@ export function formatDate(dateString: string): string {
 }
 
 export const blogPosts: Record<string, BlogPost> = {
+  "invite-collaborators-anywhere": {
+    slug: "invite-collaborators-anywhere",
+    title: "Invite Collaborators Anywhere (Even If They're Not on PageSpace Yet)",
+    description:
+      "You can now invite people by email from the three places you actually need them: the Share dialog on any page, your drive's member list, and your Connections. If they don't have an account yet, the invite carries the access with it — they sign up and land right where you meant them to.",
+    image: "/blog/invite-collaborators-anywhere.png",
+    content: `
+## The dead end
+
+Here's a moment that used to end in a shrug. You're on a page you want someone to see. You open Share, type their email, and PageSpace tells you there's no one by that name. They're not on PageSpace yet.
+
+So you leave. You send them a link to sign up, wait for them to do it, remember to come back, search for them again, and finally grant the access you wanted in the first place. Half the time the second step never happens.
+
+That dead end is gone. Wherever you'd add someone, you can now invite them by email — and the invite carries the access with it.
+
+## Three places, one idea
+
+### Share a single page
+
+Open **Share** on any page and type an email. If that person already has an account, you grant access the way you always have. If they don't, the button changes to **Invite them to PageSpace and share this page**.
+
+You still pick exactly what they get — View, Edit, or Share — and you choose how long the invite stays open: one day, seven days, thirty days, or no expiry at all. They get an email about that specific page, sign up, and land on it with the permissions you chose.
+
+One deliberate limit: Delete can't be granted to someone who isn't on PageSpace yet. Destructive access goes to people with an account you can see, not to an inbox.
+
+### Add someone to a drive
+
+When you're inviting a teammate into a whole drive, search for them on the drive's **Members → Invite** screen. No match? You'll see **Invite them to PageSpace** right there. Pick their role — Admin or one of your custom roles — and when they join, they join the drive with it.
+
+### Connect with a person
+
+Connections are how you message people and collaborate with them directly, outside any one drive. On the **Connections** page, enter an email and send a request. If they're already on PageSpace, it shows up as a request they can accept. If they're not, they get an email saying you'd like to connect, and when they sign up, your request is waiting for them. Connection invites stay open for 48 hours.
+
+## What doesn't change
+
+Inviting someone new doesn't loosen anything. The same permission checks run whether the person has an account or not: you can only share a page you're allowed to share, and you can only invite into a drive you manage.
+
+A few guardrails come along too. You need a verified email address to send invites, and sending them is rate-limited. If your drive belongs to an organization that doesn't allow outside guests, sharing with someone outside it is refused rather than quietly let through.
+
+## Why it matters
+
+Collaboration fails at the edges: the first time you try to bring someone in. Every extra step between "I want them to see this" and "they can see this" is a step where the handoff dies.
+
+Now it's one step. Type the email, choose what they get, send. The next time you're about to paste a link into a chat and say "sign up and then tell me so I can add you," just invite them instead.
+    `,
+    author: "Jono",
+    date: "2026-10-27",
+    readTime: "4 min read",
+    category: "Product",
+  },
+  "browser-style-tabs": {
+    slug: "browser-style-tabs",
+    title: "Tabs That Work Like Your Browser (Because They Should)",
+    description:
+      "PageSpace uses browser-style tabs — Alt+T to open, Ctrl/Cmd+1–9 to jump, Ctrl+Tab to cycle. Here's why we chose browser semantics over VS Code's, and how tabs become the escape hatch from the navigation tax of nested folders.",
+    image: "/blog/browser-style-tabs.png",
+    content: `
+## The Navigation Tax
+
+Every time you drill into a nested folder to find a page, you pay. It's a small tax: one click, two clicks, a hover, another click. But in an AI-assisted workflow, where you're jumping between a spec, a task list, an AI chat, and a meeting doc all within the same 20-minute stretch, those clicks compound.
+
+The usual fixes — better search, smarter folders, tags — treat the symptom. Tabs treat the cause.
+
+## Browser-Style, Not VS Code-Style
+
+There's a meaningful difference between how browsers and VS Code handle tabs, and it comes down to what you can predict.
+
+In your browser, Ctrl+1 always goes to the first tab. Ctrl+W always closes the current one. Ctrl+Tab cycles forward. You don't have to think about it — that pattern is already in your muscle memory.
+
+VS Code tabs work differently. The same key bindings behave differently depending on panel state, focus, and whether you're in an editor or terminal. That overhead is fine if you live in VS Code all day. It's not fine when you're switching between a browser, a notes app, and a knowledge base every few minutes.
+
+PageSpace chose browser semantics deliberately. The shortcuts you already know work exactly the way you already expect them to.
+
+## The Shortcuts
+
+**Alt+T** opens a new tab. (On macOS, this key combination normally produces a \`†\` character — PageSpace handles the translation under the hood.)
+
+**Ctrl/Cmd+1 through Ctrl/Cmd+9** jump directly to tabs one through nine. Hover over any of the first nine tabs and you'll see the number appear, so you always know which key to press. These shortcuts work even when your cursor is inside an input field.
+
+**Ctrl+Tab** and **Ctrl+Shift+Tab** cycle forward and backward through your open tabs.
+
+**Ctrl/Cmd+W** closes the current tab.
+
+Don't like a default? Every one of these is rebindable under **Settings → Keyboard Shortcuts**.
+
+Mouse users aren't left out: middle-click closes a tab, and right-clicking any tab gives you a context menu with close, close others, close to right, and pin.
+
+## Tabs as Persistent Context
+
+The most useful thing about tabs isn't navigation speed. It's persistence.
+
+Open a spec in Tab 1, an AI chat in Tab 2, and a task list in Tab 3. Now Ctrl+1, Ctrl+2, Ctrl+3 moves you between those three surfaces instantly, without re-navigating the folder tree each time. The views stay exactly where you left them.
+
+In an AI-heavy workflow, this matters more than it used to. You're not reading a document linearly and closing it. You're iterating — reading, asking a question, checking a task, going back, refining. Each surface is live context you return to repeatedly. Tabs keep that context open.
+
+## One More Thing: Pinning
+
+If a tab is always open — your daily notes page, a running AI chat, a project tracker — pin it. Pinned tabs sit at the left of the bar, don't have a close button, and persist across sessions.
+
+## The Escape Hatch
+
+Folders are good for organizing. They're not good for navigating under time pressure.
+
+When you're deep in a task, you shouldn't have to remember that your meeting notes are three levels under \`/Team/Engineering/2026/\`. They should be one keypress away. Tabs are that escape hatch. A flat, keyboard-native layer above the folder hierarchy that keeps your most active context instantly reachable.
+
+Press **Alt+T** to open one now.
+    `,
+    author: "Jono",
+    date: "2026-10-27",
+    readTime: "3 min read",
+    category: "Product",
+  },
   "agents-get-a-computer": {
     slug: "agents-get-a-computer",
     title: "Your Agents Just Got a Computer",
@@ -291,7 +403,7 @@ Look at everything you did not have to build: no AI model to choose and pay a se
     title:
       "Credits Replace Daily Limits: Pay for What You Use, Run the Models You Want",
     description:
-      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up any amount from $5 to $500. Here's how it works, plus the infrastructure move that makes it scale.",
+      "PageSpace AI is now usage-based. Every plan gets a pool of credits you spend however you like (a starter grant on Free, a monthly allowance on paid plans), paid plans unlock frontier models, and you can top up whenever you run low. Here's how it works, plus the infrastructure move that makes it scale.",
     image: "/blog/usage-based-pricing-and-built-for-scale.png",
     content: `
 ## Daily limits were a stopgap. We outgrew them.
@@ -304,12 +416,7 @@ So we put our big-boy pants on. AI in PageSpace is now usage-based: a pool of cr
 
 ## Credits, not call counts
 
-Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans:
-
-- **Free:** 5 credits to start
-- **Pro:** 15/month in credits
-- **Founder:** 50/month in credits
-- **Business:** 100/month in credits
+Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans. The current amount for each plan is on the [pricing page](/pricing).
 
 On paid plans each renewal adds to your balance — unused credits carry over, so nothing is lost. You spend it however you like: long agent runs, quick questions, voice, whatever the work needs. There's no per-day ceiling and no separate bucket for "standard" versus "heavy" usage. It's one balance, and you decide where it goes.
 
@@ -321,15 +428,15 @@ That's the whole point of usage-based pricing: what you pay tracks what you actu
 
 Here's the part daily limits could never give you: when billing is usage-based, model choice opens up.
 
-**Free** runs on fast, capable standard models: GPT-5.6 Luna by default, plus Claude Haiku 4.5, Gemini 3.5 Flash Lite, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your credits stretch a long way across them.
+**Free** runs on fast, capable standard models: Claude Haiku 5.5 by default, plus GPT-6 Luna, Gemini 3.5 Flash Lite, and the GPT-5.4 mini and nano variants. They're quick, they're cheap, and your credits stretch a long way across them.
 
-**Pro, Founder, and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
+**Pro and Business** unlock the frontier. Spend your credits on Claude Opus 4.8, the GPT-5.5 family, Gemini 3.1 Pro, whatever the task calls for. A throwaway question doesn't need Opus, so reach for a light model and your credits last. A gnarly refactor or a long research synthesis is worth the spend, so reach for the flagship. You make that trade-off per task instead of having it made for you.
 
 ## When you run low
 
 If your balance runs out, you're not locked out until tomorrow. Top up.
 
-You can add **any amount from $5 to $500** in one click, or grab a quick-pick pack of $10, $25, or $50. Top-up credits never expire, so anything you add during a busy week carries over.
+You can add a custom amount in one click, or grab one of the quick-pick packs; the [pricing page](/pricing) lists the packs and the top-up range. Top-up credits never expire, so anything you add during a busy week carries over.
 
 Run low, top up, keep going. No more waiting out a daily reset.
 

@@ -16,6 +16,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const WORKSPACE = 'ws-1';
 const ACTOR = 'user-1';
@@ -57,7 +58,8 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: () => ({}) }));
 vi.mock('@pagespace/db/schema/conversations', () => ({ conversations: {} }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({ getUserAccessLevel: async () => access.level }));
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null), getUserAccessLevel: async () => access.level }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     api: {
@@ -127,7 +129,7 @@ function boundTargets(): string[] {
 describe('open_page_pane: an agent ADDS a surface and never navigates the user panes', () => {
   it('fills an UNBOUND pane, because that is a rectangle the user has said nothing about', async () => {
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-other' }, 0.5), pane('pane-b', 'root', 1, null, 0.5)];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     expect(boundTargets()).toEqual(['page:page-1']);
     // The bound pane was left exactly alone — nothing was evicted.
     expect(runtime.applied.at(-1)?.drop).toEqual([]);
@@ -136,7 +138,7 @@ describe('open_page_pane: an agent ADDS a surface and never navigates the user p
 
   it('SPLITS rather than take a bound pane away when nothing is unbound', async () => {
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: 'conv-other' })];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     const write = runtime.applied.at(-1);
     expect(write).toBeDefined();
     if (!write) return;
@@ -155,21 +157,21 @@ describe('open_page_pane: an agent ADDS a surface and never navigates the user p
     // promises — a tool call never eats its own invoker — not which of the two
     // said no.
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: CALLER_CONVERSATION })];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'chat', id: CALLER_CONVERSATION });
     expect(boundTargets()).toContain('page:page-1');
   });
 
   it('never gives up a running shell — the PTY loses its only surface and there is no reattach', async () => {
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'terminal', id: 'shell-1' })];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'terminal', id: 'shell-1' });
     expect(boundTargets()).toContain('page:page-1');
   });
 
   it('leaves a page already on screen exactly where it is — idempotent by POLICY, not by an opId', async () => {
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'page', id: 'page-1' })];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     // This is what retired the `(workspaceId, opId)` memory row: the SDK's retry
     // of one tool call writes nothing because there is nothing left to do.
     expect(runtime.applied.at(-1)).toEqual({ put: [], drop: [] });
@@ -180,7 +182,7 @@ describe('open_page_pane: the ACL gate is on the ACTING USER', () => {
   it('refuses a page the acting user cannot view, and writes nothing', async () => {
     access.level = null;
     runtime.nodes = [root, pane('pane-a', 'root', 0)];
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'secret-page', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'secret-page', viewer: credentialActor(ACTOR, null) });
     // `pageId` came from the MODEL. Without this, a prompt-injected agent naming
     // ids it should not know turns the pane into a title-exfiltration channel.
     expect(runtime.applied).toEqual([]);
@@ -189,7 +191,7 @@ describe('open_page_pane: the ACL gate is on the ACTING USER', () => {
 
   it('is a harmless no-op for a conversation bound to no workspace', async () => {
     rows.conversationWorkspaceId = null;
-    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
+    await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) });
     expect(runtime.applied).toEqual([]);
   });
 });
@@ -199,7 +201,7 @@ describe('a layout write is best-effort: it must never fail the model actual wor
     runtime.throws = true;
     runtime.nodes = [root];
     await expect(
-      placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR }),
+      placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewer: credentialActor(ACTOR, null) }),
     ).resolves.toBeUndefined();
     expect(logged.errors.length).toBe(1);
   });
@@ -207,7 +209,7 @@ describe('a layout write is best-effort: it must never fail the model actual wor
   it('swallows a thrown worker placement too — the spawn has already succeeded', async () => {
     runtime.throws = true;
     await expect(
-      placeWorkerPane({ workspaceId: WORKSPACE, conversationId: 'conv-worker', actingUserId: ACTOR }),
+      placeWorkerPane({ workspaceId: WORKSPACE, conversationId: 'conv-worker', actor: credentialActor(ACTOR, null) }),
     ).resolves.toBeUndefined();
     expect(logged.errors.length).toBe(1);
   });
@@ -216,7 +218,7 @@ describe('a layout write is best-effort: it must never fail the model actual wor
 describe('spawn_session: the worker gets a pane in the workspace it was placed into', () => {
   it('places into an empty workspace, which is now an ordinary state rather than a create', async () => {
     runtime.nodes = [root];
-    await placeWorkerPane({ workspaceId: WORKSPACE, conversationId: 'conv-worker', actingUserId: ACTOR });
+    await placeWorkerPane({ workspaceId: WORKSPACE, conversationId: 'conv-worker', actor: credentialActor(ACTOR, null) });
     expect(boundTargets()).toEqual(['chat:conv-worker']);
   });
 
@@ -225,7 +227,7 @@ describe('spawn_session: the worker gets a pane in the workspace it was placed i
     await placeWorkerPane({
       workspaceId: WORKSPACE,
       conversationId: 'conv-worker',
-      actingUserId: ACTOR,
+      actor: credentialActor(ACTOR, null),
       excludeTargetId: CALLER_CONVERSATION,
     });
     paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'chat', id: CALLER_CONVERSATION });

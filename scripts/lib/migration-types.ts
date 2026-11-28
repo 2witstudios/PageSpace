@@ -3,31 +3,13 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 /** Drizzle database client type (schema-agnostic) */
 export type DbClient = NodePgDatabase<Record<string, never>>;
 
-/** Row counts per table in the export bundle */
-export interface ManifestTableCounts {
-  users: number;
-  userProfiles: number;
-  drives: number;
-  driveRoles: number;
-  driveMembers: number;
-  pages: number;
-  channelMessages: number;
-  channelMessageReactions: number;
-  channelReadStatus: number;
-  agentWorkspaces: number;
-  agentWorkspaceShells: number;
-  agentWorkspaceNodes: number;
-  conversations: number;
-  messages: number;
-  files: number;
-  filePages: number;
-  pagePermissions: number;
-  tags: number;
-  contentTags: number;
-  mentions: number;
-  userMentions: number;
-  favorites: number;
-}
+/** `org_member_departures` → `orgMemberDepartures`: the manifest's key for a table. */
+export type SnakeToCamel<S extends string> = S extends `${infer Head}_${infer Tail}`
+  ? `${Head}${Capitalize<SnakeToCamel<Tail>>}`
+  : S;
+
+/** Row counts per table in the export bundle, one per carried table. */
+export type ManifestTableCounts = Record<SnakeToCamel<ExportTableName>, number>;
 
 /** Checksum entry for a file blob */
 export interface FileChecksum {
@@ -100,65 +82,76 @@ export interface ValidationResult {
 }
 
 /**
- * THE SET OF TABLES A TENANT BUNDLE CARRIES.
+ * THE TABLES A TENANT BUNDLE CARRIES, IN THE ORDER THE BUNDLE INSERTS THEM.
  *
- * Despite the name, this is consumed as a SET, not as a sequence: the column
- * registry (`tenant-export-columns.ts`) keys off it, the drift guard enumerates
- * it, and `tenant-validate` iterates it to decide what to compare. Nothing
- * emits SQL in this order.
- *
- * THE ACTUAL INSERT ORDER IS `tenant-export.ts`'s sequence of `buildInsert`
- * calls, and it differs: the exporter emits `agent_workspaces` →
- * `agent_workspace_shells` → `conversations` → `messages` BEFORE the
- * `channel_*` tables, while this list has the channel tables first. Both orders
- * satisfy the FKs, so nothing is broken today — but the ordering comments below
- * describe FK dependencies rather than the emitted sequence, and a future
- * reader who trusts this list as insert order will be wrong. Change the
- * exporter to change insert order; changing this list changes only what is
- * carried and checked.
+ * This is both the set (the column registry keys off it, the drift guard
+ * enumerates it, `tenant-validate` iterates it) and the sequence:
+ * `tenant-export.ts` emits one INSERT per entry, in this order, inside the
+ * bundle's single BEGIN/COMMIT. Every foreign key between carried tables must
+ * point BACKWARDS in this list — `tenant-export-columns.test.ts` derives that
+ * from the Drizzle schema — except the ones a table spec declares as
+ * `deferredColumns` (emitted as a trailing UPDATE) and a table's references to
+ * itself (resolved at the end of its own multi-row INSERT).
  */
 export const TABLE_IMPORT_ORDER = [
   'users',
   'user_profiles',
+  // Before `drives`: `drives.orgId` is a RESTRICT FK onto it, and its own
+  // `ownerId` onto `users` is already satisfied above.
+  'organizations',
   'drives',
   'drive_roles',
   'drive_members',
   'pages',
+  // Before `channel_messages`: a message's `fileId` FKs `files`.
+  'files',
+  'file_pages',
   'tags',
+  // A session needs its `drives` and `users` rows; nothing on a conversation
+  // references it any more, so sitting before `conversations` is convention.
+  'agent_workspaces',
+  // `workspaceId` FKs `agent_workspaces`, `ownerId` FKs `users`. The shells
+  // carry a session's TERMINAL work — the tab names, the per-shell command,
+  // and `coldTail`, the scrollback of the last dead incarnation — which is
+  // user content with no other home in the bundle.
+  'agent_workspace_shells',
+  // A session's TREE, which is also its MEMBERSHIP: a thread is in a workspace
+  // exactly when a chat-bound node names it. `rootId` FKs `agent_workspaces`.
+  // Its `targetId` is polymorphic with NO foreign key; out-of-bundle targets
+  // are unbound by the exporter instead (tenant-export.ts).
+  'agent_workspace_nodes',
+  // `messages.conversationId` is a real (non-deferrable) FK onto it.
+  'conversations',
+  'messages',
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',
-  // The sessions themselves. This used to sit before `conversations` because
-  // `conversations.workspaceId` FK'd it; that column is gone and nothing on a
-  // conversation row references a session any more, so the position is
-  // convention — a session still needs its `drives` and `users` rows, both
-  // above.
-  'agent_workspaces',
-  // Immediately after its parent: `agent_workspace_shells.workspaceId` FKs
-  // `agent_workspaces` and `ownerId` FKs `users`, both already inserted. The
-  // shells carry a session's TERMINAL work — the tab names, the per-shell
-  // command, and `coldTail`, the scrollback of the last dead incarnation —
-  // which is user content with no other home in the bundle.
-  'agent_workspace_shells',
-  // A session's TREE, which is also its MEMBERSHIP: a thread is in a workspace
-  // exactly when a chat-bound node names it. `rootId` FKs `agent_workspaces`,
-  // so it follows its parent. Its `targetId` — the conversation, shell or page
-  // a pane shows — is polymorphic and carries NO foreign key, so nothing here
-  // constrains it against `conversations`, `agent_workspace_shells` or `pages`;
-  // out-of-bundle targets are unbound by the exporter instead (tenant-export.ts).
-  'agent_workspace_nodes',
-  'conversations',
-  'messages',
-  // The tag ASSIGNMENTS, which replaced `page_tags` (dead since migration 0000,
-  // dropped with the content-tags epic). It has to sit here rather than beside
-  // `tags`: a row can FK `channel_messages` OR `messages`, so it follows both.
+  // The tag ASSIGNMENTS: a row can FK `channel_messages` OR `messages`, so it
+  // follows both.
   'content_tags',
-  'files',
-  'file_pages',
   'page_permissions',
   'mentions',
   'user_mentions',
   'favorites',
+  // Organizations & Wallets (Spec X-3). Each follows `organizations`, `users`
+  // and `drives`; which rows travel is scripts/lib/org-wallet-selection.ts.
+  'org_members',
+  'org_invitations',
+  'org_subscriptions',
+  'org_subscription_funding',
+  'org_domains',
+  'org_member_departures',
+  'org_departure_suppressions',
+  'org_guest_holds',
+  'drive_join_requests',
+  // `parentWalletId` is a self-FK, resolved within the one INSERT.
+  'wallets',
+  'wallet_funding_legs',
+  'wallet_consumer_caps',
+  'wallet_debt_notices',
+  'wallet_cap_alerts',
+  'drive_spend_overrides',
+  'automation_skip_notices',
 ] as const;
 
 export type ExportTableName = (typeof TABLE_IMPORT_ORDER)[number];

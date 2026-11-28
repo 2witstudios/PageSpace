@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { isPaymentElementRoute } from '@/lib/orgs/payment-routes';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
@@ -143,6 +144,10 @@ export const buildCSPPolicy = (nonce: string): string => {
     `'nonce-${nonce}'`,
     "'strict-dynamic'",
     "'unsafe-inline'", // Fallback for older browsers (ignored when strict-dynamic present)
+    // React's development build rebuilds server component stacks with eval, and
+    // without it hydration fails under `next dev` (apps/imago does the same).
+    // A production build never gets it.
+    ...(process.env.NODE_ENV === 'development' ? ["'unsafe-eval'"] : []),
   ];
   // fonts.googleapis.com: in-app canvas pages render via an iframe srcDoc, which
   // inherits this outer CSP in addition to their own baked-in <meta> CSP
@@ -278,7 +283,8 @@ export const API_CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, PUT, OPTIONS',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PageSpace-API-Version',
-  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After',
+  // SPEND-4: a browser SDK caller must be able to read the spend-fallback notice (v1 is SSE: the headers are its only report).
+  'Access-Control-Expose-Headers': 'X-PageSpace-API-Version, Retry-After, X-Spend-Fallback-From, X-Spend-Fallback-To, X-Spend-Fallback-Wallet',
 };
 
 export const applyApiCorsHeaders = (response: NextResponse): NextResponse => {
@@ -299,7 +305,10 @@ export const isPublicPageRoute = (pathname: string): boolean =>
   // sign in to perform is both a bulk-sender violation and, in practice, no
   // opt-out at all. The one-time token in the URL is the only authorization.
   pathname === '/unsubscribe' ||
-  pathname === '/unsubscribe-success';
+  pathname === '/unsubscribe-success' ||
+  // Reporting illegal or abusive content must not require an account: the person
+  // who finds it on a published site usually has none.
+  pathname === '/report';
 
 // Published Canvas pages live on *.pagespace.site and are served from object
 // storage, never by this app. If such a request reaches us (proxy misroute /
@@ -346,9 +355,15 @@ export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
 export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
   isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
 
+/**
+ * Routes that skip COEP: the Stripe checkout pages (plan, billing), the org Payment Element routes
+ * (path-exact, isPaymentElementRoute: Settings for create-organization, an org's Plan & seats for
+ * Reactivate), and auth.
+ */
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||
+  isPaymentElementRoute(pathname) ||
   pathname === '/auth' ||
   pathname.startsWith('/auth/');
 

@@ -1,0 +1,103 @@
+{
+  "identifier" : "7C3E1A52",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+    {
+      "displayPrice" : "11.99",
+      "familyShareable" : false,
+      "internalID" : "6740000101",
+      "localizations" : [
+        {
+          "description" : "100 AI credits for your PageSpace account.",
+          "displayName" : "100 Credits",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "ai.pagespace.ios.credits.100",
+      "referenceName" : "100 Credits",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "29.99",
+      "familyShareable" : false,
+      "internalID" : "6740000102",
+      "localizations" : [
+        {
+          "description" : "250 AI credits for your PageSpace account.",
+          "displayName" : "250 Credits",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "ai.pagespace.ios.credits.250",
+      "referenceName" : "250 Credits",
+      "type" : "Consumable"
+    },
+    {
+      "displayPrice" : "58.99",
+      "familyShareable" : false,
+      "internalID" : "6740000103",
+      "localizations" : [
+        {
+          "description" : "500 AI credits for your PageSpace account.",
+          "displayName" : "500 Credits",
+          "locale" : "en_US"
+        }
+      ],
+      "productID" : "ai.pagespace.ios.credits.500",
+      "referenceName" : "500 Credits",
+      "type" : "Consumable"
+    }
+  ],
+  "settings" : {
+    "_applicationInternalID" : "6740000000",
+    "_developerTeamID" : "M96WTV3CKX",
+    "_failTransactionsEnabled" : false,
+    "_locale" : "en_US",
+    "_storefront" : "USA",
+    "_storeKitErrors" : [
+
+    ]
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "21500001",
+      "localizations" : [
+
+      ],
+      "name" : "PageSpace Plans",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "17.99",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "6740000201",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "PageSpace Pro, billed monthly.",
+              "displayName" : "PageSpace Pro",
+              "locale" : "en_US"
+            }
+          ],
+          "productID" : "ai.pagespace.ios.pro.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "PageSpace Pro Monthly",
+          "subscriptionGroupID" : "21500001",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 3,
+    "minor" : 0
+  }
+}

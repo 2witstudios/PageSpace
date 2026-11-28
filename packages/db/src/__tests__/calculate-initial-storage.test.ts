@@ -256,8 +256,8 @@ describe('scripts/calculate-initial-storage.ts', () => {
     expect(allLogMessages).toContain('free subscription');
   });
 
-  it('logs a warning when a pro user exceeds the 2GB storage limit', async () => {
-    const bigSize = 3 * 1024 * 1024 * 1024; // 3GB > 2GB pro limit
+  it('logs a warning when a pro user exceeds the 10GB storage limit', async () => {
+    const bigSize = 11 * 1024 * 1024 * 1024; // 11GB > 10GB pro limit
     const user = { id: 'u6', email: 'probig@example.com', subscriptionTier: 'pro' };
     // allUsers - consumed by smartFrom's thenable
     selectFromQueue.push(() => Promise.resolve([user]));

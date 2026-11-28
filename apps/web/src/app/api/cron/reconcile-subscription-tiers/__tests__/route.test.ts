@@ -5,10 +5,10 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const { mockReconcile, mockAudit, mockGetTierFromPrice } = vi.hoisted(() => ({
+const { mockReconcile, mockAudit, mockGetPersonalTierFromPrice } = vi.hoisted(() => ({
   mockReconcile: vi.fn(),
   mockAudit: vi.fn(),
-  mockGetTierFromPrice: vi.fn(() => 'pro'),
+  mockGetPersonalTierFromPrice: vi.fn(() => 'pro'),
 }));
 
 vi.mock('@/lib/auth/cron-auth', () => ({
@@ -20,7 +20,7 @@ vi.mock('@pagespace/lib/billing/subscription-tier-reconcile', () => ({
 }));
 
 vi.mock('@/lib/stripe', () => ({
-  getTierFromPrice: mockGetTierFromPrice,
+  getPersonalTierFromPrice: mockGetPersonalTierFromPrice,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -56,7 +56,7 @@ describe('/api/cron/reconcile-subscription-tiers', () => {
       details: [
         {
           userId: 'u1',
-          storedTier: 'founder',
+          storedTier: 'business',
           expectedTier: 'free',
           repaired: true,
           indeterminate: false,

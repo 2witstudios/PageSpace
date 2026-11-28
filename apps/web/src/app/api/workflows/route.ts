@@ -13,6 +13,7 @@ import { workflowRuns } from '@pagespace/db/schema/workflow-runs';
 import { validateCronExpression, validateTimezone, getNextRunDate } from '@/lib/workflows/cron-utils';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
 import { workflowStepsSchema, validateStepsForApi } from '@/lib/workflows/steps-api-validation';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -67,9 +68,9 @@ export async function GET(request: Request) {
   if (scopeError) return scopeError;
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }));
   }
 
   // The cronExpression IS NOT NULL guard distinguishes user-managed cron
@@ -151,9 +152,9 @@ export async function POST(request: Request) {
   if (scopeError) return scopeError;
 
   if (!(await isPrincipalDriveOwnerOrAdmin(auth, data.driveId))) {
-    const access = await checkDriveAccess(data.driveId, userId);
+    const access = await checkDriveAccess(data.driveId, actorFromAuth(auth));
     if (!access.drive) return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
-    return NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), data.driveId, NextResponse.json({ error: 'Only drive owners and admins can manage workflows' }, { status: 403 }));
   }
 
   // Validate agent page exists, is AI_CHAT, not trashed, and in the same

@@ -3,6 +3,8 @@ import path from 'path';
 import 'dotenv/config';
 import { factories } from '@pagespace/db/test/factories';
 import { sessionService } from '../../packages/lib/src/auth/session-service';
+import { ceremonyAuthentication } from '../../packages/lib/src/auth/authentication-evidence';
+import { seedNorthwind } from './fixtures/northwind';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // Resolved from THIS file's location, not the cwd. The cwd-based form
@@ -44,15 +46,19 @@ export default async function globalSetup() {
   const user = await factories.createUser();
   const drive = await factories.createDrive(user.id);
   const token = await sessionService.createSession({
+    // Test fixture: stands in for an emailed-link sign-in (D-OW-45).
+    authentication: ceremonyAuthentication({ method: 'magic_link' }, Date.now()),
     userId: user.id,
     type: 'user',
     scopes: [],
     expiresInMs: SESSION_TTL_MS,
   });
 
+  const northwind = await seedNorthwind();
+
   await fs.writeFile(
     path.join(E2E_DIR, '.seed-state.json'),
-    JSON.stringify({ userId: user.id, driveId: drive.id })
+    JSON.stringify({ userId: user.id, driveId: drive.id, northwind })
   );
 
   const storageState = {
@@ -75,5 +81,5 @@ export default async function globalSetup() {
     JSON.stringify(storageState, null, 2)
   );
 
-  console.log(`[e2e setup] Seeded user=${user.id} drive=${drive.id}`);
+  console.log(`[e2e setup] Seeded user=${user.id} drive=${drive.id} northwind=${Object.keys(northwind.drives).length} drives`);
 }

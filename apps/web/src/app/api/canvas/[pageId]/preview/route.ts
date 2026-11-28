@@ -16,6 +16,8 @@ import {
 } from '@/lib/canvas/file-view-links';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Resolve the short-lived view URLs for any dashboard file references the author
@@ -24,7 +26,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
  * re-checked against the VIEWER's own access, so an author cannot embed a file
  * the viewer may not see.
  */
-async function resolveFileViewLinks(html: string, userId: string): Promise<string> {
+async function resolveFileViewLinks(html: string, actor: AccessActor): Promise<string> {
   const refs = extractDashboardFileViewRefs(html);
   if (refs.length === 0) return html;
 
@@ -44,7 +46,7 @@ async function resolveFileViewLinks(html: string, userId: string): Promise<strin
     unique.map(async ({ driveId, pageId }) => {
       const row = rowsById.get(pageId);
       if (!row || row.driveId !== driveId || !isFilePage(row.type as PageType)) return;
-      if (!(await canUserViewPage(userId, pageId))) return;
+      if (!(await canUserViewPage(actor, pageId))) return;
       const token = createCanvasFileViewToken({ driveId, pageId });
       urls.set(
         `${driveId}:${pageId}`,
@@ -90,7 +92,7 @@ export async function GET(
   // enumerate which page ids exist and which of them are canvases. Since
   // `canUserViewPage` is false for a missing page too, this single check answers
   // identically for "does not exist" and "not yours".
-  if (!(await canUserViewPage(user.id, pageId))) {
+  if (!(await canUserViewPage(actorFromVerifiedUser(user), pageId))) {
     auditRequest(request, {
       eventType: 'authz.access.denied',
       userId: user.id,
@@ -99,7 +101,7 @@ export async function GET(
       details: { reason: 'no_view_access', surface: 'canvas_preview' },
       riskScore: 0.4,
     });
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromVerifiedUser(user), pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   const page = await db.query.pages.findFirst({
@@ -145,7 +147,7 @@ export async function GET(
   });
 
   const html = renderCanvasDocument({
-    html: await resolveFileViewLinks(page.content ?? '', user.id),
+    html: await resolveFileViewLinks(page.content ?? '', actorFromVerifiedUser(user)),
     title: page.title,
     baseTarget: '_blank',
     injectThemeBridge: published?.themeBridgeEnabled ?? true,

@@ -66,6 +66,9 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'regex_search': 'Search',
   'glob_search': 'Find Pages',
   'multi_drive_search': 'Search All',
+  // Plan tools (set_plan binds the conversation to a plan document)
+  'set_plan': 'Set Plan',
+  'clear_plan': 'Clear Plan',
   // Task tools
   'update_task': 'Update Task',
   'create_task': 'Create Task',

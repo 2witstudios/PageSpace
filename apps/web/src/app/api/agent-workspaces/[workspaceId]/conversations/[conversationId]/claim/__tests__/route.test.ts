@@ -78,7 +78,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(await response.json()).toEqual({ ok: true, alreadyInSession: false });
     expect(mockClaimConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
-      userId: AUTH_USER.userId,
+      actor: expect.objectContaining({ userId: AUTH_USER.userId }),
       workspaceId: SESSION_ID,
     });
     expect(mockAuditRequest).toHaveBeenCalledWith(
@@ -101,7 +101,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(response.status).toBe(200);
     expect(mockClaimConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
-      userId: AUTH_USER.userId,
+      actor: expect.objectContaining({ userId: AUTH_USER.userId }),
       workspaceId: SESSION_ID,
       activeNodeId: 'node-7',
     });
@@ -120,7 +120,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations/[conversationId
     expect(response.status).toBe(200);
     expect(mockClaimConversationInSession).toHaveBeenCalledWith({
       conversationId: CONVERSATION_ID,
-      userId: AUTH_USER.userId,
+      actor: expect.objectContaining({ userId: AUTH_USER.userId }),
       workspaceId: SESSION_ID,
     });
   });

@@ -18,7 +18,8 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { computeTierForDrive } from '@pagespace/lib/billing/sandbox-eligibility';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
   ensureDriveEnvSandbox,
   gateLocalEnvForRequester,
@@ -36,23 +37,27 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import {
   createDriveEnv,
+  ensureHomeDriveEnv,
   listDriveEnvs,
   renameDriveEnv,
   deleteDriveEnv,
   rebuildDriveEnv,
   toDriveEnvDTO,
   type CreateDriveEnvResult,
+  type EnsureHomeDriveEnvResult,
   type RenameDriveEnvResult,
   type DeleteDriveEnvResult,
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
 import { sessionService } from '@pagespace/lib/auth/session-service';
+import { MACHINE_CREDENTIAL_AUTHENTICATION } from '@pagespace/lib/auth/authentication-evidence';
 import {
   enrollLocalDriveEnv,
   issueLocalEnvChallenge,
@@ -65,6 +70,9 @@ import {
   type RedeemLocalEnvChallengeResult,
   type ReissueLocalEnvEnrollmentCodeResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
+import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
+import { isOrgLapsedForDrive } from '@pagespace/lib/organizations/status';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -111,13 +119,15 @@ async function findDriveEnvRecord(envId: string): Promise<DriveEnvRecord | null>
  * under a different tenant than the one it already provisioned under.
  */
 export async function resolveDriveEnvPayer(driveId: string): Promise<DriveEnvPayer | null> {
-  const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true } });
+  const drive = await db.query.drives.findFirst({ where: eq(drives.id, driveId), columns: { ownerId: true, orgId: true } });
   if (!drive) return null;
   const owner = await db.query.users.findFirst({
     where: eq(users.id, drive.ownerId),
     columns: { subscriptionTier: true },
   });
-  return { payerId: drive.ownerId, tier: toSubscriptionTier(owner?.subscriptionTier) };
+  // `payerId` is the Sprite TENANT (key folding), which stays the lead; the TIER an env's
+  // eligibility and allowance follow is the org's for an org drive (WAL-9), whose pool pays.
+  return { payerId: drive.ownerId, tier: computeTierForDrive(drive, toPersonalSubscriptionTier(owner?.subscriptionTier), await isOrgLapsedForDrive(drive)) };
 }
 
 // ---------------------------------------------------------------------------
@@ -185,6 +195,8 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     // (which validates `expectedType: 'user'`) will ever accept it.
     mintToken: (policy, machine) =>
       sessionService.createSession({
+        // A machine's bridge credential: no person signed in for it (D-OW-45).
+        authentication: MACHINE_CREDENTIAL_AUTHENTICATION,
         userId: machine.ownerId,
         type: policy.type,
         scopes: policy.scopes,
@@ -200,6 +212,9 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
     revokeToken: (token, machine) => sessionService.revokeSession(token, `env_bridge_${machine.reason}`),
   };
 }
+
+/** POL-10: the drive's org policies, read live (null = personal drive, unrestricted). */
+const driveOrgPolicies = async (driveId: string) => (await getDrivePolicies(driveId))?.policies ?? null;
 
 export async function createEnvInDrive(input: {
   driveId: string;
@@ -217,9 +232,26 @@ export async function createEnvInDrive(input: {
     deps: {
       store,
       resolvePayer: resolveDriveEnvPayer,
+      getDriveOrgPolicies: driveOrgPolicies,
       now: () => new Date(),
       identity: input.local ? envBridgeIdentity() : undefined,
+      // [D-OW-28] A member at their cap of the org's credits cannot add a billable env.
+      admitCreator: admitDriveComputeCreator,
     },
+  });
+}
+
+/**
+ * The owner's Home env in their Home drive, minted on first use (no Sprite —
+ * envs provision lazily). Outside the env cap and the tier allowance by design;
+ * the org's persistent-environments switch still applies. See `ensureHomeDriveEnv`.
+ */
+export async function ensureHomeEnvInDrive(input: { homeDriveId: string; ownerId: string }): Promise<EnsureHomeDriveEnvResult> {
+  const store = await getDriveEnvStore();
+  return ensureHomeDriveEnv({
+    homeDriveId: input.homeDriveId,
+    ownerId: input.ownerId,
+    deps: { store, getDriveOrgPolicies: driveOrgPolicies, now: () => new Date() },
   });
 }
 
@@ -288,17 +320,18 @@ export async function deleteEnv(input: { envId: string; force: boolean }): Promi
 export async function ensureEnvSandboxForSession(input: {
   envId: string;
   intent: SpriteHolderProvisionIntent;
-  requesterId: string;
+  requester: AccessActor;
 }): Promise<EnsureSpriteHolderSandboxResult> {
   const [store, host, liveConnection] = await Promise.all([getDriveEnvStore(), getSandboxHost(), liveConnectionReader()]);
   return ensureDriveEnvSandbox({
     envId: input.envId,
     intent: input.intent,
-    requesterId: input.requesterId,
+    requester: input.requester,
     deps: {
       store,
       host,
       resolvePayer: resolveDriveEnvPayer,
+      getDriveOrgPolicies: driveOrgPolicies,
       liveConnection,
       resolveLocalHost: localHostResolver,
     },
@@ -332,23 +365,23 @@ async function localHostResolver({ envId }: { envId: string }) {
  * belongs to the drive, so this only ever sees a row that disappeared between
  * the two reads.
  */
-export async function gateLocalEnvBind(input: { envId: string; requesterId: string }): Promise<LocalEnvGateVerdict> {
+export async function gateLocalEnvBind(input: { envId: string; requester: AccessActor }): Promise<LocalEnvGateVerdict> {
   const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
   const row = await store.findById(input.envId);
   if (!row) return { ok: false, refusal: 'revoked' };
-  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection } });
+  return gateLocalEnvForRequester({ row, requester: input.requester, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection } });
 }
 
 /**
  * Rebuild an env's machine — teardown, then the ONE provisioning core, bound to
  * the ENV's flavor of each seam.
  *
- * `requesterId` is who this provision authorizes as; `ensureDriveEnvSandbox`
+ * `requester` is who this provision authorizes as; `ensureDriveEnvSandbox`
  * holds the seams themselves (which keyspace the Sprite name folds in, who may
  * run code here, what a refusal is called), because a session's ensure needs
  * exactly the same ones.
  */
-export async function rebuildEnv(input: { envId: string; requesterId: string }): Promise<RebuildDriveEnvResult> {
+export async function rebuildEnv(input: { envId: string; requester: AccessActor }): Promise<RebuildDriveEnvResult> {
   // No `resolveLocalHost` on this path, and that is not an omission:
   // `rebuildDriveEnv` refuses a local env with `substrate_unsupported` before
   // it ever reaches the provisioner (rebuild is destroy-and-re-mint, and a
@@ -360,6 +393,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
       store,
       host,
       now: () => new Date(),
+      admitOrgActive: admitDriveOrgActive,
       ensureSandbox: async (row) =>
         ensureDriveEnvSandbox({
           envId: row.id,
@@ -367,8 +401,8 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // confirmed, so the row reads as machineless and the core takes its
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
-          requesterId: input.requesterId,
-          deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection },
+          requester: input.requester,
+          deps: { store, host, resolvePayer: resolveDriveEnvPayer, getDriveOrgPolicies: driveOrgPolicies, liveConnection },
         }),
     },
   });

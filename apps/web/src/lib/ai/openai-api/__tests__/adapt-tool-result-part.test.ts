@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { adaptToolResultPart } from '../adapt-tool-result-part';
 
 const opts = { chunkId: 'cmpl-abc', model: 'ps-agent://page-123', created: 1000000000 };

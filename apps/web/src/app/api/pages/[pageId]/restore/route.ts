@@ -13,6 +13,7 @@ import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -119,7 +120,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // decision models the full rule (defense-in-depth) rather than assuming it.
     const canDelete = await canPrincipalDeletePage(auth, pageId);
     if (!canRestorePage({ canDelete, withinTokenScope: scopeError === null })) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
     }
 
     const actorInfo = await getActorInfo(auth.userId);

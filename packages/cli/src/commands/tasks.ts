@@ -54,7 +54,7 @@ export const tasksListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.read({ operation: 'read', pageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.read({ operation: 'read', pageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -78,7 +78,7 @@ export const tasksStatusesHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.read({ operation: 'read', pageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.read({ operation: 'read', pageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -219,7 +219,7 @@ export const tasksCreateHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.tasks.create({
       pageId,
       title: parsed.title as string,
@@ -261,7 +261,7 @@ export const tasksUpdateHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.tasks.update({
       pageId,
       taskId,
@@ -298,7 +298,7 @@ export const tasksDeleteHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.tasks.delete({ pageId, taskId }));
+  const result = await callSdk(ctx, () => ctx.sdk.tasks.delete({ pageId, taskId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -322,7 +322,7 @@ export const tasksReorderHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.tasks.reorder({ pageId, taskId, position }));
+  const result = await callSdk(ctx, () => ctx.sdk.tasks.reorder({ pageId, taskId, position }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -368,7 +368,7 @@ export const tasksCreateStatusHandler: CommandHandler = async (ctx, intent) => {
     }
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.tasks.createStatus({
       pageId,
       name: parsed.name as string,
@@ -393,7 +393,7 @@ export const tasksAssignedHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.tasks.getAssigned({}));
+  const result = await callSdk(ctx, () => ctx.sdk.tasks.getAssigned({}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

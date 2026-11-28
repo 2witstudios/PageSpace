@@ -7,7 +7,8 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, gte, lte } from '@pagespace/db/operators';
-import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { pages } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -23,11 +24,12 @@ import type { SubscriptionTier } from '@pagespace/lib/services/subscription-util
  * usage rows whose AI log has been purged by retention, which is acceptable for a
  * "recent usage" view.
  *
- * `byAgentSession` needs no separate drive-ownership filter: `creditLedger.userId` IS
- * the PAYER (`resolveSessionPayerId` in sandbox-payer.ts always resolves to the
- * session's own drive owner, falling back to the session's own owner only when
- * unresolvable), so every row this query returns for `userId` is already scoped to
- * a session they own or a run they footed the bill for directly.
+ * The breakdown is of the person's OWN credits: only usage rows that landed on their
+ * personal root wallet. An ORG drive's compute is charged to the org pool and recorded
+ * under a person (the actor, or the cost owner for an env/app accrual), and spend from a
+ * drive wallet or a seat is recorded under its consumer — none of it is the person's
+ * money, so none of it is listed here (WAL-9: an org drive bills the org). Those rows
+ * belong to the wallet views that show what a person spends from a drive or an org.
  */
 export async function getUserUsageBreakdown(
   userId: string,
@@ -35,11 +37,12 @@ export async function getUserUsageBreakdown(
 ): Promise<UsageBreakdown> {
   const [balance] = await db
     .select({
-      periodStart: creditBalances.monthlyPeriodStart,
-      periodEnd: creditBalances.monthlyPeriodEnd,
+      walletId: wallets.id,
+      periodStart: wallets.monthlyPeriodStart,
+      periodEnd: wallets.monthlyPeriodEnd,
     })
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .limit(1);
 
   // A stale window (periodEnd in the past — renewal never landed) falls back to
@@ -53,6 +56,11 @@ export async function getUserUsageBreakdown(
     periodEnd: allowanceRefills(tier) ? (balance?.periodEnd ?? null) : null,
     now: new Date(),
   });
+
+  // No personal root wallet yet: nothing has been spent from the person's own credits.
+  if (!balance) {
+    return aggregateUsageBreakdown([], { periodStart: periodStart.toISOString(), periodEnd: periodEnd ? periodEnd.toISOString() : null });
+  }
 
   const rows = await db
     .select({
@@ -86,6 +94,8 @@ export async function getUserUsageBreakdown(
     .where(
       and(
         eq(creditLedger.userId, userId),
+        // The person's own credits only (WAL-9): never an org pool's, a drive wallet's or a seat's.
+        eq(creditLedger.walletId, balance.walletId),
         eq(creditLedger.entryType, 'usage'),
         gte(creditLedger.createdAt, periodStart),
         // Upper bound only for a CURRENT period (resolveUsageWindow nulls periodEnd

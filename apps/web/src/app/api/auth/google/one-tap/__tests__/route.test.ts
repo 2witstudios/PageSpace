@@ -133,7 +133,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -231,7 +231,7 @@ describe('POST /api/auth/google/one-tap', () => {
       kind: null,
       invitedDriveId: null,
       invitedPageId: null,
-      connectionId: null,
+      connectionId: null, invitedOrgId: null, orgLandingPath: null,
     });
     vi.mocked(consumeAllInvitesForEmail).mockResolvedValue({
       drivesAccepted: 0,
@@ -573,7 +573,7 @@ describe('POST /api/auth/google/one-tap', () => {
       expect(body.desktopTokens).toBeUndefined();
     });
 
-    it('calls createDeviceToken with platform desktop', async () => {
+    it('SEC-2 (partial) calls createDeviceToken with platform desktop and the Google single-factor evidence (D-OW-45)', async () => {
       const request = createOneTapRequest({
         credential: 'valid-credential',
         platform: 'desktop',
@@ -584,6 +584,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(createDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           userId: mockNewUser.id,
           deviceId: 'device-123',
           platform: 'desktop',
@@ -602,6 +603,7 @@ describe('POST /api/auth/google/one-tap', () => {
 
       expect(createDeviceToken).toHaveBeenCalledWith(
         expect.objectContaining({
+          authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
           deviceName: 'TestBrowser/1.0',
         })
       );
@@ -877,7 +879,7 @@ describe('POST /api/auth/google/one-tap', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const request = createOneTapRequest({ ...validOneTapPayload, inviteToken: 'ps_invite_xyz' });
@@ -896,7 +898,7 @@ describe('POST /api/auth/google/one-tap', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'EMAIL_MISMATCH',
       });
 

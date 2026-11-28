@@ -14,7 +14,10 @@
  * `local` additionally needs `BROWSER_WORKER_EXECUTABLE`, the path of a
  * Chromium build that exists on this host: the web image ships no browser
  * (playwright-core is only the driver), so without one every session would
- * fail at launch — the tools stay hidden instead.
+ * fail at launch — the tools stay hidden instead. The same holds for the
+ * worker entry: `BROWSER_WORKER_ENTRY`, or else the compiled worker beside the
+ * browser-worker dist, which a production build loads but `next dev` (which
+ * compiles the package from source) does not have.
  *
  * `sprites` additionally needs `SPRITES_API_TOKEN` (held by the adapter,
  * used only to reach the worker's port), `BROWSER_WORKER_SPRITE_BOOTSTRAP`
@@ -27,13 +30,13 @@ import type { Tool } from 'ai';
 import { existsSync } from 'node:fs';
 import { createPrivateKey, createPublicKey, sign as nodeSign, type KeyObject } from 'node:crypto';
 import { SpritesClient } from '@fly/sprites';
-import { createLocalChromiumSubstrate } from '@pagespace/browser-worker/local-chromium-substrate-adapter';
+import { createLocalChromiumSubstrate, defaultWorkerEntry } from '@pagespace/browser-worker/local-chromium-substrate-adapter';
 import { createSpritesBrowserSubstrate, type SpriteHandle } from '@pagespace/browser-worker/sprites-substrate-adapter';
 import { createBrowserSessionClient, type BrowserSessionClient } from '@pagespace/browser-worker/browser-session-client';
-import { deriveBrowserSessionId } from '@pagespace/browser-worker/derive-browser-session-id';
 import type { BrowserSubstrate } from '@pagespace/browser-worker/browser-substrate';
 import { createBrowserTools, type OperateBrowser } from './browser-tools';
 import { createBrowserMeter, type BrowserBilling } from './browser-metering-adapter';
+import { browserSessionFor } from './browser-session-for';
 import { productionSandboxGate, resolveSandboxActorContext } from './sandbox-tools-runtime';
 
 const IDLE_SWEEP_INTERVAL_MS = 60_000;
@@ -79,7 +82,9 @@ const buildSubstrate = (): BrowserSubstrate | null => {
     case 'local': {
       const executablePath = process.env.BROWSER_WORKER_EXECUTABLE?.trim();
       if (!executablePath || !existsSync(executablePath)) return null;
-      return createLocalChromiumSubstrate({ entryPath: process.env.BROWSER_WORKER_ENTRY?.trim() || undefined, executablePath });
+      const entryPath = process.env.BROWSER_WORKER_ENTRY?.trim() || defaultWorkerEntry();
+      if (!existsSync(entryPath)) return null;
+      return createLocalChromiumSubstrate({ entryPath, executablePath });
     }
     case 'sprites':
       return buildSpritesSubstrate();
@@ -112,18 +117,8 @@ export function isBrowserSubstrateConfigured(): boolean {
 const operate: OperateBrowser = async ({ ctx, operation }) => {
   const client = browserSessionClient();
   if (client === null) return { ok: false, refusal: { reason: 'unavailable', detail: 'The browser is not configured on this server.' } };
-  const ownerId = ctx.ownerId ?? ctx.userId;
-  const agentId = ctx.agentPageId ?? `global:${ctx.userId}`;
-  const sessionId = deriveBrowserSessionId({ tenantId: ctx.tenantId, ownerId, agentId, conversationId: ctx.conversationId });
-  return client.operate({
-    session: {
-      sessionId,
-      allowedOrigins: null,
-      billing: { driveId: ctx.driveId ?? null, ownerId, agentPageId: ctx.agentPageId ?? null, conversationId: ctx.conversationId },
-    },
-    agentId,
-    operation,
-  });
+  const { sessionId, agentId, billing } = browserSessionFor(ctx);
+  return client.operate({ session: { sessionId, allowedOrigins: null, billing }, agentId, operation });
 };
 
 /**

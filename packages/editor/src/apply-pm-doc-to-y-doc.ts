@@ -1,7 +1,7 @@
 import type { Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
 import { updateYFragment } from 'y-prosemirror';
-import { collabFragment } from './collab-document.js';
+import { collabFragment } from './collab-document.ts';
 
 /**
  * Replaces a live `Y.Doc`'s content with `nextDoc` as a **minimal CRDT diff**.

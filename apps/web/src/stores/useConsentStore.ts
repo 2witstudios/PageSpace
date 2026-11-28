@@ -52,6 +52,9 @@ function persistConsentToCookie(state: ConsentState): void {
 
 interface ConsentStore {
   state: ConsentState;
+  /** True when the user asked to reopen the banner after deciding (e.g. the sign-in footer link). */
+  reopenRequested: boolean;
+  reopenBanner: () => void;
   /** Re-read from the cookie (call once on mount). */
   hydrate: () => void;
   acceptAll: () => void;
@@ -66,25 +69,27 @@ export const useConsentStore = create<ConsentStore>((set, get) => ({
   // All decision logic lives in the pure @pagespace/lib/consent functions; the store
   // is a thin edge that reads/writes the cookie and notifies listeners.
   state: defaultConsentState(),
+  reopenRequested: false,
+  reopenBanner: () => set({ reopenRequested: true }),
 
   hydrate: () => set({ state: readConsentFromCookie() }),
 
   acceptAll: () => {
     const next = pureAcceptAll(get().state, new Date().toISOString());
     persistConsentToCookie(next);
-    set({ state: next });
+    set({ state: next, reopenRequested: false });
   },
 
   rejectNonEssential: () => {
     const next = pureRejectNonEssential(get().state, new Date().toISOString());
     persistConsentToCookie(next);
-    set({ state: next });
+    set({ state: next, reopenRequested: false });
   },
 
   saveCustom: (choices) => {
     const next = withCustomConsent(get().state, choices, new Date().toISOString());
     persistConsentToCookie(next);
-    set({ state: next });
+    set({ state: next, reopenRequested: false });
   },
 
   grant: (category) => {
@@ -95,7 +100,7 @@ export const useConsentStore = create<ConsentStore>((set, get) => ({
       new Date().toISOString(),
     );
     persistConsentToCookie(next);
-    set({ state: next });
+    set({ state: next, reopenRequested: false });
   },
 
   showBanner: () => shouldShowConsentBanner(get().state),

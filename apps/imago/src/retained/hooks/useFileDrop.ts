@@ -1,0 +1,255 @@
+'use client';
+
+import { useState, useCallback, DragEvent } from 'react';
+import { toast } from 'sonner';
+import { formatBytes } from '@pagespace/lib/client-safe';
+import { imagoReturnPath } from '@/lib/auth/sign-in-url';
+import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
+import { useMyOrganizations } from '@/retained/hooks/useMyOrganizations';
+import { useAuthStore } from '@/retained/stores/useAuthStore';
+import { post } from '@/retained/lib/auth/auth-fetch';
+import { uploadFileToS3, type UploadedPage } from '@/retained/lib/upload/orchestrator';
+
+interface FileDropState {
+  isDraggingFiles: boolean;
+  isUploading: boolean;
+  uploadProgress: number;
+}
+
+interface UseFileDropOptions {
+  driveId: string;
+  parentId?: string | null;
+  onUploadComplete?: (pages: UploadedPage[]) => void;
+  onUploadError?: (error: Error) => void;
+}
+
+export function useFileDrop({
+  driveId,
+  parentId = null,
+  onUploadComplete,
+  onUploadError
+}: UseFileDropOptions) {
+  const [state, setState] = useState<FileDropState>({
+    isDraggingFiles: false,
+    isUploading: false,
+    uploadProgress: 0
+  });
+
+  // "Get more storage" leads only where this client can sell (Stripe) and this viewer manages the
+  // payer the server charged: their own quota, or an org they are an Owner or Admin of.
+  const { showBilling } = useBillingVisibility();
+  const viewerId = useAuthStore((s) => s.user?.id) ?? null;
+  const { organizations } = useMyOrganizations();
+  const adminOrgIds = organizations.filter((o) => o.role !== 'MEMBER').map((o) => o.id).join(',');
+
+  const isFileDrag = useCallback((e: DragEvent) => {
+    if (!e.dataTransfer?.types) return false;
+    return Array.from(e.dataTransfer.types).includes('Files');
+  }, []);
+
+  const handleDragEnter = useCallback((e: DragEvent) => {
+    if (isFileDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      setState(prev => ({ ...prev, isDraggingFiles: true }));
+    }
+  }, [isFileDrag]);
+
+  const handleDragLeave = useCallback((e: DragEvent) => {
+    if (isFileDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Only set to false if we're leaving the entire drop zone
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX;
+      const y = e.clientY;
+
+      if (x <= rect.left || x >= rect.right || y <= rect.top || y >= rect.bottom) {
+        setState(prev => ({ ...prev, isDraggingFiles: false }));
+      }
+    }
+  }, [isFileDrag]);
+
+  const handleDragOver = useCallback((e: DragEvent) => {
+    if (isFileDrag(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+  }, [isFileDrag]);
+
+  const handleFileDrop = useCallback(async (
+    e: DragEvent,
+    customParentId?: string | null,
+    position?: 'before' | 'after' | null,
+    afterNodeId?: string | null
+  ) => {
+    if (!isFileDrag(e)) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    setState(prev => ({ ...prev, isDraggingFiles: false }));
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    // Pre-validate file sizes client-side against a generous, tier-blind global
+    // ceiling (1GB = the largest tier's per-file limit). The precise per-tier
+    // limit is enforced server-side at presign; this only catches absurd files
+    // early. Deployments can tighten it via NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB.
+    const maxFileSize = parseInt(process.env.NEXT_PUBLIC_STORAGE_MAX_FILE_SIZE_MB || '1024') * 1024 * 1024;
+
+    const oversizedFiles = files.filter(f => f.size > maxFileSize);
+    if (oversizedFiles.length > 0) {
+      const fileNames = oversizedFiles.map(f => `${f.name} (${formatBytes(f.size)})`).join(', ');
+      toast.error(`Files exceed ${formatBytes(maxFileSize)} limit: ${fileNames}`);
+      return;
+    }
+
+    // Check storage quota before uploading. Per-file quota is also enforced
+    // server-side at presign time; this is an early, friendlier guard. It names
+    // the drive so an org drive is checked against the org's quota (WAL-9).
+    const totalSize = files.reduce((sum, f) => sum + f.size, 0);
+    try {
+      await post('/api/storage/check', { fileSize: totalSize, driveId });
+    } catch (error) {
+      console.error('Storage check failed:', error);
+      const errorMessage = (error as Error).message;
+      if (errorMessage.includes('429')) {
+        toast.error('Too many uploads in progress. Please wait a moment.');
+      } else if (errorMessage.includes('503')) {
+        toast.error('Server is busy. Please try again later.');
+      } else {
+        const denial = quotaDenial(error, { viewerId, adminOrgIds: new Set(adminOrgIds ? adminOrgIds.split(',') : []), canBuy: showBilling });
+        if (denial) {
+          const href = denial.manageHref;
+          toast.error(denial.reason, href
+            ? { action: { label: 'Get more storage', onClick: () => window.location.assign(imagoReturnPath(href)) } }
+            : denial.contact ? { description: denial.contact } : undefined);
+        } else {
+          toast.error('Upload not allowed');
+        }
+      }
+      return;
+    }
+
+    setState(prev => ({ ...prev, isUploading: true, uploadProgress: 0 }));
+
+    // customParentId can be explicitly null (drop at root), so distinguish
+    // "not passed" (undefined) from "passed as null".
+    const targetParentId = customParentId !== undefined ? customParentId : parentId;
+
+    try {
+      const uploadedPages: UploadedPage[] = [];
+      const totalFiles = files.length;
+
+      // For a before/after drop, chain each subsequent file after the previous
+      // one so a multi-file drop preserves the dragged order instead of
+      // inverting it (every file would otherwise resolve against the same node).
+      let nextPosition = position;
+      let nextAfterNodeId = afterNodeId;
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+          const page = await uploadFileToS3(
+            file,
+            { driveId, parentId: targetParentId, position: nextPosition, afterNodeId: nextAfterNodeId },
+            (pct) => setState(prev => ({
+              ...prev,
+              uploadProgress: ((i + pct / 100) / totalFiles) * 100,
+            })),
+          );
+          uploadedPages.push(page);
+          if (nextPosition === 'before' || nextPosition === 'after') {
+            nextPosition = 'after';
+            nextAfterNodeId = page.id;
+          }
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : `Failed to upload ${file.name}`);
+        } finally {
+          // Advance the bar per file, whether it succeeded or failed, so it
+          // never stalls mid-file on a failure.
+          setState(prev => ({ ...prev, uploadProgress: ((i + 1) / totalFiles) * 100 }));
+        }
+      }
+
+      if (uploadedPages.length > 0) {
+        toast.success(`Successfully uploaded ${uploadedPages.length} of ${files.length} file(s)`);
+      } else if (files.length > 0) {
+        toast.error('No files were uploaded successfully');
+      }
+      onUploadComplete?.(uploadedPages);
+
+    } catch (error) {
+      console.error('File upload error:', error);
+      toast.error((error as Error).message);
+      onUploadError?.(error as Error);
+    } finally {
+      setState(prev => ({
+        ...prev,
+        isUploading: false,
+        uploadProgress: 0
+      }));
+    }
+  }, [driveId, parentId, isFileDrag, onUploadComplete, onUploadError, viewerId, adminOrgIds, showBilling]);
+
+  const resetDragState = useCallback(() => {
+    setState(prev => ({ ...prev, isDraggingFiles: false }));
+  }, []);
+
+  return {
+    ...state,
+    handleDragEnter,
+    handleDragLeave,
+    handleDragOver,
+    handleFileDrop,
+    resetDragState,
+    isFileDrag
+  };
+}
+
+/** Who is looking at a quota refusal: whether they may buy here, and which payers they manage. */
+export interface QuotaViewer {
+  viewerId: string | null;
+  /** Orgs the viewer is an Owner or Admin of: the ones whose billing page they can act on. */
+  adminOrgIds: ReadonlySet<string>;
+  /** This client may sell storage (Stripe). */
+  canBuy: boolean;
+}
+
+/**
+ * The storage check's 413 refusal: its reason, and, when more storage would resolve it, where
+ * this viewer can get it (their own Storage screen, or the billing page of an org they run).
+ * When someone else pays (a personal drive's owner, an org's admins), `contact` says who to ask.
+ */
+export function quotaDenial(error: unknown, viewer: QuotaViewer): { reason: string; manageHref: string | null; contact: string | null } | null {
+  const { status, body } = (error ?? {}) as { status?: unknown; body?: unknown };
+  if (status !== 413 || !body || typeof body !== 'object') return null;
+  const { reason, quota, requiredBytes } = body as {
+    reason?: unknown;
+    requiredBytes?: unknown;
+    quota?: { orgId?: unknown; userId?: unknown; availableBytes?: unknown; tier?: unknown };
+  };
+  if (typeof reason !== 'string' || reason.length === 0) return null;
+  // More storage (or, on Free, a paid plan) only helps when space ran out, or when Free's
+  // file-count cap was hit. A file over the per-file limit is refused whatever the quota.
+  const outOfSpace = !reason.startsWith('File exceeds ')
+    && typeof requiredBytes === 'number' && typeof quota?.availableBytes === 'number'
+    && requiredBytes > quota.availableBytes;
+  const fileCountOnFree = quota?.tier === 'free' && reason.startsWith('File count limit');
+  if (!outOfSpace && !fileCountOnFree) return { reason, manageHref: null, contact: null };
+  if (typeof quota?.orgId === 'string') {
+    return viewer.adminOrgIds.has(quota.orgId)
+      ? { reason, manageHref: viewer.canBuy ? `/orgs/${encodeURIComponent(quota.orgId)}/settings/billing` : null, contact: null }
+      : { reason, manageHref: null, contact: "Ask an Owner or Admin of the drive's organization to add storage." };
+  }
+  if (typeof quota?.userId === 'string') {
+    return quota.userId === viewer.viewerId
+      ? { reason, manageHref: viewer.canBuy ? '/account/storage' : null, contact: null }
+      : { reason, manageHref: null, contact: "This drive's storage is its owner's. Ask them to free up or add space." };
+  }
+  return { reason, manageHref: null, contact: null };
+}

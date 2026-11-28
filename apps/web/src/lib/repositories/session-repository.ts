@@ -16,6 +16,8 @@ export type McpToken = InferSelectModel<typeof mcpTokens>;
 /** The row an MCP token mint writes: the token plus its drive scopes. */
 interface McpTokenCreateInput {
   userId: string;
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   tokenHash: string;
   tokenPrefix: string;
   name: string;
@@ -61,6 +63,8 @@ export const sessionRepository = {
         .insert(mcpTokens)
         .values({
           userId: data.userId,
+          authenticatedAt: data.authenticatedAt ?? null,
+          authenticationAssurance: data.authenticationAssurance ?? null,
           tokenHash: data.tokenHash,
           tokenPrefix: data.tokenPrefix,
           name: data.name,

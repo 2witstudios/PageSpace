@@ -1,0 +1,269 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { ContentReportCategory } from '@pagespace/db/schema/content-safety';
+import type { ResolvedTarget } from '../targets';
+import { submitContentReport, type ReportIntakeDeps, type FileReportInput } from '../report-intake';
+
+const HOST = 'pagespace.site';
+const HASH = 'a'.repeat(64);
+
+const pageIn = (id: string, driveId: string): NonNullable<ResolvedTarget['page']> => ({
+  id, driveId, type: 'CANVAS', mimeType: null, isPublished: true, isTrashed: false,
+});
+const refsIn = (driveId: string): NonNullable<ResolvedTarget['references']> => ({
+  pageIds: [], fileIds: [], driveIds: [driveId], uploaderUserIds: [], channelMessageIds: [], directMessageIds: [],
+  aiMessageIds: [], conversationIds: [], truncated: false,
+});
+
+function target(partial: Partial<ResolvedTarget> & Pick<ResolvedTarget, 'targetType' | 'targetId'>): ResolvedTarget {
+  return { contentHash: null, block: null, page: null, drive: null, user: null, references: null, ...partial };
+}
+
+/** An in-memory case store with the real merge rule: one case under review per target. */
+function fakeStore() {
+  const cases = new Map<string, { caseId: string; count: number }>();
+  const filed: FileReportInput[] = [];
+  let next = 1;
+  return {
+    filed,
+    async fileReport(input: FileReportInput) {
+      filed.push(input);
+      const key = `${input.target.targetType}:${input.target.targetId}`;
+      const existing = cases.get(key);
+      if (existing) {
+        existing.count += 1;
+        return { caseId: existing.caseId, created: false, reportCount: existing.count };
+      }
+      const opened = { caseId: `case_${next++}`, count: 1 };
+      cases.set(key, opened);
+      return { caseId: opened.caseId, created: true, reportCount: 1 };
+    },
+  };
+}
+
+function makeDeps(overrides: Partial<ReportIntakeDeps> = {}) {
+  const store = fakeStore();
+  const deps: ReportIntakeDeps = {
+    publishHost: HOST,
+    resolveTarget: vi.fn(async (input: string) => {
+      if (input === 'https://acme.pagespace.site/about') return target({ targetType: 'page', targetId: 'page_pub', page: pageIn('page_pub', 'drive_acme') });
+      if (input === 'https://acme.pagespace.site/other-drive') return target({ targetType: 'page', targetId: 'page_x', page: pageIn('page_x', 'drive_other') });
+      if (input === `https://acme.pagespace.site/assets/${HASH}`) return target({ targetType: 'content_hash', targetId: HASH, contentHash: HASH, references: refsIn('drive_acme') });
+      if (input === `https://acme.pagespace.site/assets/${'c'.repeat(64)}`) return target({ targetType: 'content_hash', targetId: 'c'.repeat(64), contentHash: 'c'.repeat(64), references: refsIn('drive_other') });
+      if (input === 'https://shop.example.com/') return target({ targetType: 'drive', targetId: 'drive_custom' });
+      if (input === 'page_1') return target({ targetType: 'page', targetId: 'page_1' });
+      if (input === HASH) return target({ targetType: 'content_hash', targetId: HASH, contentHash: HASH });
+      if (input === 'user_bad') return target({ targetType: 'user', targetId: 'user_bad' });
+      return null;
+    }),
+    publishedSiteDrive: vi.fn(async (site: { host: string }) =>
+      site.host === 'shop.example.com' ? 'drive_custom' : site.host === 'acme.pagespace.site' ? 'drive_acme' : null,
+    ),
+    canViewPage: vi.fn(async (pageId: string) => pageId === 'page_1'),
+    canAccessFile: vi.fn(async (fileId: string) => fileId === HASH),
+    fileReport: vi.fn(store.fileReport),
+    alert: vi.fn(async () => undefined),
+    audit: vi.fn(),
+    ...overrides,
+  };
+  return { deps, store };
+}
+
+const anonymous = { kind: 'anonymous' as const };
+const signedIn = { kind: 'user' as const, userId: 'user_me' };
+const report = (category: ContentReportCategory = 'other', description = 'it is bad') => ({ category, description });
+
+describe('submitContentReport', () => {
+  let ctx: ReturnType<typeof makeDeps>;
+  beforeEach(() => {
+    ctx = makeDeps();
+  });
+
+  it('opens a case for an anonymous report of a published URL and alerts with the case, category and count only', async () => {
+    const result = await submitContentReport(
+      { reporter: { kind: 'anonymous', contactEmail: 'me@example.com' }, target: { type: 'published_url', url: 'https://acme.pagespace.site/about' }, ...report('copyright', 'stolen https://evil.test') },
+      ctx.deps,
+    );
+
+    expect(result).toEqual({ ok: true, filed: true, caseId: 'case_1', created: true, reportCount: 1, csamGuidance: null });
+    expect(ctx.store.filed[0]).toEqual({
+      target: { targetType: 'page', targetId: 'page_pub', contentHash: null },
+      category: 'copyright',
+      description: 'stolen https://evil.test',
+      source: 'anonymous',
+      reporterUserId: null,
+      contactEmail: 'me@example.com',
+    });
+    expect(ctx.deps.alert).toHaveBeenCalledWith({ event: 'report_opened', caseId: 'case_1', category: 'copyright', reportCount: 1 });
+    const alertArg = JSON.stringify(vi.mocked(ctx.deps.alert).mock.calls[0][0]);
+    expect(alertArg).not.toMatch(/acme|evil|stolen|page_pub|me@example/);
+    expect(ctx.deps.audit).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'content.report.created', caseId: 'case_1', reportCount: 1, source: 'anonymous', reporterUserId: null }),
+    );
+  });
+
+  it('attaches a second report on the same target to the same case and alerts again with the new count', async () => {
+    const input = { reporter: anonymous, target: { type: 'published_url' as const, url: 'https://acme.pagespace.site/about' }, ...report() };
+    await submitContentReport(input, ctx.deps);
+    const second = await submitContentReport({ ...input, reporter: signedIn }, ctx.deps);
+
+    expect(second).toMatchObject({ ok: true, caseId: 'case_1', created: false, reportCount: 2 });
+    expect(ctx.deps.alert).toHaveBeenLastCalledWith({ event: 'report_added', caseId: 'case_1', category: 'other', reportCount: 2 });
+    expect(ctx.deps.audit).toHaveBeenLastCalledWith(expect.objectContaining({ eventType: 'content.report.attached', reportCount: 2, reporterUserId: 'user_me' }));
+  });
+
+  it('refuses a URL that is not on one of our published hosts, without resolving it', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://evil.example.org/x' }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(ctx.deps.resolveTarget).not.toHaveBeenCalled();
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+    expect(ctx.deps.alert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an avatar path under any prefix', 'https://acme.pagespace.site/x/api/avatar/user_bad/a.png'],
+    ['an avatar path behind a double slash', 'https://acme.pagespace.site//api/avatar/user_bad/a.png'],
+    ['a storage key anywhere in the path', `https://acme.pagespace.site/q/files/${HASH}/original`],
+    ['a dashboard path under a prefix', 'https://acme.pagespace.site/x/dashboard/d1/page_1'],
+  ])('refuses %s', async (_label, url) => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+  });
+
+  it('refuses a URL that resolves to a user or avatar, even on a real site', async () => {
+    const deps = makeDeps({ resolveTarget: vi.fn(async () => target({ targetType: 'avatar', targetId: 'user_bad' })) }).deps;
+    const result = await submitContentReport(
+      { reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/x/api/avatar/user_bad/a.png' }, ...report() },
+      deps,
+    );
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(deps.fileReport).not.toHaveBeenCalled();
+  });
+
+  it('refuses a host with no visible published site before resolving anything, even with a valid asset path', async () => {
+    const result = await submitContentReport(
+      { reporter: anonymous, target: { type: 'published_url', url: `https://ghost.pagespace.site/assets/${HASH}` }, ...report() },
+      ctx.deps,
+    );
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(ctx.deps.publishedSiteDrive).toHaveBeenCalledWith({ kind: 'publish_subdomain', host: 'ghost.pagespace.site' });
+    expect(ctx.deps.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it('accepts a published asset only when the site\'s own drive holds it', async () => {
+    const own = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: `https://acme.pagespace.site/assets/${HASH}` }, ...report() }, ctx.deps);
+    expect(own).toMatchObject({ ok: true, filed: true });
+    const foreign = await submitContentReport(
+      { reporter: anonymous, target: { type: 'published_url', url: `https://acme.pagespace.site/assets/${'c'.repeat(64)}` }, ...report() },
+      ctx.deps,
+    );
+    expect(foreign).toEqual({ ok: false, reason: 'not_pagespace_url' });
+  });
+
+  it('refuses a URL that resolves to a page in another drive than the site\'s', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/other-drive' }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+  });
+
+  it.each([
+    ['unpublished', { isPublished: false, isTrashed: false }],
+    ['trashed', { isPublished: true, isTrashed: true }],
+  ])('refuses a URL on the site that resolves to an %s page of its own drive', async (_label, state) => {
+    const deps = makeDeps({
+      resolveTarget: vi.fn(async () => target({ targetType: 'page', targetId: 'page_priv', page: { ...pageIn('page_priv', 'drive_acme'), ...state } })),
+    }).deps;
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/' }, ...report() }, deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+    expect(deps.fileReport).not.toHaveBeenCalled();
+  });
+
+  it('accepts a custom domain that is registered to a drive', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://shop.example.com/' }, ...report() }, ctx.deps);
+    expect(result).toMatchObject({ ok: true, caseId: 'case_1' });
+    expect(ctx.store.filed[0].target).toEqual({ targetType: 'drive', targetId: 'drive_custom', contentHash: null });
+  });
+
+  it('refuses a published-host URL that resolves to nothing, with the same answer as a foreign host', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://ghost.pagespace.site/' }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_pagespace_url' });
+  });
+
+  it('refuses an anonymous report of anything but a published URL', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'page', pageId: 'page_1' }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+  });
+
+  it('files a signed-in report on a page the reporter can see', async () => {
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'page', pageId: 'page_1' }, ...report('harassment') }, ctx.deps);
+    expect(result).toMatchObject({ ok: true, created: true });
+    expect(ctx.store.filed[0]).toMatchObject({ source: 'signed_in', reporterUserId: 'user_me', contactEmail: null });
+  });
+
+  it('refuses a signed-in report on a page the reporter cannot see, the same way as a page that does not exist', async () => {
+    const hidden = await submitContentReport({ reporter: signedIn, target: { type: 'page', pageId: 'page_secret' }, ...report() }, ctx.deps);
+    const missing = await submitContentReport({ reporter: signedIn, target: { type: 'page', pageId: 'page_none' }, ...report() }, ctx.deps);
+    expect(hidden).toEqual({ ok: false, reason: 'not_found' });
+    expect(missing).toEqual(hidden);
+    expect(ctx.deps.resolveTarget).not.toHaveBeenCalledWith('page_secret');
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+    expect(ctx.deps.audit).not.toHaveBeenCalled();
+  });
+
+  it('files a report on a file the reporter can access, keyed by its content hash', async () => {
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'file', fileId: HASH }, ...report('malware') }, ctx.deps);
+    expect(result).toMatchObject({ ok: true });
+    expect(ctx.store.filed[0].target).toEqual({ targetType: 'content_hash', targetId: HASH, contentHash: HASH });
+  });
+
+  it('refuses a file the reporter cannot access', async () => {
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'file', fileId: 'b'.repeat(64) }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('refuses a target that resolves to a different kind than the reporter named', async () => {
+    const deps = makeDeps({ canViewPage: vi.fn(async () => true) }).deps;
+    // `user_bad` resolves to a user, not a page.
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'page', pageId: 'user_bad' }, ...report() }, deps);
+    expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('answers a report about an unknown user exactly like one about a real user, and files nothing', async () => {
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'user', userId: 'user_none' }, ...report() }, ctx.deps);
+    expect(result).toEqual({ ok: true, filed: false, csamGuidance: null });
+    expect(ctx.deps.fileReport).not.toHaveBeenCalled();
+    expect(ctx.deps.alert).not.toHaveBeenCalled();
+  });
+
+  it('files a report about another user, and refuses a report about yourself', async () => {
+    expect(await submitContentReport({ reporter: signedIn, target: { type: 'user', userId: 'user_bad' }, ...report() }, ctx.deps)).toMatchObject({ ok: true, filed: true });
+    expect(await submitContentReport({ reporter: signedIn, target: { type: 'user', userId: 'user_me' }, ...report() }, ctx.deps)).toEqual({
+      ok: false,
+      reason: 'self_report',
+    });
+  });
+
+  it('returns the CyberTipline guidance for a CSAM report', async () => {
+    const result = await submitContentReport({ reporter: anonymous, target: { type: 'published_url', url: 'https://acme.pagespace.site/about' }, ...report('csam', '') }, ctx.deps);
+    expect(result.ok && result.csamGuidance?.cyberTiplineUrl).toBe('https://report.cybertip.org/');
+    expect(ctx.deps.alert).toHaveBeenCalledWith(expect.objectContaining({ category: 'csam' }));
+    expect(ctx.store.filed[0].description).toBeNull();
+  });
+
+  it('never takes the content down or blocks it: the only writes are the report and the alert', async () => {
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'file', fileId: HASH }, ...report('csam') }, ctx.deps);
+    expect(result.ok).toBe(true);
+    // The intake has no takedown, block or unpublish dependency to call — the type of ReportIntakeDeps is the proof;
+    // this asserts the store was asked only to file a report.
+    expect(Object.keys(ctx.deps).sort()).toEqual(
+      ['alert', 'audit', 'canAccessFile', 'canViewPage', 'fileReport', 'publishHost', 'publishedSiteDrive', 'resolveTarget'],
+    );
+  });
+
+  it('keeps the report when the alert email fails', async () => {
+    const deps = makeDeps({ alert: vi.fn(async () => { throw new Error('smtp down'); }) }).deps;
+    const result = await submitContentReport({ reporter: signedIn, target: { type: 'page', pageId: 'page_1' }, ...report() }, deps);
+    expect(result).toMatchObject({ ok: true, caseId: 'case_1' });
+    expect(deps.audit).toHaveBeenCalled();
+  });
+});

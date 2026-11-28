@@ -1,0 +1,109 @@
+'use client';
+
+import { useState } from 'react';
+import { composerStripModel } from '@pagespace/lib/billing/spend-surface';
+import { Popover, PopoverContent, PopoverTrigger } from '@/retained/components/ui/popover';
+import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
+import type { SpendContext } from '@/retained/stores/useSpendContextStore';
+import { cn } from '@/retained/lib/utils';
+import { SpendSourceIcon } from './SpendSourceIcon';
+import { SpendSourceOptionsPanel } from './SpendSourcePopover';
+
+/**
+ * The strip above the composer before a conversation's first message (Spec SPEND-2; canvas v9
+ * SpendSource): which source this conversation will spend, what is left, and a Change control
+ * that opens the same options as the header chip (at every width; the chip hides below sm).
+ * Renders nothing with one source, or once the conversation has messages.
+ * It reads and writes exactly the conversation it is given (its surface's), never the header's.
+ */
+export function ComposerSpendStrip({ conversationId, driveId, isGlobal, hasMessages, persistentBelowLg = false, className }: SpendContext & {
+  hasMessages: boolean;
+  /**
+   * Keep the strip after the first message below lg. For a surface that covers the header chip
+   * there (the right sidebar is a modal sheet below lg), so the source stays switchable from
+   * inside it mid-conversation (review #2835 P3-B).
+   */
+  persistentBelowLg?: boolean;
+  className?: string;
+}) {
+  const { spend, isPending, error, choose, refresh } = useConversationSpend(conversationId, { driveId, isGlobal });
+  const [open, setOpen] = useState(false);
+  const stayBelowLg = persistentBelowLg && hasMessages;
+  const strip = spend ? composerStripModel({ options: spend.options, resolved: spend.resolved, hasMessages: hasMessages && !stayBelowLg }) : null;
+  // JOURNEYS-2: in a drive (multi-source) context an UNRESOLVED source is state the sender
+  // must see, not silence — a hidden strip used to leave Send enabled on an undisclosed
+  // wallet. Pending names what is being resolved; a failed preview offers the retry. The
+  // composer's readiness gate reads the same preview, so sending stays paused meanwhile.
+  if (!spend || !strip) {
+    if (!driveId) return null; // single-source context: nothing to disclose
+    if (error) {
+      return (
+        <div
+          data-testid="composer-spend-strip-error"
+          className={cn('flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200', stayBelowLg && 'lg:hidden', className)}
+        >
+          <span className="min-w-0 flex-1 truncate">Who pays could not be checked — sending is paused until the source is shown.</span>
+          <button type="button" data-testid="composer-spend-retry" onClick={() => void refresh()} className="shrink-0 font-medium text-primary hover:underline">
+            Retry check
+          </button>
+        </div>
+      );
+    }
+    if (isPending) {
+      return (
+        <div
+          data-testid="composer-spend-strip-pending"
+          className={cn('flex items-center gap-2 rounded-lg border bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground', stayBelowLg && 'lg:hidden', className)}
+        >
+          <span className="min-w-0 flex-1 truncate">Resolving who pays…</span>
+        </div>
+      );
+    }
+    return null;
+  }
+
+  const resolvedWalletId = spend.resolved.kind === 'spend' ? spend.resolved.walletId : null;
+  const selected = resolvedWalletId ? spend.options.find((o) => o.walletId === resolvedWalletId) ?? null : null;
+  return (
+    <div
+      data-testid="composer-spend-strip"
+      className={cn(
+        'flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs',
+        stayBelowLg && 'lg:hidden',
+        strip.tone === 'refused' ? 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200' : 'bg-muted/60 text-foreground',
+        className,
+      )}
+    >
+      <SpendSourceIcon source={selected?.source ?? null} className="text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">
+        {strip.label && strip.tone === 'refused' ? (
+          <>
+            <b className="font-semibold">{strip.label}</b>: {strip.detail}
+          </>
+        ) : strip.label ? (
+          <>
+            Spending from <b className="font-semibold">{strip.label}</b> · {strip.detail}
+          </>
+        ) : (
+          strip.detail
+        )}
+      </span>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button type="button" className="shrink-0 font-medium text-primary hover:underline">
+            {strip.label && strip.tone !== 'refused' ? 'Change' : 'Choose'}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" side="top" className="w-[min(24rem,calc(100vw-2rem))] p-0">
+          <SpendSourceOptionsPanel
+            options={spend.options}
+            selectedWalletId={selected?.walletId ?? spend.chosenWalletId}
+            driveName={spend.options.find((o) => o.driveName)?.driveName ?? null}
+            onChoose={(walletId) => choose(walletId)}
+            onDone={() => setOpen(false)}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}

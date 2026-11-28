@@ -2,14 +2,17 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { buildTree } from '@pagespace/lib/content/tree-utils';
 import { db } from '@pagespace/db/db'
-import { and, eq, asc, isNotNull } from '@pagespace/db/operators'
+import { and, eq, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
-import { driveMembers } from '@pagespace/db/schema/members';
+import { holdsAcceptedGuestRow } from '@pagespace/lib/permissions/membership-queries';
+import { isDriveMemberRelationship } from '@pagespace/lib/permissions/drive-relationship';
+import { loadDriveRelationship } from '@pagespace/lib/permissions/drive-relationship-loader';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isScopedMCPAuth, getPrincipalAccessiblePagesInDrive } from '@/lib/auth';
 import { getUserAccessiblePagesInDrive } from '@pagespace/lib/permissions/permissions';
 import { hasAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 
@@ -52,31 +55,23 @@ export async function POST(request: Request) {
 
     // Check authorization. A scoped MCP token is its own drive member — gate on
     // the TOKEN's membership, not the owning user's.
-    const isOwner = drive.ownerId === userId;
+    const relationship = isScopedMCPAuth(auth) ? null : await loadDriveRelationship(actorFromAuth(auth), drive);
     if (isScopedMCPAuth(auth)) {
       // Membership gate only — the tree below is filtered to the TOKEN's
       // per-page view set, so per-page custom-role grants still work.
-      if (!(await hasAppDriveMembership(auth.tokenId, driveId))) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      if (!(await hasAppDriveMembership(actorFromAuth(auth), auth.tokenId, driveId))) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     } else {
-      let hasAccess = isOwner;
-
-      if (!isOwner) {
-        // Authz read: pending invitee (acceptedAt IS NULL) must not read the
-        // page tree of a drive they have not joined. Closes Review C2.
-        const membership = await db.query.driveMembers.findFirst({
-          where: and(
-            eq(driveMembers.driveId, driveId),
-            eq(driveMembers.userId, userId),
-            isNotNull(driveMembers.acceptedAt)
-          ),
-        });
-        hasAccess = !!membership;
-      }
-
-      if (!hasAccess) {
-        return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      // The drive's lead or an effective member (the org-aware membership reads ACCEPTED rows
+      // only, so a pending invitee does not read the page tree of a drive they have not joined).
+      // A GUEST row (redeemed page share link) is no membership but passes this gate on purpose:
+      // the tree below is cut to getUserAccessiblePagesInDrive, which gives a guest only the
+      // pages they hold explicit grants on.
+      const admitted = relationship !== null
+        && (isDriveMemberRelationship(relationship) || await holdsAcceptedGuestRow(driveId, userId));
+      if (!admitted) {
+        return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
       }
     }
 
@@ -98,8 +93,8 @@ export async function POST(request: Request) {
       const accessible = await getPrincipalAccessiblePagesInDrive(auth, driveId);
       const accessibleIds = new Set(accessible.map(page => page.id));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
-    } else if (!isOwner) {
-      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(userId, driveId));
+    } else if (!relationship?.isOwner) {
+      const accessibleIds = new Set(await getUserAccessiblePagesInDrive(actorFromAuth(auth), driveId));
       visiblePages = pageResults.filter(page => accessibleIds.has(page.id));
     }
 

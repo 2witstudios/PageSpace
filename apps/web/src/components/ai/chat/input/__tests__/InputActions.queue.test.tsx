@@ -83,4 +83,26 @@ describe('InputActions — queue send affordance', () => {
     expect(button.getAttribute('title')).toMatch(/full/i);
     expect(screen.getByTestId('chat-queue-count')).toHaveTextContent('10');
   });
+
+  describe('compact (sidebar)', () => {
+    it('streaming with nothing to queue shows only Stop', () => {
+      render(<InputActions {...baseProps} isStreaming compact onQueueSend={vi.fn()} canQueue={false} />);
+
+      expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+      expect(screen.queryByTestId('chat-queue-send')).toBeNull();
+    });
+
+    it('streaming with text to queue keeps the queue button reachable (phones have no Enter-to-send)', () => {
+      render(<InputActions {...baseProps} isStreaming compact onQueueSend={vi.fn()} canQueue />);
+
+      expect(screen.getByTestId('chat-stop')).toBeInTheDocument();
+      expect(screen.getByTestId('chat-queue-send')).toBeEnabled();
+    });
+
+    it('streaming with a full queue shows the queue button disabled', () => {
+      render(<InputActions {...baseProps} isStreaming compact onQueueSend={vi.fn()} isQueueFull />);
+
+      expect(screen.getByTestId('chat-queue-send')).toBeDisabled();
+    });
+  });
 });

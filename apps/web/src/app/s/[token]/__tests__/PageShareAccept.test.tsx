@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { render, act, screen, fireEvent } from '@testing-library/react';
+import { render, act, screen, fireEvent, waitFor } from '@testing-library/react';
 
 const pushMock = vi.fn();
 
@@ -113,5 +113,18 @@ describe('PageShareAccept', () => {
 
     expect(pushMock).not.toHaveBeenCalled();
     resolveAbort();
+  });
+  it('POL-2 (partial) Given the org holds guests for approval (202 pending_approval), should say so and NOT navigate anywhere', async () => {
+    vi.mocked(useAuth).mockReturnValue({ isAuthenticated: true, isLoading: false } as ReturnType<typeof useAuth>);
+    vi.mocked(useCSRFToken).mockReturnValue({ ...csrfBase, csrfToken: 'csrf' });
+    vi.spyOn(global, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({ status: 'pending_approval', message: 'Waiting for an Owner or Admin to approve.' }),
+    } as Response);
+
+    render(<PageShareAccept token="tok" info={INFO} />);
+    await waitFor(() => expect(screen.getByText(/waiting for an owner or admin to approve/i)).toBeInTheDocument());
+    expect(pushMock).not.toHaveBeenCalled();
   });
 });

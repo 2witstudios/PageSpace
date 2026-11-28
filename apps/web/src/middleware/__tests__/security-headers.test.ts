@@ -676,6 +676,12 @@ describe('Security Headers', () => {
       expect(isPublicPageRoute('/unsubscribe-success')).toBe(true);
     });
 
+    it('isPublicPageRoute keeps the content report page reachable without an account', () => {
+      expect(isPublicPageRoute('/report')).toBe(true);
+      expect(isPublicPageRoute('/reports')).toBe(false);
+      expect(isPublicPageRoute('/report/anything')).toBe(false);
+    });
+
     it('shouldDisableCOEP returns true for auth and Stripe routes', () => {
       expect(shouldDisableCOEP('/auth/signin')).toBe(true);
       expect(shouldDisableCOEP('/auth')).toBe(true);
@@ -684,6 +690,15 @@ describe('Security Headers', () => {
       expect(shouldDisableCOEP('/dashboard')).toBe(false);
       expect(shouldDisableCOEP('/authentication')).toBe(false);
       expect(shouldDisableCOEP('/auth-callback')).toBe(false);
+    });
+
+    it('UI-6 (partial): only the routes that mount the Stripe Payment Element skip COEP, path-exact', () => {
+      // /settings mounts the create-organization dialog's payment step; an org's Plan & seats page mounts Reactivate.
+      expect(shouldDisableCOEP('/settings')).toBe(true);
+      expect(shouldDisableCOEP('/orgs/org_1/settings/billing')).toBe(true);
+      for (const path of ['/settings/account', '/settings/', '/orgs/org_1/settings', '/orgs/org_1/settings/members', '/orgs/org_1/settings/billing/x', '/organizations']) {
+        expect(shouldDisableCOEP(path), path).toBe(false);
+      }
     });
 
     it('isPublishedSiteHost identifies *.pagespace.site published hosts', () => {
@@ -765,6 +780,13 @@ describe('Security Headers', () => {
       const exposed = response.headers.get('Access-Control-Expose-Headers');
       expect(exposed).toContain('X-PageSpace-API-Version');
       expect(exposed).toContain('Retry-After');
+    });
+
+    it('SPEND-4 (partial) exposes the spend-fallback headers, so a browser caller of v1 can read a fallback', () => {
+      const response = NextResponse.next();
+      applyApiCorsHeaders(response);
+      const exposed = response.headers.get('Access-Control-Expose-Headers') ?? '';
+      for (const header of ['X-Spend-Fallback-From', 'X-Spend-Fallback-To', 'X-Spend-Fallback-Wallet']) expect(exposed).toContain(header);
     });
 
     it('allows Authorization in preflight — the one header a Bearer-token caller must send', () => {

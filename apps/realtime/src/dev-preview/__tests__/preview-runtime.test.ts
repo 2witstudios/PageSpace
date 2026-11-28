@@ -61,12 +61,13 @@ describe('buildRealtimePreviewAccessDeps', () => {
     expect(await deps.resolveDrivePayer('gone')).toBeNull();
   });
 
-  it('asks the centralized code-execution gate as a user, mapping a null drive to undefined', async () => {
+  it('asks the centralized code-execution gate as the cookie session\'s credential, mapping a null drive to undefined', async () => {
     const deps = buildRealtimePreviewAccessDeps();
-    await deps.canRunCode({ userId: 'u', driveId: null, ownerId: 'o' });
-    expect(canRunCode).toHaveBeenCalledWith({ userId: 'u', driveId: undefined, ownerId: 'o', requestOrigin: 'user' });
-    await deps.canRunCode({ userId: 'u', driveId: 'd', ownerId: 'o' });
-    expect(canRunCode).toHaveBeenLastCalledWith({ userId: 'u', driveId: 'd', ownerId: 'o', requestOrigin: 'user' });
+    const actor = { via: 'credential' as const, userId: 'u', authentication: null };
+    await deps.canRunCode({ actor, driveId: null, ownerId: 'o' });
+    expect(canRunCode).toHaveBeenCalledWith({ actor, driveId: undefined, ownerId: 'o', requestOrigin: 'user' });
+    await deps.canRunCode({ actor, driveId: 'd', ownerId: 'o' });
+    expect(canRunCode).toHaveBeenLastCalledWith({ actor, driveId: 'd', ownerId: 'o', requestOrigin: 'user' });
   });
 
   it('attaches through a connect-scoped host and maps an attach failure to null', async () => {

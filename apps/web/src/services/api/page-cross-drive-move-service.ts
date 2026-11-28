@@ -23,6 +23,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, desc, isNull } from '@pagespace/db/operators';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard';
 import {
@@ -32,6 +33,14 @@ import {
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
 import { syncTaskItemOnMove, scrubDriveScopedTaskAssociations } from '@/services/api/task-sync-service';
+import { holdOrgGuestsUnderPolicy, kickSuspendedGuests, type GuestHoldItem } from '@pagespace/lib/permissions/guest-holds';
+import { OrgLapsedError, checkDriveMayLoosen, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { OrgModelPolicyError } from './page-mutation-service';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { agentModelSaveDecision } from '@pagespace/lib/organizations/org-action-decisions';
+
+/** Pages per POL-2 guest check: bounds each statement's bind list. */
+const GUEST_PAGE_CHUNK = 500;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -93,7 +102,11 @@ export type CrossDriveMoveFailureCode =
   | 'SOURCE_PAGE_FORBIDDEN'
   | 'CIRCULAR_REFERENCE'
   | 'MEMORY_PAGE_PROTECTED'
-  | 'SUBTREE_TOO_DEEP';
+  | 'SUBTREE_TOO_DEEP'
+  // [D-OW-33] ruling P2-4: a page leaving a lapsed org's drive widens its audience (and writes read-only content).
+  | 'ORG_LAPSED'
+  // POL-8: an agent page among the moved pages stores a provider/model the target drive's org does not allow.
+  | 'ORG_POLICY';
 
 export interface MovedPageSummary {
   id: string;
@@ -117,8 +130,10 @@ export type CrossDriveMoveResult =
   | {
       success: false;
       code: CrossDriveMoveFailureCode;
-      status: 400 | 403 | 404;
+      status: 400 | 402 | 403 | 404;
       message: string;
+      /** Set on an ORG_POLICY refusal: the org policy key that refused (POL-8). */
+      policy?: string;
     };
 
 /** Internal signal: the cascade hit MAX_SUBTREE_DEPTH (almost certainly a parentId cycle). */
@@ -126,7 +141,7 @@ class PageSubtreeTooDeepError extends Error {}
 
 function fail(
   code: CrossDriveMoveFailureCode,
-  status: 400 | 403 | 404,
+  status: 400 | 402 | 403 | 404,
   message: string,
 ): CrossDriveMoveResult {
   return { success: false, code, status, message };
@@ -254,10 +269,12 @@ export async function movePagesToDrive(
 
   for (const page of sourcePages) {
     if (!(await authorize.canEditPage(page.id))) {
+      // The id the caller sent, never the title: a caller refused the edit may
+      // not be able to view the page either (an Imago kept out of its drive).
       return fail(
         'SOURCE_PAGE_FORBIDDEN',
         403,
-        `You do not have permission to move page: ${page.title}`,
+        `You do not have permission to move page: ${page.id}`,
       );
     }
   }
@@ -299,9 +316,16 @@ export async function movePagesToDrive(
   const clearedHomePageDriveIds: string[] = [];
   const moved: MovedPageSummary[] = [];
   let descendantCount = 0;
+  const heldGuests: GuestHoldItem[] = [];
 
   try {
     await db.transaction(async (tx) => {
+      // [D-OW-33] ruling P2-4: moving pages OUT of a lapsed org's drive puts its content where another drive's members
+      // read it: refused (checked against each SOURCE drive, in this transaction). A move within one drive, or into a
+      // lapsed org's drive from elsewhere, is not this. Exporting data (account / GDPR export) stays available.
+      for (const sourceDriveId of new Set(sourcePages.map((p) => p.driveId))) {
+        if (sourceDriveId !== targetDriveId && (await checkDriveMayLoosen(tx, sourceDriveId, true))) throw new OrgLapsedError();
+      }
       const cascadeRoots: string[] = [];
 
       for (const page of sourcePages) {
@@ -344,8 +368,9 @@ export async function movePagesToDrive(
         nextPosition += 1;
       }
 
+      let movedDescendants: string[] = [];
       if (cascadeRoots.length > 0) {
-        const movedDescendants = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
+        movedDescendants = await cascadeDriveIdToDescendants(tx, cascadeRoots, targetDriveId);
         descendantCount = movedDescendants.length;
 
         // The roots' membership change is handled by syncTaskItemOnMove above, but a
@@ -357,6 +382,35 @@ export async function movePagesToDrive(
           pageIds: [...cascadeRoots, ...movedDescendants],
           targetDriveId,
         });
+      }
+
+      // POL-2 (independent review of #2762, P1-2): page grants travel with their pages, so pages moved INTO an org
+      // drive bring the outsiders they were shared with. The org's guests policy decides them here, under the org
+      // row's share lock: off parks those grants, approve queues them for an Owner or Admin, on keeps them. An
+      // admitted guest of the drive (a member row there) keeps what the move brought.
+      const crossed = [...cascadeRoots, ...movedDescendants];
+      if (crossed.length > 0) {
+        const target = await tx.query.drives.findFirst({ where: eq(drives.id, targetDriveId), columns: { orgId: true } });
+        if (target?.orgId) {
+          // POL-8: an agent page that crosses into an org drive brings its stored provider/model, which is a save
+          // there: refused (the whole move rolled back) when the org does not allow it, as a bulk copy is.
+          const policies = await getOrgPolicies(target.orgId, tx);
+          for (let i = 0; i < crossed.length; i += GUEST_PAGE_CHUNK) {
+            const agents = await tx.query.pages.findMany({
+              where: and(inArray(pages.id, crossed.slice(i, i + GUEST_PAGE_CHUNK)), eq(pages.type, PageType.AI_CHAT)),
+              columns: { aiProvider: true, aiModel: true },
+              // Bounded by the id chunk: at most one row per id.
+              limit: GUEST_PAGE_CHUNK,
+            });
+            for (const agent of agents) {
+              const decision = agentModelSaveDecision(policies, { provider: agent.aiProvider, modelId: agent.aiModel });
+              if (!decision.ok) throw new OrgModelPolicyError(decision);
+            }
+          }
+          for (let i = 0; i < crossed.length; i += GUEST_PAGE_CHUNK) {
+            heldGuests.push(...await holdOrgGuestsUnderPolicy(tx, { orgId: target.orgId, driveId: targetDriveId, pageIds: crossed.slice(i, i + GUEST_PAGE_CHUNK) }));
+          }
+        }
       }
 
       // A drive's home page must live in that drive. Clearing here (after the
@@ -384,8 +438,12 @@ export async function movePagesToDrive(
     if (error instanceof PageSubtreeTooDeepError) {
       return fail('SUBTREE_TOO_DEEP', 400, error.message);
     }
+    if (isOrgLapsedError(error)) return fail('ORG_LAPSED', 402, error.message);
+    if (error instanceof OrgModelPolicyError) return { success: false, code: 'ORG_POLICY', status: error.refusal.status, message: error.message, policy: error.refusal.policy };
     throw error;
   }
+
+  await kickSuspendedGuests(heldGuests);
 
   const actorInfo = await getActorInfo(userId);
   const changeGroupId = createChangeGroupId();

@@ -19,7 +19,9 @@ import {
   getPrincipalBatchPagePermissions,
 } from '@/lib/auth';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
+import { getSubTaskCountsByPageId } from '@/lib/tasks/subtask-counts';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -115,10 +117,10 @@ export async function GET(request: Request) {
       // Verify the principal (user, or the token itself when drive-scoped) can view the drive
       const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
       if (!canViewDrive) {
-        return NextResponse.json(
+        return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
           { error: 'Unauthorized - you do not have access to this drive' },
           { status: 403 }
-        );
+        ));
       }
 
       const scopeError = checkMCPDriveScope(auth, params.driveId);
@@ -449,6 +451,7 @@ export async function GET(request: Request) {
             color: taskStatusConfigs.color,
             group: taskStatusConfigs.group,
             position: taskStatusConfigs.position,
+            wipLimit: taskStatusConfigs.wipLimit,
           })
           .from(taskStatusConfigs)
           .innerJoin(taskLists, eq(taskStatusConfigs.taskListId, taskLists.id))
@@ -458,6 +461,7 @@ export async function GET(request: Request) {
     const taskListStatusMap = new Map<string, Array<{
       id: string; taskListId: string; name: string;
       slug: string; color: string; group: TaskStatusGroup; position: number;
+      wipLimit: number | null;
     }>>();
     for (const { listPageId, ...config } of representedConfigRows) {
       if (!listPageId) continue;
@@ -466,6 +470,12 @@ export async function GET(request: Request) {
       else taskListStatusMap.set(listPageId, [config]);
     }
     const serializedStatusConfigsByTaskList = Object.fromEntries(taskListStatusMap);
+
+    // Direct, untrashed sub-task counts for this page of results — one grouped
+    // query, shared with GET /api/pages/[pageId]/tasks.
+    const subTaskCountsByPageId = await getSubTaskCountsByPageId(
+      decryptedTasks.map(task => task.pageId).filter((id): id is string => !!id),
+    );
 
     // Enrich tasks with drive, task list page info, and status metadata
     // Filter out orphaned tasks where parent list is not accessible
@@ -500,6 +510,8 @@ export async function GET(request: Request) {
           statusGroup,
           statusLabel,
           statusColor,
+          subTaskCount: subTaskCountsByPageId.get(task.pageId)?.total ?? 0,
+          subTaskCompletedCount: subTaskCountsByPageId.get(task.pageId)?.completed ?? 0,
         };
       })
       .filter((task): task is NonNullable<typeof task> => task !== null);

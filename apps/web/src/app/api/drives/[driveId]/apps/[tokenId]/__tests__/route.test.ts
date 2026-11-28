@@ -8,6 +8,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
+  isMemberOfDrive: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -20,6 +21,20 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 vi.mock('@pagespace/db/db', () => ({
   db: { select: vi.fn(), update: vi.fn(), delete: vi.fn() },
 }));
+// [D-OW-33] the lapse guard runs the write with the db mock; a test makes it refuse (the re-role loosened a lapsed org).
+const guardRefuses = vi.hoisted(() => ({ current: false }));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>();
+  const { db: mockDb } = await import('@pagespace/db/db');
+  return {
+    ...real,
+    guardDriveAccess: vi.fn(async (_e: unknown, _d: string, _s: unknown, write: (tx: unknown) => Promise<unknown>) => {
+      const result = await write(mockDb);
+      if (guardRefuses.current) throw new real.OrgLapsedError();
+      return result;
+    }),
+  };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ _type: 'eq', a, b })),
   and: vi.fn((...args: unknown[]) => ({ _type: 'and', args })),
@@ -44,14 +59,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({
     userId: 'col_mt_userId',
   },
 }));
-vi.mock('@pagespace/lib/permissions/permissions', () => ({
-  isUserDriveMember: vi.fn().mockResolvedValue(true),
-}));
 
 import { PATCH, DELETE } from '../route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
-import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
+import { checkDriveAccess, isMemberOfDrive } from '@pagespace/lib/services/drive-member-service';
 import { db } from '@pagespace/db/db';
 
 const MOCK_USER_ID = 'user_abc';
@@ -128,6 +139,7 @@ function setupDeleteChain() {
 
 describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
   beforeEach(() => {
+    guardRefuses.current = false;
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(MOCK_USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
@@ -199,9 +211,22 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
     expect(body.success).toBe(true);
   });
 
+  it('SEAT-9 (partial) [D-OW-33] review P1-1: the re-role runs inside guardDriveAccess (token scopes), and a raise refused for a lapsed org answers 402 org_lapsed', async () => {
+    setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
+    setupUpdateChain({ id: 'mtd-1', tokenId: MOCK_TOKEN_ID, role: 'ADMIN' });
+    guardRefuses.current = true;
+
+    const res = await PATCH(createRequest('PATCH', { role: 'ADMIN' }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
+
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+    const { guardDriveAccess } = await import('@pagespace/lib/permissions/org-lapse-guard');
+    expect(guardDriveAccess).toHaveBeenCalledWith(expect.anything(), MOCK_DRIVE_ID, { members: false, grants: false, agents: false }, expect.any(Function));
+  });
+
   it('clears role to inherit (null) when the token owner is a drive member', async () => {
     setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'owner-1' }], []);
-    vi.mocked(isUserDriveMember).mockResolvedValue(true);
+    vi.mocked(isMemberOfDrive).mockResolvedValue(true);
     const { mockSet } = setupUpdateChain({ id: 'mtd-1', tokenId: MOCK_TOKEN_ID, role: null });
 
     const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
@@ -209,13 +234,13 @@ describe('PATCH /api/drives/[driveId]/apps/[tokenId]', () => {
 
     expect(res.status).toBe(200);
     expect(body.success).toBe(true);
-    expect(isUserDriveMember).toHaveBeenCalledWith('owner-1', MOCK_DRIVE_ID);
+    expect(isMemberOfDrive).toHaveBeenCalledWith(MOCK_DRIVE_ID, 'owner-1');
     expect(mockSet).toHaveBeenCalledWith({ role: null });
   });
 
   it('returns 400 when clearing to inherit but the token owner is not a drive member', async () => {
     setupSequencedSelect([{ id: 'mtd-1', ownerUserId: 'foreign-owner' }], []);
-    vi.mocked(isUserDriveMember).mockResolvedValue(false);
+    vi.mocked(isMemberOfDrive).mockResolvedValue(false);
 
     const res = await PATCH(createRequest('PATCH', { role: null }), createContext(MOCK_DRIVE_ID, MOCK_TOKEN_ID));
     const body = await res.json();

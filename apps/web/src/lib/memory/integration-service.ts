@@ -31,6 +31,7 @@ import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factor
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
+import { reserveMemoryCall, type MemoryGateRefusal } from './memory-credit';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   applyPageMutation,
@@ -198,7 +199,12 @@ export type EvaluationOutcome =
       /** IDs of the candidates the evaluator actually used. */
       usedCandidateIds: string[];
     }
-  | { ok: false; reason: string };
+  | {
+      ok: false;
+      reason: string;
+      /** Set when the credit gate refused: no model ran, nothing was charged. */
+      creditRefusal?: MemoryGateRefusal;
+    };
 
 /**
  * Evaluate promoted candidates and decide how to integrate.
@@ -282,7 +288,7 @@ Remember: You are writing the COMPLETE page, not just additions. Preserve what m
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_HEAVY_PROVIDER,
     selectedModel: BACKGROUND_HEAVY_MODEL,
-  });
+  }, { driveId: null });
 
   if (isProviderError(providerResult)) {
     loggers.api.error('Memory integration: provider error', {
@@ -326,30 +332,45 @@ CURRENT RULES:
 ${current.rules || '(empty)'}
 `;
 
-    const result = await generateText({
-      model: providerResult.model,
-      system: EVALUATOR_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: `Evaluate these newly-learned insights against the current profile and produce updated page content where appropriate.
+    const userPrompt = `Evaluate these newly-learned insights against the current profile and produce updated page content where appropriate.
 
 ${currentProfileText}
 
 ${candidatesByField}
 
-Return JSON with the full new content for each field that should change. Use null for unchanged fields.`,
-        },
-      ],
+Return JSON with the full new content for each field that should change. Use null for unchanged fields.`;
+
+    // Reserve before the model (SPEND-1). Refused: no decision is reached, so every
+    // candidate stays pending for the next run, as when the provider is unavailable.
+    const reservation = await reserveMemoryCall(userId, {
+      provider: providerResult.provider,
+      model: providerResult.modelName,
+      inputChars: EVALUATOR_SYSTEM_PROMPT.length + userPrompt.length,
+    });
+    if (!reservation.allowed) {
+      loggers.api.info('Memory integration: skipped, credit gate refused', { userId, reason: reservation.reason });
+      return { ok: false, reason: `credit gate refused: ${reservation.reason}`, creditRefusal: reservation.reason };
+    }
+
+    const result = await generateText({
+      model: providerResult.model,
+      system: EVALUATOR_SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.2,
       maxRetries: 2,
+    }).catch((error: unknown) => {
+      reservation.release();
+      throw error;
     });
 
+    // Settles the reservation once (trackUsage takes the hold).
     discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
       source: 'memory',
+      holdId: reservation.holdId,
+      walletId: reservation.walletId,
       inputTokens: result.usage?.inputTokens,
       outputTokens: result.usage?.outputTokens,
       totalTokens: result.usage

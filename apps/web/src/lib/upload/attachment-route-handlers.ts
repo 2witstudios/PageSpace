@@ -60,7 +60,7 @@ export async function handleComplete(request: Request, resolved: Resolved): Prom
   }
 
   const result = await completeAttachment({
-    userId: resolved.ctx.userId,
+    actor: resolved.ctx.actor,
     target: resolved.target,
     request,
     jobId,

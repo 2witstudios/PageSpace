@@ -206,6 +206,10 @@ export async function writeAiUsage(usage: {
   driveId?: string;
   /** The `agent_workspaces.id` this usage attributes to — terminal runtime/storage charges only. */
   sessionId?: string;
+  /** WAL-5: the wallet this usage is charged to, when the caller named one (recorded with the row). */
+  walletId?: string;
+  /** SPEND-10: the automation (its stored reference, automation-attribution) the call ran for with no person present. */
+  automationRef?: string;
   success?: boolean;
   error?: string;
   source?: string;
@@ -244,6 +248,8 @@ export async function writeAiUsage(usage: {
       pageId: usage.pageId,
       driveId: usage.driveId,
       sessionId: usage.sessionId,
+      walletId: usage.walletId,
+      automationRef: usage.automationRef,
       success: usage.success,
       error: usage.error,
       source: usage.source,

@@ -10,9 +10,10 @@ import type { CalendarTriggerMetadata } from '@pagespace/db/schema/calendar-trig
 import { isUserDriveMember, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { isUserMemberOfAnyEventDrive, listEventDrives, getAllDriveIdsForEvent } from '@pagespace/lib/services/calendar-event-drive-service';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped } from './actor-permissions';
+import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped, toolActor } from './actor-permissions';
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 import { expandRecurringEvents } from '../../workflows/recurrence-utils';
+import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
 
 /**
  * Check if user can access an event based on visibility rules
@@ -20,8 +21,11 @@ import { expandRecurringEvents } from '../../workflows/recurrence-utils';
 async function canAccessEvent(
   userId: string,
   event: typeof calendarEvents.$inferSelect,
-  context?: ToolExecutionContext
+  context: ToolExecutionContext
 ): Promise<boolean> {
+  const actor = toolActor(context);
+  // SEC-2/3: an org drive's event is that org's content, whoever created or attends it.
+  if (event.driveId && !(await checkActorDriveAuthentication(actor, event.driveId)).allowed) return false;
   // A scoped MCP token must have access to at least one of the event's drives
   // (home drive + any shared drives). Check all drives so tokens scoped to a
   // shared drive can still reach the event.
@@ -54,7 +58,7 @@ async function canAccessEvent(
 
   // Check membership in home drive OR any shared drive for DRIVE-visible events
   if (event.visibility === 'DRIVE') {
-    return isUserMemberOfAnyEventDrive(userId, event);
+    return isUserMemberOfAnyEventDrive(actor, event);
   }
 
   return false;
@@ -267,7 +271,7 @@ export const calendarReadTools = {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
 
-          const canView = await isUserDriveMember(userId, driveId);
+          const canView = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canView) {
             return {
               success: false,
@@ -384,7 +388,7 @@ export const calendarReadTools = {
         // token to its allowed drives (no-op for unscoped callers).
         const driveIds = await filterDriveIdsByAppTokenScope(
           ctx as ToolExecutionContext,
-          await getDriveIdsForUser(userId),
+          await getDriveIdsForUser(toolActor(ctx as ToolExecutionContext)),
         );
         const conditions = [];
 
@@ -703,7 +707,7 @@ export const calendarReadTools = {
           if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'view')) {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
-          const canView = await isUserDriveMember(userId, driveId);
+          const canView = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canView) {
             return {
               success: false,
@@ -716,7 +720,7 @@ export const calendarReadTools = {
         // allowed drives (no-op for unscoped callers).
         const driveIds = await filterDriveIdsByAppTokenScope(
           ctx as ToolExecutionContext,
-          driveId ? [driveId] : await getDriveIdsForUser(userId),
+          driveId ? [driveId] : await getDriveIdsForUser(toolActor(ctx as ToolExecutionContext)),
         );
         const conditions = [];
 
@@ -927,14 +931,12 @@ export const calendarReadTools = {
       const userId = (ctx as ToolExecutionContext)?.userId;
       if (!userId) throw new Error('Authentication required');
 
-      const context = ctx as ToolExecutionContext | undefined;
-
       // Verify event exists and caller has access before exposing drive topology
       const event = await db.query.calendarEvents.findFirst({
         where: and(eq(calendarEvents.id, eventId), eq(calendarEvents.isTrashed, false)),
       });
       if (!event) return { success: false, error: 'Event not found.' };
-      const hasAccess = await canAccessEvent(userId, event, context);
+      const hasAccess = await canAccessEvent(userId, event, ctx as ToolExecutionContext);
       if (!hasAccess) return { success: false, error: 'You do not have access to this event.' };
 
       const drives = await listEventDrives(eventId);

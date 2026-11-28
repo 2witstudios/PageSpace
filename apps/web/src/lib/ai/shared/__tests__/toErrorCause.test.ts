@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { toErrorCause } from '../toErrorCause';
+import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 
 describe('toErrorCause', () => {
   it('given the out_of_credits code (402), should classify as out_of_credits, non-retryable', () => {
@@ -94,5 +95,42 @@ describe('toErrorCause', () => {
   it('given a 429 with an unrecognized code and an arbitrary server message, should ignore it and use the local rate_limit default', () => {
     const cause = toErrorCause(429, { error: 'unrecognized', message: 'raw upstream body' });
     expect(cause.message).not.toBe('raw upstream body');
+  });
+  it('SPEND-4 (partial) given the spend_source_refused code (402), should classify it and KEEP the refused source, why, and the options offered', () => {
+    const cause = toErrorCause(402, {
+      error: 'spend_source_refused',
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      source: 'drive_wallet',
+      refusalReason: 'source_empty',
+      options: ['seat_allowance', 'own_credits'],
+    });
+    expect(cause).toEqual({
+      code: 'spend_source_refused',
+      httpStatus: 402,
+      message: 'The credit source for this request cannot cover it. Choose another source to continue.',
+      retryable: false,
+      refusal: { source: 'drive_wallet', reason: 'source_empty', options: ['seat_allowance', 'own_credits'] },
+    });
+  });
+
+  it('SPEND-4 (partial) given spend_source_refused with no source named (none chosen among several), should keep a null source', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: null, refusalReason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+    expect(cause.refusal).toEqual({ source: null, reason: 'no_source_chosen', options: ['drive_wallet', 'own_credits'] });
+  });
+
+  it('given spend_source_refused with a malformed refusal payload, should still classify it and drop only the malformed payload, never crash', () => {
+    const cause = toErrorCause(402, { error: 'spend_source_refused', source: 'drive_wallet', refusalReason: 'source_empty', options: 'own_credits' });
+    expect(cause).toMatchObject({ code: 'spend_source_refused', httpStatus: 402, retryable: false });
+    expect(cause.refusal).toBeUndefined();
+  });
+
+  it('SPEND-4 (partial) WAL-2 (partial) a seat refused by its cap survives the whole trip — the 402 the route sends, read back by the client, names the source and why, never "Something went wrong"', async () => {
+    const response = creditGateErrorResponse('source_refused', { source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
+
+    const cause = toErrorCause(response.status, await response.json());
+
+    expect(cause.code).toBe('spend_source_refused');
+    expect(cause.httpStatus).toBe(402);
+    expect(cause.refusal).toEqual({ source: 'seat_allowance', reason: 'source_cap_reached', options: ['drive_wallet', 'own_credits'] });
   });
 });

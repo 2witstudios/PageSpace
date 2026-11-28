@@ -14,6 +14,7 @@ import {
   commandsToSearchEntries,
   type SkillSearchEntry,
 } from '@/lib/ai/core/skill-catalog';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export interface UserCommandCatalog {
   /** Volatile AVAILABLE COMMANDS section ('' when the user has none). */
@@ -25,16 +26,16 @@ export interface UserCommandCatalog {
 const EMPTY: UserCommandCatalog = { catalogPrompt: '', searchEntries: [] };
 
 export async function loadUserCommandCatalog(
-  userId: string,
+  actor: AccessActor,
   requestedDriveId: string | null,
   availableTools?: readonly string[]
 ): Promise<UserCommandCatalog> {
   try {
     const driveId =
-      requestedDriveId && (await isUserDriveMember(userId, requestedDriveId))
+      requestedDriveId && (await isUserDriveMember(actor, requestedDriveId))
         ? requestedDriveId
         : null;
-    const { winners } = await loadAvailableCommands(userId, driveId);
+    const { winners } = await loadAvailableCommands(actor, driveId);
     return {
       catalogPrompt: buildUserCommandCatalog(winners, undefined, availableTools),
       searchEntries: commandsToSearchEntries(winners),

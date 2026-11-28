@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { post } from '@/lib/auth/auth-fetch';
 import { attemptStepUp, readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
+import { V3_ERROR_TEXT, V3_FINE_PRINT, V3_PRIMARY_BUTTON, V3_SECONDARY_BUTTON, V3_STATUS_TEXT } from '@/components/auth/auth-v3-styles';
 import { buildConsentActionBinding } from './consent-step-up';
 
 interface ConsentActionsProps {
@@ -120,11 +122,42 @@ export function ConsentActions(props: ConsentActionsProps) {
     }
   }
 
+  const v3 = isV3AuthEnabled();
+
   if (stepUpStatus === 'awaiting_email') {
     return (
       <div className="mt-8">
-        <p className="text-sm text-muted-foreground">
+        <p className={v3 ? V3_STATUS_TEXT : 'text-sm text-muted-foreground'} role="status">
           Check your email for a confirmation link to finish approving this request.
+        </p>
+      </div>
+    );
+  }
+
+  if (v3) {
+    return (
+      <div className="mt-6">
+        {error && <p role="alert" className={V3_ERROR_TEXT}>{error}</p>}
+        <div className="flex flex-col gap-3">
+          <button
+            type="button"
+            disabled={isSubmitting}
+            onClick={() => decide('approve')}
+            className={V3_PRIMARY_BUTTON}
+          >
+            {stepUpStatus === 'in_progress' ? 'Confirming…' : 'Allow'}
+          </button>
+          <button
+            type="button"
+            disabled={isSubmitting}
+            onClick={() => decide('deny')}
+            className={V3_SECONDARY_BUTTON}
+          >
+            Deny
+          </button>
+        </div>
+        <p className={V3_FINE_PRINT}>
+          Allow needs a fresh confirmation of who you are; denying never does. Redirects to {props.redirectUri}.
         </p>
       </div>
     );

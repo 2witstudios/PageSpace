@@ -19,9 +19,10 @@ import { getAllMemberUserIdsForEvent, shareEventWithDrive, unshareEventFromDrive
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
 import type { ToolExecutionContext } from '../core/types';
-import { driveDeniedByAppToken, isMcpScoped } from './actor-permissions';
+import { driveDeniedByAppToken, isMcpScoped, toolActor } from './actor-permissions';
 import { normalizeTimezone, formatDateInTimezone, parseDateTime } from '../core/timestamp-utils';
 import { maskIdentifier } from '@/lib/logging/mask';
+import { OrgLapsedError, checkCalendarVisibilityMayLoosen, checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
 
 const calendarWriteLogger = loggers.ai.child({ module: 'calendar-write-tools' });
 
@@ -158,7 +159,7 @@ export const calendarWriteTools = {
           if (await driveDeniedByAppToken(ctx as ToolExecutionContext, driveId, 'edit')) {
             return { success: false, error: 'This token does not have access to this drive.' };
           }
-          const canAccess = await isUserDriveMember(userId, driveId);
+          const canAccess = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), driveId);
           if (!canAccess) {
             return {
               success: false,
@@ -191,7 +192,7 @@ export const calendarWriteTools = {
             if (await driveDeniedByAppToken(ctx as ToolExecutionContext, agent.driveId, 'view')) {
               return { success: false, error: 'This token does not have access to the drive containing this agent.' };
             }
-            const canAccessAgentDrive = await isUserDriveMember(userId, agent.driveId);
+            const canAccessAgentDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), agent.driveId);
             if (!canAccessAgentDrive) return { success: false, error: 'You do not have access to the drive containing this agent.' };
           }
           validatedAgent = { id: agent.id, title: agent.title };
@@ -209,7 +210,7 @@ export const calendarWriteTools = {
               if (await driveDeniedByAppToken(ctx as ToolExecutionContext, instrPage.driveId, 'view')) {
                 return { success: false, error: 'This token does not have access to the instruction page drive.' };
               }
-              const canAccessInstrDrive = await isUserDriveMember(userId, instrPage.driveId);
+              const canAccessInstrDrive = await isUserDriveMember(toolActor(ctx as ToolExecutionContext), instrPage.driveId);
               if (!canAccessInstrDrive) return { success: false, error: 'You do not have access to the instruction page drive.' };
             }
           }
@@ -556,6 +557,11 @@ export const calendarWriteTools = {
         // surprise) rolls the event update back too.
         let removedAttendeesCount = 0;
         const updatedEvent = await db.transaction(async (tx) => {
+          // [D-OW-33] ruling: an org-drive event made more visible is refused while the drive's org is lapsed, judged
+          // on the event row locked in this transaction (the same guard as PATCH /api/calendar/events/[eventId]).
+          if (visibility !== undefined && (await checkCalendarVisibilityMayLoosen(tx, eventId, visibility))) {
+            throw new OrgLapsedError();
+          }
           if (visibility === 'PRIVATE' && event.visibility !== 'PRIVATE') {
             const deletedAttendees = await tx
               .delete(eventAttendees)
@@ -1008,16 +1014,22 @@ export const calendarWriteTools = {
           };
         }
 
-        // Add new attendees
-        await db.insert(eventAttendees).values(
-          newUserIds.map((attendeeId) => ({
-            eventId,
-            userId: attendeeId,
-            status: 'PENDING' as const,
-            isOrganizer: false,
-            isOptional,
-          }))
-        );
+        // Add new attendees. [D-OW-33] ruling: adding attendees to an org-drive event widens who reads org content,
+        // refused while the drive's org is lapsed (read in the insert's transaction). Removing attendees still works.
+        const lapsed = await db.transaction(async (tx) => {
+          if (event.driveId && (await checkDriveMayLoosen(tx, event.driveId, true))) return true;
+          await tx.insert(eventAttendees).values(
+            newUserIds.map((attendeeId) => ({
+              eventId,
+              userId: attendeeId,
+              status: 'PENDING' as const,
+              isOrganizer: false,
+              isOptional,
+            }))
+          );
+          return false;
+        });
+        if (lapsed) return { success: false, error: new OrgLapsedError().message };
 
         // Broadcast to new attendees
         await broadcastCalendarEvent({
@@ -1210,7 +1222,7 @@ export const calendarWriteTools = {
         return { success: false, error: 'Target drive is outside the scope of your access token.' };
       }
 
-      const result = await shareEventWithDrive({ actingUserId: userId, eventId, driveId });
+      const result = await shareEventWithDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
       if (!result.ok) {
         return { success: false, error: result.error };
       }
@@ -1261,7 +1273,7 @@ export const calendarWriteTools = {
         return { success: false, error: 'Drive-scoped tokens cannot access personal events.' };
       }
 
-      const result = await unshareEventFromDrive({ actingUserId: userId, eventId, driveId });
+      const result = await unshareEventFromDrive({ actor: toolActor(ctx as ToolExecutionContext), eventId, driveId });
       if (!result.ok) {
         return { success: false, error: result.error };
       }

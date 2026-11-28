@@ -104,7 +104,7 @@ describe('acceptInviteForExistingUser', () => {
     const ports = buildStubPorts({
       findExistingMembership: vi
         .fn()
-        .mockResolvedValue({ acceptedAt: new Date('2026-04-01') }),
+        .mockResolvedValue({ acceptedAt: new Date('2026-04-01'), role: 'MEMBER' }),
     });
     const result = await acceptInviteForExistingUser(ports)(baseInput());
     expect(result).toEqual({ ok: false, error: 'ALREADY_MEMBER' });
@@ -114,7 +114,16 @@ describe('acceptInviteForExistingUser', () => {
 
   it('given the user has a pending (unaccepted) membership, should still proceed to consume', async () => {
     const ports = buildStubPorts({
-      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: null }),
+      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: null, role: 'MEMBER' }),
+    });
+    const result = await acceptInviteForExistingUser(ports)(baseInput());
+    expect(result.ok).toBe(true);
+    expect(ports.consumeInviteAndCreateMember).toHaveBeenCalledOnce();
+  });
+
+  it('given the user is a GUEST of the drive (redeemed page link), should proceed to consume so the invite upgrades them', async () => {
+    const ports = buildStubPorts({
+      findExistingMembership: vi.fn().mockResolvedValue({ acceptedAt: new Date('2026-04-01'), role: 'GUEST' }),
     });
     const result = await acceptInviteForExistingUser(ports)(baseInput());
     expect(result.ok).toBe(true);
@@ -269,9 +278,7 @@ const baseRevokeRow = () => ({
 
 const buildRevokePorts = (overrides: Partial<RevokePorts> = {}): RevokePorts => ({
   loadPendingInviteForDrive: vi.fn().mockResolvedValue(baseRevokeRow()),
-  findActorMembership: vi
-    .fn()
-    .mockResolvedValue({ role: 'OWNER', acceptedAt: new Date('2026-01-01') }),
+  findActorDriveRole: vi.fn().mockResolvedValue('OWNER'),
   deletePendingInviteForDrive: vi.fn().mockResolvedValue({ rowsDeleted: 1 }),
   auditPermissionRevoked: vi.fn(),
   ...overrides,
@@ -302,7 +309,7 @@ describe('revokePendingInvite', () => {
 
   it('given the actor has no membership on the drive, should return FORBIDDEN', async () => {
     const ports = buildRevokePorts({
-      findActorMembership: vi.fn().mockResolvedValue(null),
+      findActorDriveRole: vi.fn().mockResolvedValue(null),
     });
     const result = await revokePendingInvite(ports)(baseRevokeInput());
     expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
@@ -311,19 +318,7 @@ describe('revokePendingInvite', () => {
 
   it('given the actor is an accepted MEMBER (not OWNER/ADMIN), should return FORBIDDEN', async () => {
     const ports = buildRevokePorts({
-      findActorMembership: vi
-        .fn()
-        .mockResolvedValue({ role: 'MEMBER', acceptedAt: new Date() }),
-    });
-    const result = await revokePendingInvite(ports)(baseRevokeInput());
-    expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
-  });
-
-  it('given the actor is an ADMIN with acceptedAt null (pending), should return FORBIDDEN', async () => {
-    const ports = buildRevokePorts({
-      findActorMembership: vi
-        .fn()
-        .mockResolvedValue({ role: 'ADMIN', acceptedAt: null }),
+      findActorDriveRole: vi.fn().mockResolvedValue('MEMBER'),
     });
     const result = await revokePendingInvite(ports)(baseRevokeInput());
     expect(result).toEqual({ ok: false, error: 'FORBIDDEN' });
@@ -359,9 +354,7 @@ describe('revokePendingInvite', () => {
 
   it('given an accepted ADMIN, should authorize the revoke', async () => {
     const ports = buildRevokePorts({
-      findActorMembership: vi
-        .fn()
-        .mockResolvedValue({ role: 'ADMIN', acceptedAt: new Date() }),
+      findActorDriveRole: vi.fn().mockResolvedValue('ADMIN'),
     });
     const result = await revokePendingInvite(ports)(baseRevokeInput());
     expect(result.ok).toBe(true);

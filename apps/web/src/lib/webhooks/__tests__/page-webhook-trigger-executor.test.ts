@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // db.select().from(table).where() resolves the next queued result in a fixed
-// order: [workflow], [webhook], [webhookPage], [agentPage]. Each test
+// order: [workflow], [webhook], [webhookPage], [agentPage], [owner]. Each test
 // sets `selectResults` to reflect how far the executor gets before returning.
 let selectResults: unknown[][] = [];
 let selectIdx = 0;
@@ -16,6 +16,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ a, b }) }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'u.id', subscriptionTier: 'u.tier' } }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'p.id', driveId: 'p.driveId', isTrashed: 'p.isTrashed' } }));
 vi.mock('@pagespace/db/schema/workflows', () => ({ workflows: { id: 'w.id' } }));
 vi.mock('@pagespace/db/schema/page-webhooks', () => ({ pageWebhooks: { id: 'pw.id', pageId: 'pw.pageId' } }));
@@ -27,11 +28,23 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 const mockIsMember = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: (...args: unknown[]) => mockIsMember(...args),
+}));
+
+const mockCanConsume = vi.fn();
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: (...args: unknown[]) => mockCanConsume(...args),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   WEBHOOK_DAILY_EXPOSURE_CAP_CENTS: 500,
+  CREDIT_HOLD_ESTIMATE_CENTS: 10,
+}));
+
+const mockReleaseHold = vi.fn();
+vi.mock('@pagespace/lib/billing/credit-consume', () => ({
+  releaseHold: (...args: unknown[]) => mockReleaseHold(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -47,6 +60,7 @@ const WORKFLOW = {
   id: 'wf1',
   driveId: 'drive-1',
   createdBy: 'user-1',
+  ownerLeftAt: null,
   agentPageId: 'agent-1',
   prompt: 'Do the thing.',
   contextPageIds: ['ctx-1'],
@@ -60,6 +74,7 @@ function queueHappyPath() {
     [{ pageId: 'wpage-1' }],                                     // pageWebhooks
     [{ driveId: 'drive-1', isTrashed: false }],                 // webhook page (same drive)
     [{ id: 'agent-1', isTrashed: false, driveId: 'drive-1' }],  // agent page (same drive)
+    [{ subscriptionTier: 'pro' }],                              // owner
   ];
 }
 
@@ -68,7 +83,9 @@ beforeEach(() => {
   selectIdx = 0;
   queueHappyPath();
   mockIsMember.mockResolvedValue(true);
+  mockCanConsume.mockResolvedValue({ allowed: true, holdId: 'hold-1' });
   mockExecuteWorkflow.mockResolvedValue({ success: true, durationMs: 5, runId: 'run-1' });
+  mockReleaseHold.mockResolvedValue(undefined);
 });
 
 describe('executePageWebhookTrigger', () => {
@@ -92,19 +109,85 @@ describe('executePageWebhookTrigger', () => {
     expect(input.eventContext.promptOverride).toContain('Do the thing.');
   });
 
-  it('hands executeWorkflow (which gates credit on createdBy) the webhook daily ceiling and never skips the daily cap — the trigger source is a bearer secret, not an authenticated account', async () => {
+  it('SPEND-6 (partial) gates the workflow\'s drive (recorded against workflow.createdBy) and releases the hold', async () => {
     await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    const input = mockExecuteWorkflow.mock.calls[0][0];
-    expect(input.createdBy).toBe('user-1');
-    // The env tier caps default to disabled, so an explicit monetary ceiling
-    // must bind on unconfigured deployments too.
-    expect(input.creditGate).toEqual({ dailyCapCeilingCents: 500 });
+    // Legacy workflow (no steps column) synthesizes exactly one ai step, so
+    // the reservation is 1x the per-call estimate.
+    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      dailyCapCeilingCents: 500,
+      estCostCents: 10,
+    });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
   });
 
-  it('returns a failure when executeWorkflow throws', async () => {
+  it('does NOT bypass the per-user daily exposure cap (no skipDailyCap) — the trigger source is a bearer secret, not an authenticated account', async () => {
+    await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+    const opts = mockCanConsume.mock.calls[0][2] as
+      | { skipDailyCap?: boolean; dailyCapCeilingCents?: number }
+      | undefined;
+    expect(opts?.skipDailyCap).not.toBe(true);
+    // The env tier caps default to disabled, so the executor must pass an
+    // explicit monetary ceiling that binds on unconfigured deployments too.
+    expect(opts?.dailyCapCeilingCents).toBe(500);
+  });
+
+  it('scales the credit reservation by the number of ai steps in the chain — one canConsumeAI call must cover every runExecution call runStepChain will make', async () => {
+    // A multi-step chain still bills provider usage once PER ai step
+    // (runStepChain calls runExecution per step), so a flat 1-call
+    // reservation would let a leaked webhook secret force N model calls
+    // through a single gate check sized for 1 — exactly the gap this covers.
+    selectResults[0] = [
+      {
+        ...WORKFLOW,
+        agentPageId: null,
+        prompt: '',
+        steps: [
+          { kind: 'ai', prompt: 'summarize' },
+          { kind: 'tool', toolName: 'insert_content', args: {} },
+          { kind: 'ai', prompt: 'notify', agentPageId: 'agent-1' },
+          { kind: 'ai', prompt: 'follow up', agentPageId: 'agent-1' },
+        ],
+      },
+    ];
+
+    await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(mockCanConsume).toHaveBeenCalledWith('user-1', 'pro', {
+      spend: { kind: 'automation', driveId: 'drive-1' },
+      dailyCapCeilingCents: 500,
+      estCostCents: 30, // 3 ai steps * 10-cent per-call estimate
+    });
+  });
+
+  it('SPEND-6 (partial) the run settles on the drive wallet the gate reserved on', async () => {
+    mockCanConsume.mockResolvedValue({ allowed: true, holdId: 'hold-1', walletId: 'w-drive' });
+
+    await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(mockExecuteWorkflow.mock.calls[0][1]).toEqual({
+      creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive' },
+    });
+  });
+
+  it('SPEND-6 (partial) with only the person funded and the drive wallet empty the run is skipped, naming why', async () => {
+    mockCanConsume.mockResolvedValue({
+      allowed: false,
+      reason: 'source_refused',
+      refusal: { source: 'drive_wallet', reason: 'drive_wallet_empty', options: [] },
+    });
+
+    const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+
+    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('releases the credit hold even when executeWorkflow throws', async () => {
     mockExecuteWorkflow.mockRejectedValue(new Error('model exploded'));
     const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    expect(result).toMatchObject({ success: false, error: 'model exploded' });
+    expect(result.success).toBe(false);
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-1');
   });
 
   it('skips + does NOT execute when the webhook page is now in a different drive than the workflow', async () => {
@@ -112,6 +195,20 @@ describe('executePageWebhookTrigger', () => {
     const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/different drives/);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsume).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['flagged owner-left', { ...WORKFLOW, ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { ...WORKFLOW, createdBy: null }],
+  ])('SPEND-6 (partial) a workflow %s is skipped before any guard, gate or hold, naming owner_left ([D-OW-36])', async (_label, workflow) => {
+    selectResults = [[workflow]];
+    const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
+    expect(result).toMatchObject({ success: false, skipped: true });
+    expect(result.error).toContain('owner_left');
+    expect(mockIsMember).not.toHaveBeenCalled();
+    expect(mockCanConsume).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
@@ -136,6 +233,7 @@ describe('executePageWebhookTrigger', () => {
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/different drives/);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockCanConsume).not.toHaveBeenCalled();
   });
 
   it('does not execute when the billed user is no longer a drive member', async () => {
@@ -145,10 +243,13 @@ describe('executePageWebhookTrigger', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  it('surfaces the executor\'s credit-gate refusal as the trigger result', async () => {
-    mockExecuteWorkflow.mockResolvedValue({ success: false, durationMs: 1, error: 'AI credit gate denied: requires_funding' });
+  it('does not execute when the credit gate denies', async () => {
+    mockCanConsume.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
     const result = await executePageWebhookTrigger(TRIGGER, ENVELOPE);
-    expect(result).toMatchObject({ success: false, error: 'AI credit gate denied: requires_funding' });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/credit gate denied/);
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockReleaseHold).not.toHaveBeenCalled();
   });
 });
 

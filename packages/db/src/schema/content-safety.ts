@@ -1,0 +1,331 @@
+import { sql } from 'drizzle-orm';
+import { pgTable, text, timestamp, jsonb, index, uniqueIndex, integer } from 'drizzle-orm/pg-core';
+import { createId } from '@paralleldrive/cuid2';
+
+/**
+ * Content safety: the hash blocklist, the scan-verdict cache, and the case
+ * record behind every takedown or report.
+ *
+ * NO FOREIGN KEYS — deliberately. Every reference to a user, page, drive or
+ * case in these tables is a plain text ID. These rows exist for legal
+ * preservation, so they must survive the things they point at: GDPR erasure
+ * deletes the `users` row and relies on FK cascades to sweep the rest
+ * (packages/lib/src/compliance/erasure), and a cascading or restricting FK here
+ * would either destroy the evidence or block the erasure. With no FK, neither
+ * can happen. Do not "tidy" these into `.references(...)`; the
+ * content-safety schema test fails if you do.
+ */
+
+/** Why a hash is blocked. `csam` and `malware` are purged globally; see lib policy. */
+export type ContentBlockCategory = 'csam' | 'malware' | 'illegal_other' | 'policy';
+
+/** What put the hash on the blocklist. */
+export type ContentBlockSource = 'admin' | 'hash_match' | 'report';
+
+/**
+ * `clean`: scanned, nothing found (cached for a TTL). `flagged`: a hash match or a
+ * classifier hit. `error`: the scan failed or timed out (retried on the next
+ * publish). `unscanned`: a type the scanner cannot read (PDFs, archives, …).
+ * `unverified` (PR 5): a video whose hash pass ran clean but for which the
+ * classifier returned nothing, so it was never actually classified.
+ */
+export type ContentScanVerdict = 'clean' | 'flagged' | 'error' | 'unscanned' | 'unverified';
+
+/** The publish gate's mode when a verdict was recorded (PR 4). */
+export type ContentScanMode = 'shadow' | 'enforce';
+
+/** The scanner's own result kind, finer than the verdict (PR 4). */
+export type ContentScanOutcome = 'clean' | 'hash_match' | 'classifier_flag' | 'error' | 'unsupported_type' | 'unverified';
+
+export type ContentCaseTargetType =
+  | 'content_hash'
+  | 'file'
+  | 'page'
+  | 'published_url'
+  | 'user'
+  | 'avatar'
+  | 'drive';
+
+/**
+ * `reported`: opened by one or more reports and waiting for staff review. A
+ *   report never acts on its own: nothing is blocked, unpublished or deleted
+ *   until an admin runs a takedown. At most one per target (unique index).
+ * `open`: part-way through a takedown (resumable).
+ * `awaiting_evidence`: the hash is blocked, but nothing was deleted because the
+ *   material must be preserved first and no evidence storage is configured.
+ * `actioned`: every step of the takedown finished.
+ * `dismissed`: closed with no action.
+ */
+export type ContentCaseStatus = 'reported' | 'open' | 'awaiting_evidence' | 'actioned' | 'dismissed';
+
+/** What a reporter says is wrong. Wider than ContentBlockCategory: not every report is about illegal content. */
+export type ContentReportCategory = 'csam' | 'illegal_other' | 'malware' | 'copyright' | 'harassment' | 'other';
+
+/** Who filed a report: a signed-in user (`reporterUserId` set) or a visitor to the public report page. */
+export type ContentReportSource = 'signed_in' | 'anonymous';
+
+/** Which takedown a case runs. Stored on the snapshot so a rerun does the same thing. */
+export type ContentTakedownKind = 'global' | 'unpublish_page' | 'park_drive' | 'avatar' | 'park_user_sites';
+
+/** Why a drive's published sites are held off the public bucket. */
+export type ContentSiteHoldSource = 'takedown' | 'user_suspension';
+
+/**
+ * Who and what was involved at the moment the case was opened, copied here so
+ * it stays readable after the live rows are erased or deleted.
+ */
+export type ContentCaseSnapshot = {
+  uploaderUserId?: string;
+  driveIds?: string[];
+  pageIds?: string[];
+  ipAddress?: string;
+  userAgent?: string;
+  /** The takedown this case runs and the options it was started with (PR 2). */
+  takedown?: {
+    kind: ContentTakedownKind;
+    actorUserId?: string;
+    skipPreservation?: boolean;
+    skipPreservationReason?: string;
+    suspendUploader?: boolean;
+  };
+  /** Everything that referenced the hash when it was taken down. IDs only. */
+  references?: {
+    pageIds: string[];
+    fileIds: string[];
+    driveIds: string[];
+    uploaderUserIds: string[];
+    channelMessageIds: string[];
+    directMessageIds: string[];
+    aiMessageIds: string[];
+    conversationIds: string[];
+    /** True when a list hit its cap and is incomplete. */
+    truncated: boolean;
+    /**
+     * The quick AI-message search could not finish, so `aiMessageIds` (and their authors) may be missing.
+     * A takedown stores it with the references it records early (`record_references`), and drops it when the
+     * mandatory search (`record_ai_references`, which fails and is retried rather than set this) rewrites the
+     * references. So a finished case never carries it; a case still waiting at preservation can.
+     */
+    aiMessageScanFailed?: boolean;
+  };
+  /** Where the preserved copy is, when one was made. Bucket-relative key, never a URL. */
+  evidenceKey?: string;
+  /**
+   * Further preserved copies, made when different bytes later appeared at the
+   * same key (a re-sweep). The first verified copy is never overwritten.
+   */
+  additionalEvidenceKeys?: string[];
+  /** An avatar takedown's preserved copies, one per avatar object, each named by its own checksum. */
+  avatarEvidenceKeys?: string[];
+  /** How staff closed a `reported` case (PR 3). */
+  review?: { outcome: 'dismissed' | 'actioned'; actorUserId: string; note?: string; at: string };
+  /**
+   * Set when the publish gate's classifier flagged the hash (PR 4): the case sits in the review
+   * queue (`reported`) like a report, with no report rows. Scores only, never the file.
+   */
+  scan?: {
+    source: 'scan_flagged';
+    provider: string;
+    category: string;
+    score: number;
+    mode: 'shadow' | 'enforce';
+    flaggedAt: string;
+  };
+  /** Re-sweep bookkeeping for a global takedown: passes attempted, and whether the last one finished. */
+  resweep?: { attempts: number; done: boolean };
+  [key: string]: unknown;
+};
+
+/** One recorded takedown step, so an interrupted takedown can resume (PR 2). */
+export type ContentCaseStep = {
+  step: string;
+  status: 'ok' | 'skipped' | 'failed';
+  detail?: string;
+  at: string;
+};
+
+/** Hashes that must never be stored or served again. */
+export const contentBlocks = pgTable(
+  'content_blocks',
+  {
+    // Lowercase sha256 hex — the same value as `files.id`.
+    contentHash: text('content_hash').primaryKey(),
+    category: text('category').$type<ContentBlockCategory>().notNull(),
+    source: text('source').$type<ContentBlockSource>().notNull(),
+    // Plain text, no FK (see file header).
+    caseId: text('case_id'),
+    // Admin user ID. Plain text, no FK: the block outlives the admin's account.
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseIdx: index('content_blocks_case_id_idx').on(table.caseId),
+  }),
+);
+
+/** Scan verdicts cached by hash. Filled by the publish gate (PR 4). */
+export const contentScans = pgTable('content_scans', {
+  contentHash: text('content_hash').primaryKey(),
+  verdict: text('verdict').$type<ContentScanVerdict>().notNull(),
+  provider: text('provider').notNull(),
+  providerVersion: text('provider_version'),
+  scores: jsonb('scores').$type<Record<string, unknown>>(),
+  // Null on rows written before the publish gate, or by an admin review.
+  mode: text('mode').$type<ContentScanMode>(),
+  outcome: text('outcome').$type<ContentScanOutcome>(),
+  scannedAt: timestamp('scanned_at', { mode: 'date' }).notNull().defaultNow(),
+});
+
+/** The record behind every takedown or report. */
+export const contentCases = pgTable(
+  'content_cases',
+  {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+
+    // Target. `targetId` is a hash, file/page/user ID or URL depending on
+    // `targetType` — plain text, no FK (see file header).
+    targetType: text('target_type').$type<ContentCaseTargetType>().notNull(),
+    targetId: text('target_id').notNull(),
+    contentHash: text('content_hash'),
+
+    status: text('status').$type<ContentCaseStatus>().notNull().default('open'),
+    // Null until triaged: a visitor's report doesn't arrive with a category.
+    category: text('category').$type<ContentBlockCategory>(),
+
+    // Reporter. Plain text, no FK; null for system-opened or anonymous cases.
+    reporterUserId: text('reporter_user_id'),
+    reporterContact: text('reporter_contact'),
+    reason: text('reason'),
+
+    snapshot: jsonb('snapshot').$type<ContentCaseSnapshot>(),
+    steps: jsonb('steps').$type<ContentCaseStep[]>(),
+
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().defaultNow().$onUpdate(() => new Date()),
+  },
+  (table) => ({
+    targetIdx: index('content_cases_target_idx').on(table.targetType, table.targetId),
+    // One case under review per target: every further report attaches to it, even when two arrive at once.
+    reportedTargetKey: uniqueIndex('content_cases_reported_target_key')
+      .on(table.targetType, table.targetId)
+      .where(sql`${table.status} = 'reported'`),
+    contentHashIdx: index('content_cases_content_hash_idx').on(table.contentHash),
+    statusCreatedIdx: index('content_cases_status_created_at_idx').on(table.status, table.createdAt),
+  }),
+);
+
+/**
+ * One report about a case's target. A case collects every report filed while it
+ * is under review; the count of these rows is the case's report count.
+ *
+ * The reporter is a user ID or nobody. NO IP ADDRESS is stored here, by design:
+ * the public report page is rate-limited by IP, but the address is never kept
+ * with the report. `contactEmail` is only what a visitor chose to give.
+ *
+ * `description` is the reporter's own words and may be abusive or contain links:
+ * it is shown to staff as inert text and never sent in an alert email.
+ *
+ * Plain text IDs, no FK (see file header).
+ */
+export const contentReports = pgTable(
+  'content_reports',
+  {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    caseId: text('case_id').notNull(),
+    category: text('category').$type<ContentReportCategory>().notNull(),
+    description: text('description'),
+    source: text('source').$type<ContentReportSource>().notNull(),
+    reporterUserId: text('reporter_user_id'),
+    contactEmail: text('contact_email'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    caseCreatedIdx: index('content_reports_case_id_created_at_idx').on(table.caseId, table.createdAt),
+  }),
+);
+
+/**
+ * Holds that keep a drive's published sites off the public bucket. The sites
+ * are parked under `suspended/<prefix>/`, and these rows are what keep them
+ * there: the visibility reconciler and every publish write consult them
+ * (packages/lib/src/organizations/published-visibility.ts), so neither the retry
+ * sweep nor a republish can put a held site back.
+ *
+ * A drive can be held more than once — by a takedown case AND by its owner's
+ * suspension, or by two cases. Each holder owns one row (`holder` is
+ * `case:<caseId>` or `user:<userId>`), lifting a hold removes only that row,
+ * and the drive stays parked until its last hold is gone.
+ *
+ * Plain text IDs, no FK (see file header): a hold is part of the case record.
+ */
+export const contentSiteHolds = pgTable(
+  'content_site_holds',
+  {
+    id: text('id').primaryKey().$defaultFn(() => createId()),
+    driveId: text('drive_id').notNull(),
+    holder: text('holder').notNull(),
+    source: text('source').$type<ContentSiteHoldSource>().notNull(),
+    caseId: text('case_id'),
+    userId: text('user_id'),
+    createdBy: text('created_by'),
+    createdAt: timestamp('created_at', { mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => ({
+    driveHolderKey: uniqueIndex('content_site_holds_drive_holder_key').on(table.driveId, table.holder),
+    userIdx: index('content_site_holds_user_id_idx').on(table.userId),
+  }),
+);
+
+/** Which public surface the backfill is walking. `done`: the pass finished. */
+export type ContentScanBackfillPhase = 'assets' | 'avatars' | 'done';
+
+/** What one backfill pass has done so far. Counts only. */
+export interface ContentScanBackfillCounts {
+  listed: number;
+  skippedFresh: number;
+  scanned: number;
+  clean: number;
+  flagged: number;
+  hashMatch: number;
+  errors: number;
+  unscanned: number;
+  unverified: number;
+  blocked: number;
+  removed: number;
+  /** Keys under the prefix that are not a public asset or avatar the walk knows (left alone). */
+  ignored: number;
+}
+
+/**
+ * The backfill-and-rescan cursor (PR 5): one row per walker. The walk lists the
+ * publish bucket's `assets/` and then the uploads bucket's `avatars/`, a page at
+ * a time, and records the last key it finished so the next tick resumes there.
+ * `leaseUntil` keeps two ticks (two cron containers, a manual run) from walking
+ * at once.
+ */
+export const contentScanBackfill = pgTable('content_scan_backfill', {
+  id: text('id').primaryKey(),
+  phase: text('phase').$type<ContentScanBackfillPhase>().notNull(),
+  // The last key finished in the current phase; null at the start of a phase.
+  startAfter: text('start_after'),
+  pass: integer('pass').notNull().default(1),
+  counts: jsonb('counts').$type<ContentScanBackfillCounts>().notNull(),
+  // The counts of the last pass that finished, kept when a new pass resets `counts`.
+  lastPassCounts: jsonb('last_pass_counts').$type<ContentScanBackfillCounts>(),
+  passStartedAt: timestamp('pass_started_at', { mode: 'date' }).notNull().defaultNow(),
+  // Set when a pass finishes; the first non-null value means existing public content has been checked once.
+  lastCompletedAt: timestamp('last_completed_at', { mode: 'date' }),
+  leaseUntil: timestamp('lease_until', { mode: 'date' }),
+  updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().defaultNow(),
+});
+
+export type ContentBlock = typeof contentBlocks.$inferSelect;
+export type NewContentBlock = typeof contentBlocks.$inferInsert;
+export type ContentScan = typeof contentScans.$inferSelect;
+export type NewContentScan = typeof contentScans.$inferInsert;
+export type ContentCase = typeof contentCases.$inferSelect;
+export type NewContentCase = typeof contentCases.$inferInsert;
+export type ContentSiteHold = typeof contentSiteHolds.$inferSelect;
+export type ContentReport = typeof contentReports.$inferSelect;
+
+export type ContentScanBackfillRow = typeof contentScanBackfill.$inferSelect;

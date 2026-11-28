@@ -25,6 +25,10 @@ export const sessions = pgTable('sessions', {
   resourceId: text('resource_id'),
   driveId: text('drive_id'),
 
+  // Verified sign-in ceremony; renewal must preserve the original time and assurance.
+  authenticatedAt: timestamp('authenticated_at', { mode: 'date' }),
+  authenticationAssurance: text('authentication_assurance', { enum: ['single_factor', 'user_verified_passkey'] }),
+
   // Security context
   tokenVersion: integer('token_version').notNull(),
   adminRoleVersion: integer('admin_role_version').notNull().default(0),

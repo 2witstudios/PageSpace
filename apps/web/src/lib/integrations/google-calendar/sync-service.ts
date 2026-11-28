@@ -17,6 +17,8 @@ import { listEvents, watchCalendar, stopChannel, type GoogleCalendarEvent, type 
 import { transformGoogleEventToPageSpace, shouldSyncEvent, needsUpdate } from './event-transform';
 import { createId } from '@paralleldrive/cuid2';
 import { generateWebhookToken } from './webhook-token';
+import { checkDriveMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { syncedEventVisibility } from './sync-visibility';
 
 type WebhookChannel = { channelId: string; resourceId: string; expiration: string };
 type WebhookChannels = Record<string, WebhookChannel>;
@@ -579,6 +581,16 @@ const upsertEvent = async (
       return { action: 'skipped' };
     }
 
+    // [D-OW-33] ruling: Google may report an event as more visible than it is here; while the event's org drive is
+    // lapsed the sync keeps the current visibility instead of widening it (every other field still syncs).
+    const [current] = await db
+      .select({ driveId: calendarEvents.driveId, visibility: calendarEvents.visibility })
+      .from(calendarEvents)
+      .where(eq(calendarEvents.id, existingEvent.id))
+      .limit(1);
+    const visibility = await syncedEventVisibility(current, pageSpaceEvent.visibility, async (driveId) =>
+      (await checkDriveMayLoosen(db, driveId, true)) !== null);
+
     // Update existing event
     await db
       .update(calendarEvents)
@@ -591,7 +603,7 @@ const upsertEvent = async (
         allDay: pageSpaceEvent.allDay,
         timezone: pageSpaceEvent.timezone,
         recurrenceRule: pageSpaceEvent.recurrenceRule,
-        visibility: pageSpaceEvent.visibility,
+        visibility,
         color: pageSpaceEvent.color,
         metadata: pageSpaceEvent.metadata,
         isTrashed: pageSpaceEvent.isTrashed,
@@ -855,7 +867,7 @@ export const unregisterWebhookChannels = async (
  * Map Google event attendees to PageSpace users by email and persist as eventAttendees.
  * Only maps attendees that have a matching PageSpace user account.
  */
-const mapAttendeesToUsers = async (
+export const mapAttendeesToUsers = async (
   eventId: string,
   googleAttendees: GoogleEventAttendee[] | undefined
 ): Promise<void> => {
@@ -903,7 +915,14 @@ const mapAttendeesToUsers = async (
 
   // Upsert attendees in a single transaction to reduce connection overhead
   await db.transaction(async (tx) => {
+    // [D-OW-33] ruling: a NEW attendee on an org-drive event widens who reads org content. While the drive's org is
+    // lapsed the sync keeps updating existing attendees but adds no one.
+    const [owner] = await tx.select({ driveId: calendarEvents.driveId }).from(calendarEvents).where(eq(calendarEvents.id, eventId)).limit(1);
+    const existing = owner?.driveId && (await checkDriveMayLoosen(tx, owner.driveId, true))
+      ? new Set((await tx.select({ userId: eventAttendees.userId }).from(eventAttendees).where(eq(eventAttendees.eventId, eventId))).map((a) => a.userId))
+      : null;
     for (const attendee of attendeeValues) {
+      if (existing && !existing.has(attendee.userId)) continue;
       await tx
         .insert(eventAttendees)
         .values(attendee)

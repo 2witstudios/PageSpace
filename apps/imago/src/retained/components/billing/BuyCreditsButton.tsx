@@ -1,0 +1,221 @@
+'use client';
+
+import { useState } from 'react';
+import { useRouter, usePathname } from '@/retained-adapters/navigation';
+import { Button } from '@/retained/components/ui/button';
+import { Input } from '@/retained/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/retained/components/ui/dropdown-menu';
+import { CreditCard, Loader2 } from 'lucide-react';
+import { post } from '@/retained/lib/auth/auth-fetch';
+import {
+  CREDIT_PACK_LIST,
+  centsFromCredits,
+  dollarsFromCents,
+  creditPackPriceCents,
+  creditsFromDollars,
+  formatDollars,
+  validateTopupCredits,
+  CREDIT_TOPUP_MIN_CREDITS,
+  CREDIT_TOPUP_MAX_CREDITS,
+} from '@/retained/lib/subscription/credits';
+
+const TOPUP_MIN_CENTS = centsFromCredits(CREDIT_TOPUP_MIN_CREDITS);
+const TOPUP_MAX_CENTS = centsFromCredits(CREDIT_TOPUP_MAX_CREDITS);
+import { useBillingVisibility } from '@/retained/hooks/useBillingVisibility';
+import { useCreditBalance } from '@/retained/hooks/useCreditBalance';
+
+interface BuyCreditsButtonProps {
+  /** Visual variant for the trigger button. */
+  variant?: 'default' | 'outline' | 'secondary' | 'ghost';
+  size?: 'default' | 'sm' | 'lg' | 'icon';
+  className?: string;
+  /** Override the trigger label (defaults to "Buy credits"). */
+  label?: string;
+}
+
+/** Body for the top-up checkout: either a fixed pack id or a custom whole-cent amount. */
+type TopupBody = { packId: string } | { credits: number };
+
+/**
+ * "Buy credits" trigger that opens a menu of top-up packs (sourced from `CREDIT_PACKS`
+ * via the in-app credits helper) PLUS a custom-amount field, and starts a one-time
+ * Stripe Checkout session for the chosen amount, redirecting to the hosted page. On
+ * success the webhook funds the user's top-up bucket (paying down any debt first);
+ * Stripe returns the user to `/settings/usage?credits=success`.
+ */
+export function BuyCreditsButton({
+  variant = 'default',
+  size = 'sm',
+  className,
+  label = 'Buy credits',
+}: BuyCreditsButtonProps) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const { showBilling } = useBillingVisibility();
+  const { balance } = useCreditBalance();
+  const [loadingKey, setLoadingKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [customDollars, setCustomDollars] = useState('');
+  const isFree = balance?.subscriptionTier === 'free';
+
+  const startCheckout = async (body: TopupBody, key: string) => {
+    setLoadingKey(key);
+    setError(null);
+    try {
+      const { url } = await post<{ url: string }>('/api/stripe/create-credit-topup', body);
+      if (url) {
+        window.location.href = url;
+      } else {
+        setError('Could not start checkout. Please try again.');
+        setLoadingKey(null);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start checkout. Please try again.');
+      setLoadingKey(null);
+    }
+  };
+
+  const handleBuyCustom = () => {
+    const dollars = Number.parseFloat(customDollars);
+    if (!Number.isFinite(dollars)) {
+      setError('Enter a dollar amount.');
+      return;
+    }
+    // The buyer types dollars; a top-up buys credits at the full rate (no ratio), and
+    // the route validates the same credit count against the same bounds.
+    const credits = validateTopupCredits(creditsFromDollars(dollars));
+    if (credits === null) {
+      setError(
+        `Enter an amount between ${formatDollars(TOPUP_MIN_CENTS)} and ${formatDollars(TOPUP_MAX_CENTS)}, in steps of ${formatDollars(centsFromCredits(1))}.`,
+      );
+      return;
+    }
+    void startCheckout({ credits }, 'custom');
+  };
+
+  const isLoading = loadingKey !== null;
+
+  // Hide on iOS Capacitor (App Store policy — no in-app Stripe purchases) and on
+  // billing-disabled deployments. Self-hiding here keeps every call site compliant,
+  // including the out-of-credits chat error CTAs.
+  if (!showBilling) return null;
+
+  return (
+    <div className={className}>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant={variant} size={size} disabled={isLoading}>
+            {isLoading ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <CreditCard className="h-4 w-4 mr-2" />
+            )}
+            {label}
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" aria-label="Add credits">
+          {/* Plain content (not a DropdownMenuItem), same reasoning as the custom-amount
+              block below: stop keydown propagation so Radix typeahead doesn't hijack it. */}
+          <div
+            className="flex items-center justify-between px-2 py-1.5"
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <DropdownMenuLabel className="p-0">Add credits</DropdownMenuLabel>
+            {pathname !== '/settings/usage' && (
+              <button
+                type="button"
+                onClick={() => router.push('/settings/usage')}
+                className="text-xs text-muted-foreground hover:underline"
+              >
+                View usage →
+              </button>
+            )}
+          </div>
+          <DropdownMenuSeparator />
+          {CREDIT_PACK_LIST.map((pack) => (
+            <DropdownMenuItem
+              key={pack.id}
+              disabled={isLoading}
+              onSelect={(e) => {
+                e.preventDefault();
+                void startCheckout({ packId: pack.id }, pack.id);
+              }}
+            >
+              {loadingKey === pack.id ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <CreditCard className="h-4 w-4 mr-2" />
+              )}
+              {pack.label}
+              <span className="ml-auto pl-4 text-xs text-muted-foreground">{formatDollars(creditPackPriceCents(pack))}</span>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            Or a custom amount ({formatDollars(TOPUP_MIN_CENTS)}–
+            {formatDollars(TOPUP_MAX_CENTS)})
+          </DropdownMenuLabel>
+          {/* Plain content (not a DropdownMenuItem) so interacting doesn't close the
+              menu; stop keydown propagation so Radix typeahead doesn't hijack typing. */}
+          <div
+            className="flex items-center gap-2 px-2 py-1.5"
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <span className="text-sm text-muted-foreground">$</span>
+            <Input
+              type="number"
+              inputMode="decimal"
+              min={dollarsFromCents(TOPUP_MIN_CENTS)}
+              max={dollarsFromCents(TOPUP_MAX_CENTS)}
+              step="1"
+              placeholder="25"
+              value={customDollars}
+              onChange={(e) => setCustomDollars(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleBuyCustom();
+                }
+              }}
+              className="h-8 w-24"
+              disabled={isLoading}
+            />
+            <Button
+              size="sm"
+              className="h-8"
+              disabled={isLoading || customDollars.trim() === ''}
+              onClick={handleBuyCustom}
+            >
+              {loadingKey === 'custom' ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Add'}
+            </Button>
+          </div>
+          {isFree && (
+            <>
+              <DropdownMenuSeparator />
+              <div className="px-2 py-2 flex items-center justify-between gap-2 rounded-sm bg-primary/5">
+                <p className="text-xs text-muted-foreground">
+                  Free plan — premium models need a paid plan.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => router.push('/settings/plan')}
+                  className="text-xs font-medium text-primary hover:underline shrink-0"
+                >
+                  Upgrade →
+                </button>
+              </div>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
+    </div>
+  );
+}

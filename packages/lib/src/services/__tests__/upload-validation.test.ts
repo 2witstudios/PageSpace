@@ -82,13 +82,6 @@ describe('validateFileSize', () => {
     if (!result.ok) expect(result.error.message).toMatch(/250MB/i);
   });
 
-  it('returns err when size exceeds the founder tier limit', () => {
-    const overLimit = 500 * 1024 * 1024 + 1;
-    const result = validateFileSize(overLimit, 'founder');
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.message).toMatch(/500MB/i);
-  });
-
   it('returns ok for a large file within the business tier limit', () => {
     const result = validateFileSize(500 * 1024 * 1024, 'business');
     expect(result.ok).toBe(true);

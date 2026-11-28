@@ -5,9 +5,22 @@
  * back to the session owner, on EITHER tier.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../../../permissions/actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 const mockDriveFindFirst = vi.hoisted(() => vi.fn());
+// Membership resolves through the shared org-aware loader (accepted rows only), not a local read.
 const mockDriveMemberFindFirst = vi.hoisted(() => vi.fn());
+vi.mock('../../../permissions/org-drive-membership', () => ({
+  loadEffectiveDriveMembership: mockDriveMemberFindFirst,
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -30,6 +43,7 @@ const mockCanRunCode = vi.hoisted(() => vi.fn());
 vi.mock('../../sandbox/can-run-code', () => ({ canRunCode: mockCanRunCode }));
 
 import { resolveSessionTenantId, resolveDriveMembership, canRunCodeForSession } from '../agent-workspace-tenant';
+import { credentialActor } from '../../../permissions/access-actor';
 
 beforeEach(() => {
   mockDriveFindFirst.mockReset();
@@ -60,46 +74,47 @@ describe('resolveSessionTenantId', () => {
 describe('resolveDriveMembership', () => {
   it('given a vanished drive, should answer none', async () => {
     mockDriveFindFirst.mockResolvedValue(undefined);
-    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'gone-drive' });
+    const result = await resolveDriveMembership({ actor: credentialActor('user-1', null), driveId: 'gone-drive' });
     expect(result).toBe('none');
     expect(mockDriveMemberFindFirst).not.toHaveBeenCalled();
   });
 
   it('given the requester IS the drive owner, should answer owner without a membership read', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'user-1' });
-    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    const result = await resolveDriveMembership({ actor: credentialActor('user-1', null), driveId: 'drive-1' });
     expect(result).toBe('owner');
     expect(mockDriveMemberFindFirst).not.toHaveBeenCalled();
   });
 
   it('given an accepted MEMBER who is not the owner, should answer member', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER' });
-    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'MEMBER', customRoleId: null, source: 'invite' });
+    const result = await resolveDriveMembership({ actor: credentialActor('user-1', null), driveId: 'drive-1' });
     expect(result).toBe('member');
   });
 
   it('given an accepted ADMIN, should answer admin — the END decision needs delete authority (codex round 12)', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN' });
-    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    mockDriveMemberFindFirst.mockResolvedValue({ role: 'ADMIN', customRoleId: null, source: 'invite' });
+    const result = await resolveDriveMembership({ actor: credentialActor('user-1', null), driveId: 'drive-1' });
     expect(result).toBe('admin');
   });
 
   it('given no accepted membership row, should answer none', async () => {
     mockDriveFindFirst.mockResolvedValue({ ownerId: 'someone-else' });
-    mockDriveMemberFindFirst.mockResolvedValue(undefined);
-    const result = await resolveDriveMembership({ userId: 'user-1', driveId: 'drive-1' });
+    mockDriveMemberFindFirst.mockResolvedValue(null);
+    const result = await resolveDriveMembership({ actor: credentialActor('user-1', null), driveId: 'drive-1' });
     expect(result).toBe('none');
+    expect(mockDriveMemberFindFirst).toHaveBeenCalledWith('user-1', { id: 'drive-1', ownerId: 'someone-else' });
   });
 });
 
 describe('canRunCodeForSession', () => {
   it('given a drive-scoped session, should pass the driveId and ownerId through as-is', async () => {
     mockCanRunCode.mockResolvedValue({ ok: true });
-    await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1', ownerId: 'owner-1' });
+    await canRunCodeForSession({ actor: credentialActor('user-1', null), driveId: 'drive-1', ownerId: 'owner-1' });
     expect(mockCanRunCode).toHaveBeenCalledWith({
-      userId: 'user-1',
+      actor: expect.objectContaining({ userId: 'user-1' }),
       driveId: 'drive-1',
       ownerId: 'owner-1',
       requestOrigin: 'user',
@@ -108,9 +123,9 @@ describe('canRunCodeForSession', () => {
 
   it('given a global-assistant session (null driveId), should pass undefined, not null', async () => {
     mockCanRunCode.mockResolvedValue({ ok: true });
-    await canRunCodeForSession({ userId: 'user-1', driveId: null, ownerId: 'owner-1' });
+    await canRunCodeForSession({ actor: credentialActor('user-1', null), driveId: null, ownerId: 'owner-1' });
     expect(mockCanRunCode).toHaveBeenCalledWith({
-      userId: 'user-1',
+      actor: expect.objectContaining({ userId: 'user-1' }),
       driveId: undefined,
       ownerId: 'owner-1',
       requestOrigin: 'user',
@@ -119,7 +134,7 @@ describe('canRunCodeForSession', () => {
 
   it('given the capability check refuses, should reduce to false', async () => {
     mockCanRunCode.mockResolvedValue({ ok: false, reason: 'kill_switch_off' });
-    const result = await canRunCodeForSession({ userId: 'user-1', driveId: 'drive-1', ownerId: 'owner-1' });
+    const result = await canRunCodeForSession({ actor: credentialActor('user-1', null), driveId: 'drive-1', ownerId: 'owner-1' });
     expect(result).toBe(false);
   });
 });

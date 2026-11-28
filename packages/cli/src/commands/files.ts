@@ -155,7 +155,7 @@ export function createFilesUploadHandler(deps: FilesUploadDeps): CommandHandler 
       ctx.stderr.write(`Uploading ${filename} (${formatBytes(bytes.byteLength)})...\n`);
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       uploadFile(ctx.sdk, {
         driveId: driveFlag.driveId as string,
         bytes,

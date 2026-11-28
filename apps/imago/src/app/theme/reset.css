@@ -1,0 +1,27 @@
+/* Reset every default theme namespace so only imago tokens generate
+   utilities. Imported before any token is defined: `initial` wipes a
+   namespace only for tokens declared above it. app/theme.test.ts fails if a
+   default utility comes back. */
+@theme {
+  --color-*: initial;
+  --spacing: initial;
+  --spacing-*: initial;
+  --radius-*: initial;
+  --text-*: initial;
+  --font-*: initial;
+  --font-weight-*: initial;
+  --tracking-*: initial;
+  --leading-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+  --breakpoint-*: initial;
+  --container-*: initial;
+  --max-width-*: initial;
+  --ease-*: initial;
+  --animate-*: initial;
+  --blur-*: initial;
+  --perspective-*: initial;
+  --aspect-*: initial;
+}

@@ -1,11 +1,14 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPages, pageVersions } from '@pagespace/db/schema/versioning';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { buildSnapshotPageTree } from '@/services/api/snapshot-pages-service';
+import { gateBackupRows } from '@/services/api/backup-sign-in-gate';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const CONCURRENCY_CAP = 10;
@@ -28,12 +31,12 @@ export async function GET(
     return NextResponse.json({ error: 'Backup not found' }, { status: 404 });
   }
 
-  const isAdmin = await isDriveOwnerOrAdmin(auth.userId, backup.driveId);
+  const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, backup.driveId);
   if (!isAdmin) {
-    return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), backup.driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
   }
 
-  const pageRows = await db
+  const snapshotRows = await db
     .select({
       pageId: driveBackupPages.pageId,
       title: driveBackupPages.title,
@@ -47,6 +50,9 @@ export async function GET(
     .from(driveBackupPages)
     .leftJoin(pageVersions, eq(driveBackupPages.pageVersionId, pageVersions.id))
     .where(eq(driveBackupPages.backupId, backupId));
+
+  // SEC-2/3 (D-OW-62): the preview is a read by this credential, whoever took the backup.
+  const { rows: pageRows, withheld } = await gateBackupRows(actorFromAuth(auth), backup.metadata, snapshotRows);
 
   const url = new URL(request.url);
   const includeContent = url.searchParams.get('includeContent') === 'true';
@@ -86,5 +92,6 @@ export async function GET(
       createdAt: backup.createdAt,
     },
     pages,
+    withheld,
   });
 }

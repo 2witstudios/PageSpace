@@ -29,6 +29,16 @@ import {
   contentTagSelectionWhere,
   workspaceSelectionWhere,
 } from './lib/migration-utils';
+import {
+  orgSelectionWhere,
+  migratingOrgIds,
+  walletCandidateWhere,
+  keptWalletIds,
+  orgWalletSelectionWhere,
+  type OrgWalletScope,
+  type ScopedOrgWalletTable,
+  type WalletRef,
+} from './lib/org-wallet-selection';
 
 async function queryIds(
   db: DbClient,
@@ -290,10 +300,13 @@ export async function validateData(
   // made this set strictly narrower than the one the exporter scopes on, so
   // anything checked against it asks a narrower question than the bundle
   // answers — the same drift the shared selection helpers exist to prevent.
+  // …and the third arm the exporter has: every carried drive's lead and org's Owner.
   const discoveredUserRows = await sourceDb.execute(
     sql.raw(
       `SELECT DISTINCT "userId" AS id FROM conversations WHERE id IN (${convoIn})`
-      + ` UNION SELECT DISTINCT "userId" AS id FROM channel_messages WHERE "pageId" IN (${pageIn})`,
+      + ` UNION SELECT DISTINCT "userId" AS id FROM channel_messages WHERE "pageId" IN (${pageIn})`
+      + ` UNION SELECT "ownerId" AS id FROM drives WHERE id IN (${driveIn})`
+      + ` UNION SELECT "ownerId" AS id FROM organizations WHERE ${orgSelectionWhere(driveIn, userIn)}`,
     ),
   );
   const exportedUserIds = new Set<string>(userIds);
@@ -306,6 +319,27 @@ export async function validateData(
   // `contentTagSelectionWhere`, whose docblock records the divergence that
   // happens when this is re-typed here instead.
   const contentTagWhere = contentTagSelectionWhere(pageIn, driveIn, channelMsgIn, convoIn, exportedUserIn);
+
+  // The org and wallet scope, by the exporter's own rule (./lib/org-wallet-selection.ts).
+  const orgRows = (await sourceDb.execute(
+    sql.raw(`SELECT id, "ownerId" FROM organizations WHERE ${orgSelectionWhere(driveIn, userIn)}`),
+  )).rows as { id: string; ownerId: string }[];
+  const migratingOrgIn = toSqlInList(migratingOrgIds(orgRows, new Set(userIds)));
+  const walletCandidates = (await sourceDb.execute(
+    sql.raw(
+      `SELECT id, "subjectType", "subjectId", "parentWalletId" FROM wallets`
+      + ` WHERE ${walletCandidateWhere(userIn, migratingOrgIn)}`,
+    ),
+  )).rows as unknown as WalletRef[];
+  const orgWalletScope: OrgWalletScope = {
+    driveIn,
+    allUserIn: exportedUserIn,
+    orgIn: toSqlInList(orgRows.map((o) => o.id)),
+    migratingOrgIn,
+    walletIn: toSqlInList(keptWalletIds(walletCandidates, { driveIds: new Set(driveIds), pageIds: new Set(pageIds) })),
+  };
+  const scoped = (table: ScopedOrgWalletTable, idExpr = 'id') =>
+    sql.raw(`SELECT ${idExpr} AS id FROM ${table} WHERE ${orgWalletSelectionWhere(table, orgWalletScope)}`);
 
   /**
    * ID-based queries for tables with a single PK.
@@ -412,6 +446,28 @@ export async function validateData(
       + ` AND "targetUserId" IN (${exportedUserIn})`,
     ),
     favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIn})`),
+    // Organizations & wallets (Spec X-3), every one by the exporter's shared rule. The
+    // composite-key tables render their key as one compared value, like the nodes above.
+    organizations: sql.raw(`SELECT id FROM organizations WHERE ${orgSelectionWhere(driveIn, userIn)}`),
+    org_members: scoped('org_members'),
+    org_invitations: scoped('org_invitations'),
+    org_subscriptions: scoped('org_subscriptions'),
+    org_subscription_funding: scoped('org_subscription_funding'),
+    org_domains: scoped('org_domains'),
+    org_member_departures: scoped('org_member_departures'),
+    org_departure_suppressions: scoped('org_departure_suppressions'),
+    org_guest_holds: scoped('org_guest_holds'),
+    drive_join_requests: scoped('drive_join_requests'),
+    wallets: scoped('wallets'),
+    wallet_funding_legs: scoped('wallet_funding_legs'),
+    wallet_consumer_caps: scoped('wallet_consumer_caps', `"walletId" || ':' || "consumerKey"`),
+    wallet_debt_notices: scoped('wallet_debt_notices', '"walletId"'),
+    wallet_cap_alerts: scoped(
+      'wallet_cap_alerts',
+      `"walletId" || ':' || "consumerKey" || ':' || "capWindow" || ':' || "periodStart"::text || ':' || threshold::text`,
+    ),
+    drive_spend_overrides: scoped('drive_spend_overrides', `"userId" || ':' || "driveId"`),
+    automation_skip_notices: scoped('automation_skip_notices', '"driveId"'),
   };
 
   // Count-based queries for composite-key tables

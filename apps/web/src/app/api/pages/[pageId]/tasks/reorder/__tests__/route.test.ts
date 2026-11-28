@@ -9,11 +9,12 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -92,6 +93,7 @@ import { broadcastTaskEvent } from '@/lib/websocket';
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { reorderTaskListChildren } from '../reorder-task-list';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ---------- Helpers ----------
 

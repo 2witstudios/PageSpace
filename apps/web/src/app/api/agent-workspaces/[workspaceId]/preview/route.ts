@@ -26,6 +26,7 @@ import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runti
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { readDevPreviewStatusForUser } from '@/lib/dev-preview/preview-runtime';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview';
@@ -46,7 +47,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     // verdict (a drive-role read, only for an env holder) are independent:
     // run them together rather than serialising a query behind a round trip.
     const [result, manage] = await Promise.all([
-      readDevPreviewStatusForUser({ authorizeAs: { kind: 'workspace', id: session.id }, holder, userId: auth.userId }),
+      readDevPreviewStatusForUser({ authorizeAs: { kind: 'workspace', id: session.id }, holder, actor: actorFromAuth(auth)}),
       canManageDevPreview(auth, { holder, sessionOwnerId: session.ownerId, driveId: session.driveId }),
     ]);
     if (!result.ok) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, result.detail, ROUTE);

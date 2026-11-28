@@ -8,6 +8,8 @@ import { isFilePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { generatePresignedUrl } from '@/lib/presigned-url';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -28,9 +30,9 @@ export async function GET(request: NextRequest, context: RouteParams) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const canView = await canUserViewPage(user.id, page.id);
+    const canView = await canUserViewPage(actorFromVerifiedUser(user), page.id);
     if (!canView) {
-      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+      return deniedResponse(actorFromVerifiedUser(user), page.id, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
     }
 
     const meta = page.extractionMetadata as { thumbnailKey?: string } | null;
@@ -47,6 +49,9 @@ export async function GET(request: NextRequest, context: RouteParams) {
     }
 
     const [, contentHash, preset] = match;
+    // The thumbnail is derived from the original, so it is gone when the original's hash is blocked.
+    const removed = await refuseRemovedContent(contentHash);
+    if (removed) return removed;
     const presignedUrl = await generatePresignedUrl(contentHash, preset, 3600);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'file', resourceId: page.id, details: { source: 'thumbnail', mimeType: page.mimeType } });

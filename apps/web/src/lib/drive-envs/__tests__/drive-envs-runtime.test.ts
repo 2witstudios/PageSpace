@@ -108,6 +108,7 @@ import type { EnsureSpriteHolderSandboxResult } from '@pagespace/lib/services/ag
 import type { ensureDriveEnvSandbox as ensureDriveEnvSandboxFn } from '@pagespace/lib/services/drive-envs/env-provision-deps';
 import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge } from '../drive-envs-runtime';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type EnsureDriveEnvSandboxInput = Parameters<typeof ensureDriveEnvSandboxFn>[0];
 
@@ -144,11 +145,11 @@ describe('ensureEnvSandboxForSession', () => {
   it("should route a session's ensure at the shared env verb, forwarding the intent unchanged", async () => {
     // The session's `reprovision` → `attach` translation happens upstream, in
     // `ensureAgentSessionSandbox`; this binding must not translate a second time.
-    await ensureEnvSandboxForSession({ envId: ENV_ID, intent: 'attach', requesterId: REQUESTER_ID });
+    await ensureEnvSandboxForSession({ envId: ENV_ID, intent: 'attach', requester: credentialActor(REQUESTER_ID, null) });
 
     expect(lastCall().envId).toBe(ENV_ID);
     expect(lastCall().intent).toBe('attach');
-    expect(lastCall().requesterId).toBe(REQUESTER_ID);
+    expect(lastCall().requester.userId).toBe(REQUESTER_ID);
     expect(lastCall().deps.resolvePayer).toBe(resolveDriveEnvPayer);
   });
 });
@@ -169,10 +170,10 @@ describe('rebuildEnv', () => {
     // `reprovision` would skip the probe and mint against a row the teardown
     // already cleared; the point of going through the one verb is that this
     // path is not special.
-    await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
+    await rebuildEnv({ envId: ENV_ID, requester: credentialActor(REQUESTER_ID, null) });
 
     expect(lastCall().intent).toBe('ensure');
     expect(lastCall().envId).toBe(ENV_ID);
-    expect(lastCall().requesterId).toBe(REQUESTER_ID);
+    expect(lastCall().requester.userId).toBe(REQUESTER_ID);
   });
 });

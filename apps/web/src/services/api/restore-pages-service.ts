@@ -169,6 +169,9 @@ export async function applyPageRestoreOps(
           content,
           stateHash,
           revision: sql`${pages.revision} + 1`,
+          // A restore replaces the document, so an editor still holding the old
+          // text has to be stopped rather than save over what was restored.
+          contentRevision: sql`${pages.contentRevision} + 1`,
         })
         .where(eq(pages.id, op.pageId));
     }

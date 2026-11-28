@@ -1,9 +1,15 @@
-import { describe, it } from 'vitest';
-import { assert } from './riteway';
+import { describe, it, expect } from 'vitest';
+import { assert } from '@/test/riteway';
 import { createBrowserTools, toModelOutputForBrowserScreenshot, type OperateBrowser } from '../browser-tools';
 import type { BrowserControlResponse, BrowserOperation } from '@pagespace/browser-worker/browser-operation';
 import type { SandboxActorContext } from '@pagespace/lib/services/sandbox/tool-runners';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+/** A tool context always carries its user's actor (D-OW-45); tests name the user, the actor follows. */
+const withActor = (context: Partial<ToolExecutionContext>) =>
+  context.userId ? { accessActor: credentialActor(context.userId, null), ...context } : context;
+
 
 const ACTOR: SandboxActorContext = {
   userId: 'user-1',
@@ -41,7 +47,7 @@ const setup = (
 };
 
 const call = (tools: ReturnType<typeof createBrowserTools>, name: keyof ReturnType<typeof createBrowserTools>, input: unknown, context: Partial<ToolExecutionContext> = { userId: 'user-1' }) =>
-  tools[name].execute!(input as never, { toolCallId: '1', messages: [], experimental_context: context } as never);
+  tools[name].execute!(input as never, { toolCallId: '1', messages: [], experimental_context: withActor(context) } as never);
 
 describe('browser tools', () => {
   it('turns browser_navigate into one typed navigate and returns the page', async () => {
@@ -108,8 +114,8 @@ describe('browser tools', () => {
 
   it('delivers a screenshot as an image part, and refuses one to a model that cannot see', async () => {
     const { tools, recorder } = setup(() => ({ ok: true, result: { kind: 'screenshot', page: PAGE, image: { mediaType: 'image/jpeg', base64: 'AAAA' } } }));
-    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasTools: true, model: 'm', provider: 'p' } });
-    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasTools: true, model: 'm', provider: 'p' } });
+    const blind = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: false, hasPdfInput: false, hasToolResultMedia: true, hasTools: true, model: 'm', provider: 'p' } });
+    const seen = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasPdfInput: false, hasToolResultMedia: true, hasTools: true, model: 'm', provider: 'p' } });
     const modelOutput = toModelOutputForBrowserScreenshot(seen) as unknown as { type: string; value: { type: string }[] };
     assert({
       given: 'a screenshot for a model without vision and one with',
@@ -121,6 +127,13 @@ describe('browser tools', () => {
         modelOutput: ['content', ['text', 'image-data']],
       },
     });
+  });
+
+  it('refuses a screenshot to a vision model whose provider cannot receive tool-result images', async () => {
+    const { tools, recorder } = setup(() => ({ ok: true, result: { kind: 'screenshot', page: PAGE, image: { mediaType: 'image/jpeg', base64: 'AAAA' } } }));
+    const result = await call(tools, 'browser_screenshot', {}, { userId: 'user-1', modelCapabilities: { hasVision: true, hasPdfInput: false, hasToolResultMedia: false, hasTools: true, model: 'm', provider: 'ollama' } });
+    expect(result).toEqual({ success: false, error: "This model's provider cannot receive images in tool results; use browser_read instead." });
+    expect(recorder.operations).toHaveLength(0);
   });
 
   it('maps browser_tabs to typed tab actions and rejects incomplete ones', async () => {

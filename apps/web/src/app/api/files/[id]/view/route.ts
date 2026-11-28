@@ -11,6 +11,8 @@ import { canUserAccessFile } from '@pagespace/lib/permissions/file-access';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 /** Extract a bare SHA-256 hash from legacy storagePath values like 'files/{hash}/original'. */
 function toContentHash(storagePath: string): string {
@@ -45,9 +47,9 @@ export async function GET(
     });
 
     if (page && isFilePage(page.type as PageType)) {
-      const canView = await canUserViewPage(user.id, page.id);
+      const canView = await canUserViewPage(actorFromVerifiedUser(user), page.id);
       if (!canView) {
-        return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+        return deniedResponse(actorFromVerifiedUser(user), page.id, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
       }
 
       if (!page.filePath) {
@@ -55,6 +57,8 @@ export async function GET(
       }
 
       const contentHash = toContentHash(page.filePath);
+      const removedPage = await refuseRemovedContent(contentHash);
+      if (removedPage) return removedPage;
       const mimeType = page.mimeType || 'application/octet-stream';
       const ttl = getPresignedUrlTtl(mimeType);
       const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);
@@ -79,12 +83,15 @@ export async function GET(
       return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
-    const hasAccess = await canUserAccessFile(user.id, file.id, file.driveId);
+    const hasAccess = await canUserAccessFile(actorFromVerifiedUser(user), file.id, file.driveId);
     if (!hasAccess) {
-      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      const refused = NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      return file.driveId ? deniedResponse(actorFromVerifiedUser(user), file.driveId, refused) : refused;
     }
 
     const contentHash = toContentHash(file.storagePath || file.id);
+    const removedFile = await refuseRemovedContent(contentHash);
+    if (removedFile) return removedFile;
     const mimeType = file.mimeType || 'application/octet-stream';
     const ttl = getPresignedUrlTtl(mimeType);
     const filename = sanitizeFilenameForHeader(contentHash);

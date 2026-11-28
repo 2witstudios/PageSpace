@@ -22,7 +22,7 @@ describe('allocateUniqueSubdomainWithRetry', () => {
     expect(attempt).toHaveBeenCalledWith('acme')
   })
 
-  it('given a unique-violation on the first attempt, should re-fetch taken + retry with a new candidate', async () => {
+  it('given a unique-violation on the first attempt, should re-fetch taken + retry with a random-suffixed candidate', async () => {
     const fetchTaken = vi
       .fn()
       // first call: the DB said 'acme' was free when we read it, but the insert races
@@ -38,11 +38,35 @@ describe('allocateUniqueSubdomainWithRetry', () => {
       base: 'acme',
       fetchTaken,
       attempt,
+      randomSuffix: () => 'k3x9q2m7',
     })
-    expect(result).toBe('acme-2')
+    // A conflict means rivals are racing for the same sequential family: the
+    // next sequential number is the one they are most likely to take too, so
+    // the retry leaves the family.
+    expect(result).toBe('acme-k3x9q2m7')
     expect(fetchTaken).toHaveBeenCalledTimes(2)
     expect(attempt).toHaveBeenCalledTimes(2)
-    expect(attempt).toHaveBeenNthCalledWith(2, 'acme-2')
+    expect(attempt).toHaveBeenNthCalledWith(1, 'acme')
+    expect(attempt).toHaveBeenNthCalledWith(2, 'acme-k3x9q2m7')
+  })
+
+  it('given several conflicts, should draw a fresh random suffix on every retry', async () => {
+    const fetchTaken = vi.fn().mockResolvedValue([])
+    const uniqueViolation = Object.assign(new Error('unique'), { code: '23505' })
+    const attempt = vi
+      .fn()
+      .mockRejectedValueOnce(uniqueViolation)
+      .mockRejectedValueOnce(uniqueViolation)
+      .mockResolvedValueOnce(undefined)
+    const suffixes = ['aaaaaaa1', 'bbbbbbb2']
+    const result = await allocateUniqueSubdomainWithRetry({
+      base: 'home',
+      fetchTaken,
+      attempt,
+      randomSuffix: () => suffixes.shift() ?? 'zzzzzzz9',
+    })
+    expect(attempt.mock.calls.map(([candidate]) => candidate)).toEqual(['home', 'home-aaaaaaa1', 'home-bbbbbbb2'])
+    expect(result).toBe('home-bbbbbbb2')
   })
 
   it('given repeated unique-violations, should retry up to the limit then give up', async () => {

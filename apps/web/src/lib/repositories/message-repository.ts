@@ -44,6 +44,7 @@
  * derived from its conversation rather than stored on the row.
  */
 
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import type { UIMessage } from 'ai';
 import { db } from '@pagespace/db/db';
 import { eq, and, ne, lt, gte, asc, desc } from '@pagespace/db/operators';
@@ -55,7 +56,10 @@ import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import {
   extractStructuredContentFromParts,
+  screenFilePartsAgainstBlocklist,
+  neutralizeEnvelopeShapedText,
   convertDbMessageToUIMessage,
+  convertGlobalAssistantMessageToUIMessage,
   MessageConversationConflictError,
   type ToolCall,
   type ToolResult,
@@ -130,10 +134,10 @@ async function savePageMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — see the return of the upsert. */
 }): Promise<string | null> {
-  let structuredContent = content;
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);
@@ -211,10 +215,10 @@ async function saveGlobalMessageRow({
   dbClient: DbExecutor;
   /** The `source` the row actually holds — insert-only, so not always the argument. */
 }): Promise<string | null> {
-  let structuredContent = content;
-  if (uiMessage?.parts && uiMessage.parts.length > 0) {
-    structuredContent = await extractStructuredContentFromParts(uiMessage.parts, content);
-  }
+  // No parts → the text is stored raw, so it must not read back as an envelope.
+  const structuredContent = uiMessage?.parts && uiMessage.parts.length > 0
+    ? await extractStructuredContentFromParts(uiMessage.parts, content)
+    : neutralizeEnvelopeShapedText(content);
 
   const toolCallsJson = serializeJsonColumn(toolCalls);
   const toolResultsJson = serializeJsonColumn(toolResults);
@@ -606,6 +610,35 @@ function emitMaterialized(
     .catch(() => {});
 }
 
+/**
+ * Content-blocklist screen for a message about to be saved — run BEFORE the save
+ * transaction opens (it reads on the shared pool) and before any attachment
+ * bytes are written.
+ *
+ *   - A USER message carrying a blocked attachment is refused outright
+ *     (ContentBlockedError): nothing is stored and the turn never reaches the model.
+ *   - Any other message (an assistant reply, a system write) is saved WITHOUT the
+ *     blocked part. Refusing there would strand the reply at 'streaming' and have
+ *     every recovery sweep retry — and re-audit — the same doomed write.
+ */
+async function withScreenedAttachments<
+  T extends {
+    uiMessage?: UIMessage;
+    role: 'user' | 'assistant' | 'system';
+    userId: string | null;
+    triggeredBy?: ConversationEventTriggeredBy;
+  },
+>(args: T): Promise<T> {
+  if (!args.uiMessage?.parts?.length) return args;
+  const { parts, blockedHashes } = await screenFilePartsAgainstBlocklist(args.uiMessage.parts, {
+    // An assistant save carries no userId; the audit event still names whoever drove the turn.
+    userId: args.userId ?? args.triggeredBy?.userId,
+  });
+  if (blockedHashes.length === 0) return args;
+  if (args.role === 'user') throw new ContentBlockedError(blockedHashes[0]);
+  return { ...args, uiMessage: { ...args.uiMessage, parts } };
+}
+
 // ---------------------------------------------------------------------------
 // The repository
 // ---------------------------------------------------------------------------
@@ -633,6 +666,7 @@ export const messageRepository = {
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {
+    args = await withScreenedAttachments(args);
     const outcome = await db.transaction(async (tx) => {
       const hook = await normalizeHook(tx, args.beforeSave);
       if (!hook.proceed) return null;
@@ -704,6 +738,7 @@ export const messageRepository = {
     triggeredBy?: ConversationEventTriggeredBy;
     beforeSave?: BeforeSaveHook;
   }): Promise<MessageWriteResult> {
+    args = await withScreenedAttachments(args);
     const outcome = await db.transaction(async (tx) => {
       const hook = await normalizeHook(tx, args.beforeSave);
       if (!hook.proceed) return null;
@@ -1042,12 +1077,19 @@ export const messageRepository = {
     if (outcome === 'no_match') return warnNoMatch('editGlobalMessage', args);
 
     void (async () => {
+      // Reconstruct from the written row, as the page twin does: the stored
+      // content may be an envelope (attachments, or typed envelope-shaped text
+      // neutralized by processMessageContentUpdate), and live clients must
+      // receive the same parts a history reload would.
+      const updated = await messageRepository.getMessageInConversation(args.conversationId, args.messageId);
+      if (!updated) return;
+      const uiMessage = await convertGlobalAssistantMessageToUIMessage(updated);
       await broadcastAiMessageEdited({
         messageId: args.messageId,
         pageId: globalChannelId(args.ownerUserId),
         conversationId: args.conversationId,
-        parts: [{ type: 'text', text: args.updatedContent }],
-        editedAt: new Date().toISOString(),
+        parts: uiMessage.parts,
+        editedAt: (updated.editedAt ?? new Date()).toISOString(),
         triggeredBy: args.legacyTriggeredBy,
       });
       const ctx = contextForMutation(
@@ -1056,16 +1098,11 @@ export const messageRepository = {
         { kind: 'global', ownerId: args.ownerUserId },
         args.legacyTriggeredBy,
       );
-      // Mirrors the legacy broadcast's own payload: plain text parts from the
-      // updated content (the global edit route never refetched/reconstructed).
       await conversationEvents.messageUpdated(
         ctx,
-        buildEventMessage({
-          messageId: args.messageId,
-          role: 'assistant',
-          content: args.updatedContent,
-          status: 'complete',
-        }),
+        // Spread like the page twin, not buildEventMessage: the event replaces
+        // the message in place, so it must keep the row's own createdAt.
+        { ...uiMessage, id: args.messageId, source: updated.source } as UIMessage,
         row?.lastMessageAt ?? null,
         { skipDirectory: row === null },
       );
@@ -1484,5 +1521,6 @@ export function processMessageContentUpdate(
   } catch {
     // Plain text, use as-is
   }
-  return newContent;
+  // Stored raw, so an edit must not be able to turn a message INTO an envelope.
+  return neutralizeEnvelopeShapedText(newContent);
 }

@@ -63,6 +63,20 @@ export interface WriteFileEntry {
 }
 
 /**
+ * Per-call options for a filesystem op.
+ *
+ * `timeoutMs` replaces the driver's default per-attempt budget (30 s for a
+ * Sprite) for THIS call only. It exists for real-file copies: a scanned PDF of
+ * tens of megabytes cannot cross the Sprite filesystem API inside the budget
+ * that was sized for a source file. Omitted = the driver default, unchanged.
+ * A substrate with no per-op budget of its own (a local env's grant transport)
+ * may ignore it.
+ */
+export interface FsOpOptions {
+  timeoutMs?: number;
+}
+
+/**
  * The minimal lifecycle handle (PR2) plus the execution surface the tools drive.
  * The runners reconnect to this via `client.get` after the lifecycle gate has
  * authorized the conversation.
@@ -83,8 +97,8 @@ export interface ExecutableSandbox extends SandboxHandle {
    */
   readonly capabilities?: SandboxCapabilities;
   runCommand(args: RunCommandArgs): Promise<SandboxRunResult>;
-  writeFiles(files: WriteFileEntry[]): Promise<void>;
-  readFileToBuffer(args: { path: string }): Promise<Buffer | null>;
+  writeFiles(files: WriteFileEntry[], options?: FsOpOptions): Promise<void>;
+  readFileToBuffer(args: { path: string } & FsOpOptions): Promise<Buffer | null>;
   /**
    * Create a filesystem checkpoint tagged with `comment` (Sprites Platform
    * Alignment 5-2: a safety net before destructive agent bash batches — see

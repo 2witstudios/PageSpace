@@ -38,12 +38,13 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn(),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 // Mock permissions (boundary)
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -91,6 +92,7 @@ import { db } from '@pagespace/db/db';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions'
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Type for page lookup mock (matches Drizzle schema)
 type PageType = 'DOCUMENT' | 'FOLDER' | 'CHANNEL' | 'AI_CHAT' | 'CANVAS' | 'FILE' | 'SHEET' | 'TASK_LIST' | 'CODE';
@@ -110,6 +112,7 @@ type PageLookupResult = {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   aiProvider: string | null;
   aiModel: string | null;
@@ -158,6 +161,7 @@ const mockPageLookup = (overrides: Partial<PageLookupResult> = {}): PageLookupRe
   createdAt: new Date(),
   updatedAt: new Date(),
   revision: 0,
+  contentRevision: 0,
   stateHash: null,
   aiProvider: null,
   aiModel: null,
@@ -374,7 +378,7 @@ describe('PATCH /api/ai/chat/messages/[messageId]', () => {
 
       await PATCH(request, context);
 
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
 
     it('should log warning when permission denied', async () => {

@@ -11,7 +11,9 @@
  * principal layer:
  *
  * - no membership in the drive → no;
- * - INHERIT (role null) → the owner's drive-wide edit;
+ * - a credential that acts as its person (a session, an unscoped key, an
+ *   account-wide OAuth token), or INHERIT (role null) → the person's own
+ *   drive-wide edit, which carries the POL-6 Open-drive floor;
  * - OWNER/ADMIN → yes (admins bypass custom roles, as for a human);
  * - MEMBER → yes, unless a custom role bounds it, in which case only that
  *   role's `driveWidePermissions.canEdit`; an unresolvable role fails closed.
@@ -23,15 +25,16 @@
  * It does not replace the user gate — both must pass.
  */
 
-import { getPrincipalDriveMembership, type AuthResult } from '@/lib/auth';
+import { getPrincipalDriveMembership, isDriveScopedPrincipal, type AuthResult } from '@/lib/auth';
 import { getUserDrivePermissions } from '@pagespace/lib/permissions/permissions';
 import { fetchCustomRolePermissions } from '@pagespace/lib/permissions/membership-queries';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 export async function canPrincipalRunCodeInDrive(auth: AuthResult, driveId: string): Promise<boolean> {
   const membership = await getPrincipalDriveMembership(auth, driveId);
   if (!membership) return false;
-  if (membership.role === null) {
-    return (await getUserDrivePermissions(auth.userId, driveId))?.canEdit === true;
+  if (membership.role === null || !isDriveScopedPrincipal(auth)) {
+    return (await getUserDrivePermissions(actorFromAuth(auth), driveId))?.canEdit === true;
   }
   if (membership.role === 'OWNER' || membership.role === 'ADMIN') return true;
   if (!membership.customRoleId) return true;

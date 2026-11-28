@@ -40,6 +40,7 @@ import { deriveTenantId } from './store/derive-tenant-id';
 import { planeBindingsFor, ownerRefOf } from './plane-bindings-for';
 import { toSafeAccount, type SafeAccount } from './to-safe-account';
 import { authorize, pagePermissionSuffices } from './authorize';
+import type { AccessActor } from '../permissions/access-actor';
 import { signGrant } from './sign-grant';
 import { renderApprovalSubject } from './render-approval-subject';
 
@@ -72,13 +73,14 @@ export type AccountOperationResult =
   | { readonly ok: false; readonly reason: 'refused' | 'upstream_unreachable' | 'outcome_unknown' | 'outcome_unrecorded' | 'audit_unavailable' | 'plane_unavailable' };
 
 export type AccountAuthority = {
-  readonly createAccount: (input: { readonly actorUserId: UserId; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
+  readonly createAccount: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly input: CreateAccountInput }) => Promise<CreateAccountResult>;
   /** `allowedDriveIds`: the caller's credential ceiling (`[]` = none); accounts outside it are not listed. */
-  readonly listAccounts: (input: { readonly actorUserId: UserId; readonly owner: AccountOwnerTarget; readonly allowedDriveIds?: readonly string[] }) => Promise<readonly SafeAccount[] | null>;
-  readonly revokeAccount: (input: { readonly actorUserId: UserId; readonly accountId: string }) => Promise<{ readonly ok: true; readonly account: SafeAccount } | { readonly ok: false; readonly reason: 'account_unavailable' | 'plane_unavailable' }>;
-  readonly requestOperation: (input: { readonly caller: AuthorizeCaller; readonly accountId: string; readonly request: CanonicalRequestInput }) => Promise<AccountOperationResult>;
+  readonly listAccounts: (input: { readonly actor: AccessActor; readonly owner: AccountOwnerTarget; readonly allowedDriveIds?: readonly string[] }) => Promise<readonly SafeAccount[] | null>;
+  readonly revokeAccount: (input: { readonly actor: AccessActor; readonly accountId: string }) => Promise<{ readonly ok: true; readonly account: SafeAccount } | { readonly ok: false; readonly reason: 'account_unavailable' | 'plane_unavailable' }>;
+  /** `actor`: the acting human's credential; it must be `caller.actingHumanUserId`. */
+  readonly requestOperation: (input: { readonly actor: AccessActor; readonly caller: AuthorizeCaller; readonly accountId: string; readonly request: CanonicalRequestInput }) => Promise<AccountOperationResult>;
   readonly approveRequest: (input: {
-    readonly actorUserId: UserId;
+    readonly actor: AccessActor;
     readonly sessionId: string;
     readonly accountId: string;
     readonly requestDigest: string;
@@ -104,10 +106,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
   const newId = deps.newId ?? defaultId;
 
   /** `decideAccountAccess` for a human managing or approving from the account's own context (live session). */
-  async function accessOf(row: AgentAccountRecord, actorUserId: UserId): Promise<AccountAccessLevel> {
+  async function accessOf(row: AgentAccountRecord, actor: AccessActor): Promise<AccountAccessLevel> {
+    const actorUserId = actor.userId as UserId;
     const agentPageId = (row.ownerAgentPageId ?? null) as AgentPageId | null;
-    const role = row.ownerDriveId === null ? null : await deps.facts.driveRole({ driveId: row.ownerDriveId, userId: actorUserId });
-    const permission = agentPageId === null ? 'none' : await deps.facts.pagePermission({ userId: actorUserId, pageId: agentPageId });
+    const role = row.ownerDriveId === null ? null : await deps.facts.driveRole({ driveId: row.ownerDriveId, actor });
+    const permission = agentPageId === null ? 'none' : await deps.facts.pagePermission({ actor, pageId: agentPageId });
     const access = decideAccountAccess({
       facts: {
         accountId: row.id as AccountId,
@@ -138,10 +141,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
   }
 
   return {
-    async createAccount({ actorUserId, owner, input }) {
+    async createAccount({ actor, owner, input }) {
+      const actorUserId = actor.userId as UserId;
       const ownerRef = await ownerRefFor(owner, actorUserId);
       if (ownerRef === null) return { ok: false, reason: 'owner_not_found' };
-      const role = ownerRef.kind === 'agent_page' ? await deps.facts.driveRole({ driveId: ownerRef.driveId, userId: actorUserId }) : null;
+      const role = ownerRef.kind === 'agent_page' ? await deps.facts.driveRole({ driveId: ownerRef.driveId, actor }) : null;
       if (!decideAccountCreatePermission({ owner: ownerRef, actorUserId, humanDriveRole: role })) return { ok: false, reason: 'forbidden' };
 
       const verdict = decideAccountCreation({ kind: 'api_key', ...input, approver: actorUserId });
@@ -172,23 +176,24 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return stored === null ? { ok: false, reason: 'store_refused' } : { ok: true, account: toSafeAccount({ row: stored }) };
     },
 
-    async listAccounts({ actorUserId, owner, allowedDriveIds = [] }) {
+    async listAccounts({ actor, owner, allowedDriveIds = [] }) {
+      const actorUserId = actor.userId as UserId;
       const withinCeiling = (row: AgentAccountRecord) => isDriveWithinCredentialScope(allowedDriveIds, row.ownerDriveId);
       if (owner.kind === 'user') return (await deps.accounts.listForUser(actorUserId)).filter(withinCeiling).map((row) => toSafeAccount({ row }));
       // Decided from the caller's standing on the page BEFORE any row is read, so a refusal says nothing about
       // whether the page has accounts (review LOW-2).
       const driveId = await deps.facts.pageDrive(owner.agentPageId);
       if (driveId === null) return null;
-      const humanDriveRole = await deps.facts.driveRole({ driveId, userId: actorUserId });
-      const pagePermission = await deps.facts.pagePermission({ userId: actorUserId, pageId: owner.agentPageId });
+      const humanDriveRole = await deps.facts.driveRole({ driveId, actor });
+      const pagePermission = await deps.facts.pagePermission({ actor, pageId: owner.agentPageId });
       if (!decideAccountListView({ humanDriveRole, pagePermission })) return null;
       // An account minted in the page's previous drive stays bound to that drive (its tenant is immutable): not listed here.
       return (await deps.accounts.listForAgentPage(owner.agentPageId)).filter((row) => row.ownerDriveId === driveId && withinCeiling(row)).map((row) => toSafeAccount({ row }));
     },
 
-    async revokeAccount({ actorUserId, accountId }) {
+    async revokeAccount({ actor, accountId }) {
       const row = await deps.accounts.find(accountId);
-      if (row === null || !(await accessOf(row, actorUserId)).manage) return { ok: false, reason: 'account_unavailable' };
+      if (row === null || !(await accessOf(row, actor)).manage) return { ok: false, reason: 'account_unavailable' };
       const ref = { tenantId: row.tenantId, accountId: row.id, kind: 'api_key' as const };
       // A not-ready account (its first put never committed) may still have left material in the vault with no
       // plane record to revoke: erase it outright instead (second review MED-1).
@@ -198,11 +203,13 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return marked === null ? { ok: false, reason: 'account_unavailable' } : { ok: true, account: toSafeAccount({ row: marked }) };
     },
 
-    async requestOperation({ caller, accountId, request }) {
+    async requestOperation({ actor, caller, accountId, request }) {
+      // The human's standing is read through THEIR credential; any other actor is refused outright.
+      if (actor.userId !== caller.actingHumanUserId) return { ok: false, reason: 'refused' };
       const now = deps.now();
       const row = await deps.accounts.find(accountId);
-      const humanDriveRole = row?.ownerDriveId ? await deps.facts.driveRole({ driveId: row.ownerDriveId, userId: caller.actingHumanUserId }) : null;
-      const agentPagePermission = caller.agentPageId === null ? 'none' : await deps.facts.pagePermission({ userId: caller.actingHumanUserId, pageId: caller.agentPageId });
+      const humanDriveRole = row?.ownerDriveId ? await deps.facts.driveRole({ driveId: row.ownerDriveId, actor }) : null;
+      const agentPagePermission = caller.agentPageId === null ? 'none' : await deps.facts.pagePermission({ actor, pageId: caller.agentPageId });
       const boundAgentPageIds = row === null ? [] : await deps.accounts.boundAgentPageIds(row.id);
       const verdict = authorize({
         caller,
@@ -244,9 +251,10 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       return executed;
     },
 
-    async approveRequest({ actorUserId, sessionId, accountId, requestDigest }) {
+    async approveRequest({ actor, sessionId, accountId, requestDigest }) {
+      const actorUserId = actor.userId as UserId;
       const row = await deps.accounts.find(accountId);
-      if (row === null || !(await accessOf(row, actorUserId)).use) return { ok: false, reason: 'account_unavailable' };
+      if (row === null || !(await accessOf(row, actor)).use) return { ok: false, reason: 'account_unavailable' };
       const expiresAt = deps.now() + APPROVAL_TTL_MS;
       const approvalId = await deps.accounts.insertApproval({ accountId: row.id, requestDigest: requestDigest as RequestDigest, approvedByUserId: actorUserId, approvedViaSessionId: sessionId, stepUpChallengeId: null, expiresAt });
       return { ok: true, approvalId, expiresAt };

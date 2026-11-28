@@ -21,6 +21,7 @@ import {
 import { db } from '@pagespace/db/db';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -85,7 +86,7 @@ export async function POST(
   // If dry run, just return the preview
   if (dryRun) {
     loggers.api.debug('[Rollback:Route] Dry run - fetching preview');
-    const preview = await previewRollback(activityId, userId, rollbackContext as RollbackContext, { force });
+    const preview = await previewRollback(activityId, actorFromAuth(auth), rollbackContext as RollbackContext, { force });
     loggers.api.debug('[Rollback:Route] Dry run complete', {
       canExecute: preview.canExecute,
       hasConflict: preview.hasConflict,
@@ -98,7 +99,7 @@ export async function POST(
   // Fix 9: Execute rollback within transaction for atomicity
   loggers.api.debug('[Rollback:Route] Executing rollback in transaction');
   const result = await db.transaction(async (tx) => {
-    return executeRollback(activityId, userId, rollbackContext as RollbackContext, { tx, force });
+    return executeRollback(activityId, actorFromAuth(auth), rollbackContext as RollbackContext, { tx, force });
   });
 
   // Fire deferred workflow trigger after transaction commit

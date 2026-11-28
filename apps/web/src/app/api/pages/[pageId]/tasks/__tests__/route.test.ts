@@ -10,15 +10,16 @@ vi.mock('@/lib/auth', () => ({
   checkMCPPageScope: vi.fn().mockResolvedValue(null),
   canPrincipalViewPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   },
   canPrincipalEditPage: async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn(),
   canUserEditPage: vi.fn(),
 }));
@@ -171,6 +172,8 @@ vi.mock('@pagespace/db/operators', () => ({
   notInArray: vi.fn((col, values) => ({ type: 'notInArray', col, values })),
   ne: vi.fn((field, value) => ({ type: 'ne', field, value })),
   ilike: vi.fn((col, pattern) => ({ type: 'ilike', col, pattern })),
+  gt: vi.fn((col, value) => ({ type: 'gt', col, value })),
+  lte: vi.fn((col, value) => ({ type: 'lte', col, value })),
   sql: vi.fn((strings, ...values) => ({ type: 'sql', strings, values })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -226,8 +229,9 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers';
 import { getUserTimezone } from '@/lib/ai/core/personalization-utils';
 import { db } from '@pagespace/db/db';
-import { inArray, ilike } from '@pagespace/db/operators';
+import { inArray, notInArray, ilike, gt, lte, sql } from '@pagespace/db/operators';
 import { broadcastTaskEvent } from '@/lib/websocket';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
@@ -319,6 +323,11 @@ beforeEach(() => {
     // resetAllMocks() also wipes the @pagespace/db/operators factory mocks; inArray's
     // return value is inspected directly by the bounded-query regression test below.
     vi.mocked(inArray).mockImplementation(((col: unknown, values: unknown) => ({ type: 'inArray', col, values })) as never);
+    vi.mocked(notInArray).mockImplementation(((col: unknown, values: unknown) => ({ type: 'notInArray', col, values })) as never);
+    vi.mocked(gt).mockImplementation(((col: unknown, value: unknown) => ({ type: 'gt', col, value })) as never);
+    vi.mocked(lte).mockImplementation(((col: unknown, value: unknown) => ({ type: 'lte', col, value })) as never);
+    // The perStatus rank column is built with sql`...`.as('rank'); and `false` for an empty done set.
+    vi.mocked(sql).mockImplementation((() => ({ as: () => ({}) })) as never);
     // Re-set up db.insert to default chain
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({
@@ -652,6 +661,99 @@ beforeEach(() => {
 
       expect(response.status).toBe(200);
       expect(vi.mocked(ilike).mock.calls[0]?.[1]).toBe('%100\\% done%');
+    });
+
+    describe('statusGroup / perStatus paging', () => {
+      const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
+      const statusConfigs = [
+        { slug: 'pending', group: 'todo' },
+        { slug: 'blocked', group: 'in_progress' },
+        { slug: 'completed', group: 'done' },
+        { slug: 'shipped', group: 'done' },
+      ];
+      const childRows = [{ id: 'p-1', pageId: 'p-1' }];
+
+      const arrange = (phase1: unknown) => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+        vi.mocked(canUserViewPage).mockResolvedValue(true);
+        vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
+        vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue(statusConfigs as never);
+        vi.mocked(db.query.taskItems.findMany).mockImplementation(((args: { where?: { values?: string[] } }) =>
+          Promise.resolve((args.where?.values ?? []).map(id => ({
+            id, position: 0, page: { id, title: id, isTrashed: false, position: 0 },
+          })))) as never);
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never) // childPages
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never) // backfill existingRows
+          .mockImplementationOnce(() => phase1 as never)
+          .mockImplementation(() => makeSelectChain([]) as never); // trigger / sub-task counts
+      };
+
+      it('statusGroup=active excludes every done-group status in SQL', async () => {
+        arrange(makeSelectChain([{ id: 'task-1' }]));
+
+        const response = await GET(createRequest('?statusGroup=active'), { params: mockParams });
+
+        expect(response.status).toBe(200);
+        expect(vi.mocked(notInArray).mock.calls[0]?.[1]).toEqual(['completed', 'shipped']);
+        expect(vi.mocked(inArray).mock.calls.some(c => JSON.stringify(c[1]) === JSON.stringify(['completed', 'shipped']))).toBe(false);
+      });
+
+      it('statusGroup=completed keeps only done-group statuses in SQL', async () => {
+        arrange(makeSelectChain([{ id: 'task-1' }]));
+
+        await GET(createRequest('?statusGroup=completed'), { params: mockParams });
+
+        expect(vi.mocked(inArray).mock.calls.some(c => JSON.stringify(c[1]) === JSON.stringify(['completed', 'shipped']))).toBe(true);
+        expect(vi.mocked(notInArray)).not.toHaveBeenCalled();
+      });
+
+      it('perStatus windows the rank per column and reports hasMore from the row just past the page', async () => {
+        const ranked = makeSelectChain([]);
+        ranked.as = vi.fn(() => ({ id: 'ranked.id', rank: 'ranked.rank' }));
+        const rows = makeSelectChain([
+          { id: 'todo-1', rank: 1 },
+          { id: 'done-1', rank: 1 },
+          { id: 'todo-2', rank: 2 },
+          { id: 'todo-3', rank: 3 }, // one row past the page: some column continues
+        ]);
+        arrange(null); // seeds auth/config mocks; its select queue is replaced below
+        vi.mocked(db.select).mockReset();
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => ranked as never)
+          .mockImplementationOnce(() => rows as never)
+          .mockImplementation(() => makeSelectChain([]) as never);
+
+        const response = await GET(createRequest('?perStatus=true&limit=2&offset=0'), { params: mockParams });
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(0);
+        expect(vi.mocked(lte).mock.calls[0]?.[1]).toBe(3);
+        expect(body.tasks.map((t: { id: string }) => t.id).sort()).toEqual(['done-1', 'todo-1', 'todo-2']);
+        expect(body.hasMore).toBe(true);
+      });
+
+      it('perStatus reports hasMore=false when no column has rows past the page', async () => {
+        const ranked = makeSelectChain([]);
+        ranked.as = vi.fn(() => ({ id: 'ranked.id', rank: 'ranked.rank' }));
+        arrange(null);
+        vi.mocked(db.select).mockReset();
+        vi.mocked(db.select)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => makeSelectChain(childRows) as never)
+          .mockImplementationOnce(() => ranked as never)
+          .mockImplementationOnce(() => makeSelectChain([{ id: 'a', rank: 3 }, { id: 'b', rank: 4 }]) as never)
+          .mockImplementation(() => makeSelectChain([]) as never);
+
+        const response = await GET(createRequest('?perStatus=true&limit=2&offset=2'), { params: mockParams });
+        const body = await response.json();
+
+        expect(vi.mocked(gt).mock.calls[0]?.[1]).toBe(2);
+        expect(body.hasMore).toBe(false);
+      });
     });
 
     it('tiebreaks the phase-1 order by taskItems.id (regression: non-deterministic paging when positions collide)', async () => {
@@ -1530,6 +1632,70 @@ beforeEach(() => {
       const stored = await createTaskWithDueDate('America/Chicago', epoch as unknown as string);
 
       expect(stored).toEqual(new Date(epoch));
+    });
+
+    describe('startDate', () => {
+      const createTaskWithBody = async (body: Record<string, unknown>) => {
+        const mockNewTask = { id: 'new-task', title: 'Task', status: 'pending', priority: 'medium', position: 0 };
+        transactionPageResult = [{ id: 'new-page', title: 'Task' }];
+        transactionTaskResult = [mockNewTask];
+        capturedInserts.length = 0;
+
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
+        vi.mocked(canUserEditPage).mockResolvedValue(true);
+        // Earlier cases (and early-400 cases here) can leave Once values queued.
+        vi.mocked(db.query.pages.findFirst).mockReset();
+        vi.mocked(db.query.taskItems.findFirst).mockReset();
+        vi.mocked(db.query.pages.findFirst)
+          .mockResolvedValueOnce({ id: mockPageId, driveId: 'drive-123' } as never)
+          .mockResolvedValueOnce(null as never);
+        vi.mocked(db.query.taskLists.findFirst).mockResolvedValue({ id: mockTaskListId } as never);
+        vi.mocked(db.query.taskStatusConfigs.findMany).mockResolvedValue([] as never);
+        // The only taskItems.findFirst in POST is the post-create relations fetch.
+        vi.mocked(db.query.taskItems.findFirst)
+          .mockResolvedValueOnce({ ...mockNewTask, startDate: body.startDate ?? null, assignee: null, user: null, assignees: [] } as never);
+
+        return POST(createRequest({ title: 'Task', ...body }), { params: mockParams });
+      };
+      const insertedTaskRow = () => capturedInserts.find(values => 'startDate' in values);
+
+      it('stores an ISO startDate on the new task and returns it', async () => {
+        const response = await createTaskWithBody({ startDate: '2026-03-01T00:00:00Z', dueDate: '2026-03-10T00:00:00Z' });
+
+        expect(response.status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toEqual(new Date('2026-03-01T00:00:00Z'));
+        expect((await response.json()).startDate).toBe('2026-03-01T00:00:00Z');
+      });
+
+      it('stores null when startDate is null or absent', async () => {
+        expect((await createTaskWithBody({ startDate: null })).status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toBeNull();
+        expect((await createTaskWithBody({})).status).toBe(201);
+        expect(insertedTaskRow()?.startDate).toBeNull();
+      });
+
+      it('returns 400 for an invalid startDate without creating anything', async () => {
+        const response = await createTaskWithBody({ startDate: 'not-a-date' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Invalid start date');
+        expect(insertedTaskRow()).toBeUndefined();
+      });
+
+      it('returns 400 when startDate is after dueDate', async () => {
+        const response = await createTaskWithBody({ startDate: '2026-03-10T00:00:00Z', dueDate: '2026-03-01T00:00:00Z' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Start date must be on or before the due date');
+        expect(insertedTaskRow()).toBeUndefined();
+      });
+
+      it('returns 400 for an invalid dueDate', async () => {
+        const response = await createTaskWithBody({ dueDate: 'garbage' });
+
+        expect(response.status).toBe(400);
+        expect((await response.json()).error).toBe('Invalid due date');
+      });
     });
 
     it('creates task page as TASK_LIST type with empty content', async () => {

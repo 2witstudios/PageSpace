@@ -12,6 +12,7 @@ import { messageRepository } from '@/lib/repositories/message-repository';
 import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canAccessConversation, type ConversationAccessRow } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * The fail-closed stand-in when a message has no conversation row. The
@@ -65,12 +66,12 @@ async function checkUndoPermissions(
     // they can see), and the PAGE decides whether they may mutate page state,
     // which undo does when it rolls activities back. Strictly narrower than
     // before — nothing that was allowed and legitimate becomes denied.
-    if (!(await canAccessConversation(userId, preview.conversationAccess ?? NO_CONVERSATION))) {
+    if (!(await canAccessConversation(actorFromAuth(auth), preview.conversationAccess ?? NO_CONVERSATION))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_accessible', operationType, conversationId: preview.conversationId }, riskScore: 0.6 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.conversationAccess?.contextId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
 
     if (!preview.pageId) {
@@ -108,10 +109,10 @@ async function checkUndoPermissions(
         pageId: maskIdentifier(preview.pageId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'no_edit_permission', operationType, pageId: preview.pageId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.pageId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
   } else {
     // Global Assistant chat - verify conversation ownership
@@ -123,10 +124,10 @@ async function checkUndoPermissions(
         conversationId: maskIdentifier(preview.conversationId)
       });
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_chat_undo', resourceId: messageId, details: { reason: 'conversation_not_owned', operationType, conversationId: preview.conversationId }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), preview.conversationAccess?.contextId, NextResponse.json(
         { error: 'You do not have permission to undo messages in this chat' },
         { status: 403 }
-      );
+      ));
     }
   }
   return null;
@@ -157,7 +158,7 @@ export async function GET(
     });
 
     // Get preview first to determine source and pageId/conversationId
-    const preview = await previewAiUndo(messageId, userId);
+    const preview = await previewAiUndo(messageId, actorFromAuth(auth));
 
     if (!preview) {
       return NextResponse.json({ error: 'Message not found or preview failed' }, { status: 404 });
@@ -236,7 +237,7 @@ export async function POST(
     loggers.api.debug('[AiUndo:Route] Validated mode', { mode });
 
     // Get preview first to check permissions
-    const preview = await previewAiUndo(messageId, userId);
+    const preview = await previewAiUndo(messageId, actorFromAuth(auth));
 
     if (!preview) {
       return NextResponse.json({ error: 'Message not found or preview failed' }, { status: 404 });
@@ -253,7 +254,7 @@ export async function POST(
     });
 
     // Execute undo, passing preview to avoid redundant computation
-    const result = await executeAiUndo(messageId, userId, mode, preview, { force });
+    const result = await executeAiUndo(messageId, actorFromAuth(auth), mode, preview, { force });
 
     loggers.api.info('Undo executed', {
       userId: maskIdentifier(userId),

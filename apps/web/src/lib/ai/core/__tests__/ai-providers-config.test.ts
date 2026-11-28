@@ -22,6 +22,7 @@ import {
   validateAgentModelSelection,
   resolveProviderModel,
 } from '../ai-providers-config';
+import { AI_PRICING } from '@pagespace/lib/monitoring/ai-monitoring';
 
 describe('ai-providers-config', () => {
   describe('catalog shape', () => {
@@ -39,10 +40,8 @@ describe('ai-providers-config', () => {
       expect(AI_PROVIDERS).toHaveProperty('glm');
       expect(AI_PROVIDERS.glm.name).toBe('Z.ai (Admin)');
       expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.3');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.1');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5-turbo');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.7');
-      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-4.5-air');
+      expect(AI_PROVIDERS.glm.models).toHaveProperty('glm-5.3-flash');
+      expect(AI_PROVIDERS.glm.models).not.toHaveProperty('glm-5.1');
     });
 
     it('includes the public zai provider with OpenRouter z-ai/ models', () => {
@@ -76,10 +75,21 @@ describe('ai-providers-config', () => {
       expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-3.5-haiku');
       expect(AI_PROVIDERS.anthropic.models).not.toHaveProperty('anthropic/claude-opus-4.6-fast');
     });
+    it('prices every selectable model, so a free model is never metered at the unknown-model fallback', () => {
+      // An id missing from AI_PRICING is "unknown" to chat-pricing: its hold estimate and the
+      // mid-stream abort guard both use the conservative fallback cost, so a free model would
+      // reserve and count real money. Every listed model needs a row, even a $0 one.
+      const unpriced = Object.values(AI_PROVIDERS)
+        .flatMap((provider) => Object.keys(provider.models))
+        .filter((model) => !Object.prototype.hasOwnProperty.call(AI_PRICING, model));
+      expect(unpriced).toEqual([]);
+    });
   });
 
   describe('FREE_TIER_MODELS', () => {
     it('contains the curated free allowlist', () => {
+      expect(FREE_TIER_MODELS.has('anthropic/claude-haiku-5.5')).toBe(true);
+      expect(FREE_TIER_MODELS.has('openai/gpt-6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.6-luna')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-nano')).toBe(true);
       expect(FREE_TIER_MODELS.has('openai/gpt-5.4-mini')).toBe(true);
@@ -139,7 +149,6 @@ describe('ai-providers-config', () => {
   describe('isModelAllowedForTier', () => {
     it('allows any paid tier the full catalog', () => {
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'pro')).toBe(true);
-      expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'founder')).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'business')).toBe(true);
     });
 
@@ -185,7 +194,7 @@ describe('ai-providers-config', () => {
     });
 
     it('keeps the admin glm provider when the model is a valid glm model', () => {
-      expect(resolveProviderModel('glm', 'glm-4.7')).toEqual({ provider: 'glm', model: 'glm-4.7' });
+      expect(resolveProviderModel('glm', 'glm-5.3-flash')).toEqual({ provider: 'glm', model: 'glm-5.3-flash' });
     });
 
     it('SUBSTITUTES the metered default when glm is paired with an invalid model (the P1 gate-bypass)', () => {
@@ -233,7 +242,12 @@ describe('ai-providers-config', () => {
 
   describe('getDefaultModel', () => {
     it('returns the first model of a vendor', () => {
-      expect(getDefaultModel('openai')).toBe('openai/gpt-5.6-sol-pro');
+      expect(getDefaultModel('anthropic')).toBe('anthropic/claude-haiku-5.5');
+      expect(getDefaultModel('openai')).toBe('openai/gpt-6.2-sol');
+    });
+
+    it("lists the product default first in its vendor's catalog", () => {
+      expect(getDefaultModel(DEFAULT_PROVIDER)).toBe(DEFAULT_MODEL);
     });
 
     it('returns DEFAULT_MODEL for an unknown provider', () => {
@@ -252,7 +266,6 @@ describe('ai-providers-config', () => {
 
     it('returns the catalog default for paid tiers', () => {
       expect(getDefaultModelForTier('openai', 'pro')).toBe(getDefaultModel('openai'));
-      expect(getDefaultModelForTier('openai', 'founder')).toBe(getDefaultModel('openai'));
       expect(getDefaultModelForTier('openai', 'business')).toBe(getDefaultModel('openai'));
     });
 

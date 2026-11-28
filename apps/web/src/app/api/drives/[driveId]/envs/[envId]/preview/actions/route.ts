@@ -23,6 +23,7 @@ import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } fro
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
 import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
 import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'drive-envs/preview/actions';
@@ -50,12 +51,12 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (env.substrate !== 'sprite') return NextResponse.json({ error: 'This environment has no sandbox to preview', reason: 'env_not_sprite' }, { status: 404 });
 
     // The shared gather's rows-only decision, for its wake subject (the drive's payer).
-    const authorization = await authorizePreviewHolderForUser({ holder, userId: auth.userId });
+    const authorization = await authorizePreviewHolderForUser({ holder, actor: actorFromAuth(auth)});
     if (!authorization.allowed) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action, reason: authorization.reason } });
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
-    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, actor: actorFromAuth(auth), wakeSubject: authorization.wakeSubject, sandboxId: authorization.sandboxId });
     return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply env preview action', error instanceof Error ? error : new Error(String(error)));

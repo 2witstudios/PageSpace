@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "contentRevision" integer DEFAULT 0 NOT NULL;

@@ -24,6 +24,8 @@ import type { PageContentFormat } from '@pagespace/lib/content/page-content-form
 import type { SyncMentionsResult } from '@/services/api/page-mention-service';
 import { syncMentions } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import { admitReentry, type ReentryDecision } from '@pagespace/lib/permissions/guest-holds';
+import { guardDriveAccess, type DriveAccessScope } from '@pagespace/lib/permissions/org-lapse-guard';
 
 export interface RollbackDeps {
   /** Database handle — the real db, or a transaction when one is threaded. */
@@ -45,6 +47,23 @@ export interface RollbackDeps {
   canUserRollback: typeof canUserRollback;
   isRollbackableOperation: typeof isRollbackableOperation;
   createMentionNotification: typeof createMentionNotification;
+  /**
+   * POL-2 (independent review of #2762, P1-4): may access that a rollback or redo puts BACK go in? Asked through
+   * `db` (the rollback's transaction) before the write: `admit` writes, anything else skips the write.
+   */
+  admitReentry: (handle: typeof db, input: {
+    driveId: string;
+    userId: string;
+    member?: Record<string, unknown> | null;
+    grants?: Array<{ pageId: string; canView: boolean; canEdit: boolean; canShare: boolean; canDelete: boolean; expiresAt?: Date | string | null }>;
+    requestedBy: string | null;
+    memberRowIsRoleChange?: boolean;
+  }) => Promise<ReentryDecision>;
+  /**
+   * [D-OW-33] runs a rollback or redo write in a savepoint of `handle` and undoes it (OrgLapsedError) when it gave
+   * anyone more on the drive while the drive's org is lapsed: an undone revoke, a re-added member, a restored role.
+   */
+  guardDriveAccess: <T>(handle: typeof db, driveId: string, scope: DriveAccessScope, write: (tx: typeof db) => Promise<T>) => Promise<T>;
   logger: typeof loggers.api;
 }
 
@@ -64,6 +83,8 @@ export function defaultRollbackDeps(): RollbackDeps {
     canUserRollback,
     isRollbackableOperation,
     createMentionNotification,
+    admitReentry: (handle, input) => admitReentry(handle, input),
+    guardDriveAccess: (handle, driveId, scope, write) => guardDriveAccess(handle, driveId, scope, (tx) => write(tx as unknown as typeof db)),
     logger: loggers.api,
   };
 }

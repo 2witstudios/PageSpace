@@ -8,6 +8,8 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { handleChatTurn } from '@/lib/ai/chat-pipeline/handle-chat-turn';
+import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Allow streaming responses up to 5 minutes
 export const maxDuration = 300;
@@ -52,6 +54,13 @@ export async function GET(
         // `null` as "no proven baseline" and refetches on any versioned event.
         rev: null,
       });
+    }
+
+    // SEC-2/3 (D-OW-45): a page or drive conversation carries that org's content, so even its owner reads the
+    // transcript only through a credential the org admits — refused with the sign-in code, like the page itself.
+    const actor = actorFromAuth(auth);
+    if (!(await canAccessConversation(actor, conversation))) {
+      return deniedResponse(actor, conversation.contextId, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
     }
 
     // Parse pagination parameters

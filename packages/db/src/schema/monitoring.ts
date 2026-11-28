@@ -184,6 +184,24 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   // existed; the breakdown query folds null/unknown into 'other'.
   source: text('source'),
 
+  // WAL-5: the wallet this call was charged to. A soft link (no FK), like every id on
+  // this table: usage logs are purged on retention and must never block a wallet delete.
+  // Null on rows written before wallets existed.
+  walletId: text('wallet_id'),
+
+  // SPEND-10: the automation this call ran for when no person was present (a cron, a trigger, a
+  // scheduled run, Zoom enrichment), a typed reference encoded only by lib billing/automation-attribution
+  // (`workflow:<id>` | `zoom:<connectionId>`), so the drive lead sees spend by automation apart from its
+  // creator. A soft link like walletId. Null for a person's own call, a channel mention or a manual Run.
+  automationRef: text('automation_ref'),
+
+  /**
+   * WAL-6b fail closed: when a billable call's charge was first found to name no wallet. Never
+   * charged; terminal for the backfill sweeps, and counted (partial index) on the admin billing
+   * panel for an operator to reconcile. Null for every row that was charged or owed nothing.
+   */
+  unattributedAt: timestamp('unattributed_at', { mode: 'date', withTimezone: true }),
+
   // Metadata
   metadata: jsonb('metadata'),
 
@@ -224,6 +242,10 @@ export const aiUsageLogs = pgTable('ai_usage_logs', {
   reconcileIdx: index('idx_ai_usage_reconcile')
     .on(table.reconcileStatus, table.timestamp)
     .where(sql`reconcile_status = 'pending'`),
+  // Partial: only the (rare) unattributed rows, so the admin panel's count never scans the log.
+  unattributedIdx: index('idx_ai_usage_unattributed')
+    .on(table.unattributedAt)
+    .where(sql`unattributed_at IS NOT NULL`),
 }));
 
 /**

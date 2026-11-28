@@ -26,6 +26,8 @@ import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const oneTapSchema = z.object({
   credential: z.string().min(1, 'Credential is required'),
@@ -225,6 +227,9 @@ export async function POST(req: Request) {
       });
     }
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
     // Provision the Home drive (idempotent) for new or existing users
     let provisionedDrive: ProvisionHomeDriveResult | null = null;
     try {
@@ -241,7 +246,10 @@ export async function POST(req: Request) {
     await revokeSessionsForLogin(user.id, deviceId, 'new_login', 'Google One Tap');
 
     // Create new session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -289,6 +297,7 @@ export async function POST(req: Request) {
     if (deviceId) {
       try {
         deviceTokenValue = await createDeviceToken({
+          authentication,
           userId: user.id, deviceId, tokenVersion: user.tokenVersion,
           platform: platform || 'web',
           deviceName: deviceName || req.headers.get('user-agent') || (platform === 'desktop' ? 'Desktop App' : 'Web Browser'),
@@ -318,7 +327,10 @@ export async function POST(req: Request) {
     });
 
     const { invitedDriveId, invitedPageId, inviteError, kind: inviteKind } = inviteResult;
-    if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
+    if (inviteResult.orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectTo = inviteResult.orgLandingPath;
+    } else if (inviteKind === 'page' && invitedDriveId && invitedPageId) {
       redirectTo = `/dashboard/${invitedDriveId}/pages/${invitedPageId}?invited=1`;
     } else if (inviteKind === 'connection') {
       redirectTo = `/dashboard/connections?connection_requested=1`;

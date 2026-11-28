@@ -68,6 +68,47 @@
         "src/components/ui/**"
       ]
     },
+    "apps/imago": {
+      "ignoreDependencies": [
+        "eslint-config-next",
+        "eslint",
+        "@next/eslint-plugin-next",
+        "eslint-plugin-react-hooks",
+        "eslint-plugin-better-tailwindcss",
+        "tailwindcss",
+        "@ai-sdk/react",
+        "ai",
+        "@dnd-kit/core",
+        "@dnd-kit/sortable",
+        "@dnd-kit/utilities",
+        "@pagespace/db",
+        "@pagespace/editor",
+        "@pagespace/lib",
+        "@tiptap/core",
+        "@tiptap/extension-highlight",
+        "@tiptap/extension-list",
+        "@tiptap/extension-table",
+        "@tiptap/extension-text-align",
+        "@tiptap/extension-text-style",
+        "@tiptap/extensions",
+        "@tiptap/pm",
+        "@tiptap/react",
+        "@tiptap/starter-kit",
+        "lucide-react",
+        "socket.io-client",
+        "streamdown",
+        "swr"
+      ],
+      "entry": [
+        "src/app/**/{page,layout,route}.tsx",
+        "scripts/*.{ts,mjs}",
+        "src/retained-adapters/retained.source.css",
+        "src/retained/styles/tiptap.css"
+      ],
+      "ignore": [
+        "public/pdf.worker.min.mjs"
+      ]
+    },
     "apps/realtime": {
       "entry": [
         "src/index.ts"
@@ -125,6 +166,7 @@
         "src/schema/commands.ts",
         "src/schema/content-tags.ts",
         "src/schema/contact.ts",
+        "src/schema/content-safety.ts",
         "src/schema/conversations.ts",
         "src/schema/core.ts",
         "src/schema/credits.ts",
@@ -166,13 +208,15 @@
         "src/schema/tasks.ts",
         "src/schema/toast-notification-preferences.ts",
         "src/schema/versioning.ts",
+        "src/schema/wallets.ts",
         "src/schema/webhook-triggers.ts",
         "src/schema/workflow-runs.ts",
         "src/schema/workflows.ts",
         "src/schema/zoom.ts",
         "src/test/factories.ts",
         "src/test/require-db.ts",
-        "src/transactions/auth-transactions.ts"
+        "src/transactions/auth-transactions.ts",
+        "src/wallet-backfill.ts"
       ],
       "project": [
         "src/**/*.ts"
@@ -181,6 +225,7 @@
     },
     "packages/lib": {
       "entry": [
+        "src/env-bridge/index.ts",
         "src/agent-accounts/grant.ts",
         "src/agent-accounts/executor/plane-main.ts",
         "src/agent-accounts/account-authority-executor.ts",
@@ -225,6 +270,11 @@
         "src/agent-accounts/build-denial-record.ts",
         "src/agent-accounts/account-authority-key.ts",
         "src/agent-accounts/sign-grant.ts",
+        "src/agent-accounts/refresh/decide-refresh.ts",
+        "src/agent-accounts/refresh/classify-refresh-failure.ts",
+        "src/agent-accounts/migration/plan-migration-step.ts",
+        "src/agent-accounts/guard/decide-decrypt-call-site.ts",
+        "src/agent-accounts/guard/decrypt-guard-policy.ts",
         "src/auth/account-authority-signing-key.ts",
         "src/agent-workspaces/session-contract.ts",
         "src/agent-workspaces/workspace-fractions.ts",
@@ -314,12 +364,17 @@
         "src/billing/credit-backfill.ts",
         "src/billing/credit-balance.ts",
         "src/billing/credit-consume.ts",
+        "src/billing/credit-copy.ts",
         "src/billing/credit-core.ts",
         "src/billing/credit-emit.ts",
         "src/billing/credit-funding.ts",
         "src/billing/credit-gate.ts",
         "src/billing/credit-pricing.ts",
+        "src/billing/invoice-grant.ts",
+        "src/billing/missed-grant-reconcile.ts",
+        "src/billing/money-model.ts",
         "src/billing/sandbox-payer.ts",
+        "src/billing/wallet-core.ts",
         "src/canvas/cert-action.ts",
         "src/canvas/csp.ts",
         "src/canvas/custom-domain-mirror.ts",
@@ -349,6 +404,27 @@
         "src/compliance/retention/activity-log-archival.ts",
         "src/compliance/retention/monitoring-retention.ts",
         "src/compliance/retention/retention-engine.ts",
+        "src/content-safety/blocklist.ts",
+        "src/content-safety/policy.ts",
+        "src/content-safety/upload-gate.ts",
+        "src/content-safety/takedown-plan.ts",
+        "src/content-safety/takedown-request.ts",
+        "src/content-safety/takedown.ts",
+        "src/content-safety/case-store.ts",
+        "src/content-safety/references.ts",
+        "src/content-safety/targets.ts",
+        "src/content-safety/alerts.ts",
+        "src/content-safety/reports.ts",
+        "src/content-safety/report-intake.ts",
+        "src/content-safety/report-store.ts",
+        "src/content-safety/scanner.ts",
+        "src/content-safety/scanner-hive.ts",
+        "src/content-safety/scan-mode.ts",
+        "src/content-safety/scan-policy.ts",
+        "src/content-safety/publish-gate.ts",
+        "src/content-safety/scan-store.ts",
+        "src/content-safety/held-assets.ts",
+        "src/auth/suspend-user.ts",
         "src/config/env-validation.ts",
         "src/consent/index.ts",
         "src/content/activity-diff-utils.ts",
@@ -367,6 +443,9 @@
         "src/content/version-resolver.ts",
         "src/deployment-mode.ts",
         "src/drive-envs/env-sprite-key.ts",
+        "src/drive-envs/env-contract.ts",
+        "src/env-bridge/index.ts",
+        "src/env-bridge/machine-signatures.ts",
         "src/email-templates/BroadcastEmail.tsx",
         "src/email-templates/FeedbackNotificationEmail.tsx",
         "src/email-templates/MagicLinkEmail.tsx",
@@ -701,5 +780,15 @@
     "**/drizzle.config.ts"
   ],
   "ignoreExportsUsedInFile": true,
-  "includeEntryExports": false
+  "includeEntryExports": false,
+  "ignoreIssues": {
+    "apps/imago/src/retained/**": [
+      "exports",
+      "types"
+    ],
+    "apps/imago/src/retained-adapters/{ui-contracts,tool-metadata}.ts": [
+      "exports",
+      "types"
+    ]
+  }
 }

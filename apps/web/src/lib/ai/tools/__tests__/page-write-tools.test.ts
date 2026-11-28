@@ -12,7 +12,16 @@ import { z } from 'zod';
  */
 
 // Mock repository seams - the proper architectural boundaries
+// Org sign-in policy (SEC-2/3) admits every actor here; tests that exercise a refusal override it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorResourceAuthentication: vi.fn(async () => ({ allowed: true })),
+  checkActorDriveAuthentication: vi.fn(async () => ({ allowed: true })),
+  filterDrivesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  filterResourcesForActor: vi.fn(async (_actor: unknown, ids: readonly string[]) => new Set(ids)),
+  explainOrgAuthenticationDenial: vi.fn(async () => null),
+}));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
     canUserDeletePage: vi.fn(),
 }));
@@ -119,7 +128,7 @@ vi.mock('@pagespace/lib/repositories/drive-repository', () => ({
     driveRepository: {
     findById: vi.fn(),
     findByIdBasic: vi.fn(),
-    findByIdAndOwner: vi.fn(),
+    findByIdForLeadAction: vi.fn(),
     trash: vi.fn(),
     restore: vi.fn(),
   },
@@ -131,6 +140,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   applyPageMutation: vi.fn().mockResolvedValue({ deferredTrigger: undefined }),
 }));
 
+vi.mock('@pagespace/lib/permissions/drive-relationship-loader', () => import('@/lib/auth/__tests__/lead-authority-fake'));
 vi.mock('@/lib/websocket', () => ({
   broadcastPageEvent: vi.fn(),
   createPageEventPayload: vi.fn(),
@@ -182,7 +192,10 @@ vi.mock('@/lib/canvas/publish-page', () => ({
 // are real agent pages, so they keep the agent-scoped path.
 vi.mock('@pagespace/db/db', () => ({
   db: {
-    select: () => ({ from: () => ({ where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) }) }),
+    select: () => {
+      const actingPageRow = { where: () => Promise.resolve([{ type: 'AI_CHAT', userScopedAccess: false }]) };
+      return { from: () => ({ ...actingPageRow, leftJoin: () => actingPageRow }) };
+    },
     transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn({})),
   },
 }));
@@ -215,6 +228,9 @@ const mockGetAgentAccessLevel = vi.mocked(getAgentAccessLevel);
 const mockHasAgentDriveMembership = vi.mocked(hasAgentDriveMembership);
 const mockHasAgentDriveAdminRole = vi.mocked(hasAgentDriveAdminRole);
 const mockPageRepo = vi.mocked(pageRepository);
+import { LEAD_ACTION_DRIVES, leadAuthority } from '@/lib/auth/__tests__/lead-authority-fake';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
 const mockDriveRepo = vi.mocked(driveRepository);
 const mockApplyPageMutation = vi.mocked(applyPageMutation);
 const mockEnsureTaskListForPage = vi.mocked(ensureTaskListForPage);
@@ -247,7 +263,7 @@ const sourcePageRow = (
 
 const crossDriveContext = (userId: string) => ({
   toolCallId: '1', messages: [],
-  experimental_context: { userId } as ToolExecutionContext,
+  experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext,
 });
 
 describe('page-write-tools', () => {
@@ -283,7 +299,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -318,7 +334,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -352,7 +368,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -393,7 +409,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -409,7 +425,7 @@ describe('page-write-tools', () => {
       expect(success.linesReplaced).toBe(1);
 
       // Verify repository interactions with correct payloads
-      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'page-1');
+      expect(mockCanUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), 'page-1');
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({
           pageId: 'page-1',
@@ -446,7 +462,7 @@ describe('page-write-tools', () => {
 
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 89, content: payload },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext }
       );
 
       const success = result as { success: boolean; newLineCount: number; previousLineCount: number; stats: { totalLines: number } };
@@ -481,7 +497,7 @@ describe('page-write-tools', () => {
 
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 81, content: 'new', expectedTotalLines: 81 },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext }
       );
 
       const failure = result as { success: boolean; error: string; message: string; totalLines: number };
@@ -512,7 +528,7 @@ describe('page-write-tools', () => {
 
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'Test Doc', pageId: 'page-1', startLine: 1, endLine: 9, content: 'x' },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext }
       );
 
       const failure = result as { success: boolean; error: string; message: string; totalLines: number };
@@ -554,7 +570,7 @@ describe('page-write-tools', () => {
 
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'registry', pageId: 'page-1', startLine: 2, content: '  "leads": [1],' },
-        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext }
       );
 
       const success = result as { success: boolean; contentModeWarning?: string; newLineCount: number };
@@ -584,7 +600,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.replace_lines.execute!(
@@ -624,7 +640,7 @@ describe('page-write-tools', () => {
       };
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       it('creates a DOCUMENT in markdown mode when none is asked for', async () => {
@@ -709,7 +725,7 @@ describe('page-write-tools', () => {
       const contextInDrive = (driveId: string) => ({
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           locationContext: { currentDrive: { id: driveId, name: 'Work', slug: 'work' } },
         } as ToolExecutionContext,
       });
@@ -747,7 +763,7 @@ describe('page-write-tools', () => {
         await expect(
           pageWriteTools.create_page.execute!(
             { title: 'New Page', type: 'DOCUMENT' },
-            { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+            { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext }
           )
         ).rejects.toThrow('no workspace is currently in view');
       });
@@ -797,7 +813,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act & Assert
@@ -824,7 +840,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.create_page.execute!(
@@ -837,7 +853,7 @@ describe('page-write-tools', () => {
       expect(success.success).toBe(true);
       expect(success.id).toBe('new-page-1');
       // drive treated as root parent: canUserEditPage called with driveId
-      expect(mockCanUserEditPage).toHaveBeenCalledWith('user-123', 'drive-1');
+      expect(mockCanUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), 'drive-1');
       expect(mockPageRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'New Page', type: 'DOCUMENT', driveId: 'drive-1', parentId: null })
       );
@@ -849,7 +865,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -869,7 +885,7 @@ describe('page-write-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'page', agentPageId: 'agent-page-1' },
         } as unknown as ToolExecutionContext,
       };
@@ -893,7 +909,7 @@ describe('page-write-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           chatSource: { type: 'page', agentPageId: 'agent-page-1' },
         } as unknown as ToolExecutionContext,
       };
@@ -922,7 +938,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.create_page.execute!(
@@ -945,7 +961,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await pageWriteTools.create_page.execute!(
@@ -1000,7 +1016,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -1051,7 +1067,7 @@ describe('page-write-tools', () => {
       const context = {
         toolCallId: '1', messages: [],
         experimental_context: {
-          userId: 'user-123',
+          userId: 'user-123', accessActor: credentialActor('user-123', null),
           locationContext: { currentPage: { id: 'in-view-page', title: 'Old Title', type: 'DOCUMENT', path: '/p' } },
         } as ToolExecutionContext,
       };
@@ -1068,7 +1084,7 @@ describe('page-write-tools', () => {
     it('throws a clear error when pageId is omitted and no page is in view', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1103,7 +1119,7 @@ describe('page-write-tools', () => {
       });
 
       const executionContext: ToolExecutionContext = {
-        userId: 'user-123',
+        userId: 'user-123', accessActor: credentialActor('user-123', null),
         currentWorkingPage: { id: 'page-1', title: 'Old Title', type: 'DOCUMENT' },
       } as ToolExecutionContext;
       const context = { toolCallId: '1', messages: [], experimental_context: executionContext };
@@ -1140,7 +1156,7 @@ describe('page-write-tools', () => {
       });
 
       const executionContext: ToolExecutionContext = {
-        userId: 'user-123',
+        userId: 'user-123', accessActor: credentialActor('user-123', null),
         currentWorkingPage: { id: 'page-1', title: 'Focused Page', type: 'DOCUMENT' },
       } as ToolExecutionContext;
       const context = { toolCallId: '1', messages: [], experimental_context: executionContext };
@@ -1191,7 +1207,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -1237,7 +1253,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.trash_page.execute!(
@@ -1247,7 +1263,7 @@ describe('page-write-tools', () => {
 
       expect(result.success).toBe(true);
       // Cascade branch was taken: delete permission checked and descendants enumerated.
-      expect(mockCanUserDeletePage).toHaveBeenCalledWith('user-123', 'page-1');
+      expect(mockCanUserDeletePage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-123' }), 'page-1');
       expect(mockPageRepo.getChildIds).toHaveBeenCalledWith('drive-1', 'page-1');
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({ pageId: 'page-1', operation: 'trash' })
@@ -1279,7 +1295,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.trash_page.execute!(
@@ -1318,7 +1334,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1351,7 +1367,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.trash_page.execute!(
@@ -1400,7 +1416,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.trash_page.execute!(
@@ -1418,7 +1434,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1458,12 +1474,14 @@ describe('page-write-tools', () => {
         kind: 'STANDARD' as const,
         isTrashed: false,
         trashedAt: null,
+        orgId: null,
+        orgVisibility: 'OPEN' as const,
       });
       mockDriveRepo.trash.mockResolvedValue(undefined);
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -1489,11 +1507,13 @@ describe('page-write-tools', () => {
         kind: 'STANDARD' as const,
         isTrashed: false,
         trashedAt: null,
+        orgId: null,
+        orgVisibility: 'OPEN' as const,
       });
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1508,7 +1528,7 @@ describe('page-write-tools', () => {
     it('rejects when confirmDriveName is missing', async () => {
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1543,12 +1563,14 @@ describe('page-write-tools', () => {
         kind: 'STANDARD' as const,
         isTrashed: false,
         trashedAt: null,
+        orgId: null,
+        orgVisibility: 'OPEN' as const,
       });
       mockDriveRepo.trash.mockResolvedValue(undefined);
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'admin-user' , accessActor: credentialActor('admin-user', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.trash_drive.execute!(
@@ -1565,7 +1587,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'member-user' , accessActor: credentialActor('member-user', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1614,7 +1636,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.restore_page.execute!(
@@ -1636,7 +1658,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1666,7 +1688,7 @@ describe('page-write-tools', () => {
     });
 
     it('restores a trashed drive successfully', async () => {
-      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+      mockDriveRepo.findByIdForLeadAction.mockResolvedValue({
         id: 'drive-1',
         name: 'My Drive',
         slug: 'my-drive',
@@ -1674,6 +1696,8 @@ describe('page-write-tools', () => {
         kind: 'STANDARD' as const,
         isTrashed: true,
         trashedAt: new Date(),
+        orgId: null,
+        orgVisibility: 'OPEN' as const,
       });
       mockDriveRepo.restore.mockResolvedValue({
         id: 'drive-1',
@@ -1683,7 +1707,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.restore_drive.execute!(
@@ -1698,7 +1722,7 @@ describe('page-write-tools', () => {
     });
 
     it('rejects when the drive is not in trash', async () => {
-      mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+      mockDriveRepo.findByIdForLeadAction.mockResolvedValue({
         id: 'drive-1',
         name: 'My Drive',
         slug: 'my-drive',
@@ -1706,11 +1730,13 @@ describe('page-write-tools', () => {
         kind: 'STANDARD' as const,
         isTrashed: false,
         trashedAt: null,
+        orgId: null,
+        orgVisibility: 'OPEN' as const,
       });
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1720,6 +1746,43 @@ describe('page-write-tools', () => {
         )
       ).rejects.toThrow('not in trash');
       expect(mockDriveRepo.restore).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('trash_drive and restore_drive on org drives (point-guard ruling on #2689)', () => {
+    const context = (userId: string) => ({ toolCallId: '1', messages: [], experimental_context: { userId, accessActor: credentialActor(userId, null) } as ToolExecutionContext });
+
+    beforeEach(() => {
+      leadAuthority.reset();
+    });
+
+    it('ORG-4 (partial) an org Admin trashes an org drive through the owner-or-admin gate, and the org power is audited', async () => {
+      leadAuthority.orgRoles.set('priya', 'ADMIN');
+      mockCheckDriveAccess.mockResolvedValue(adminAccess);
+      mockDriveRepo.findById.mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', kind: 'STANDARD' as const, isTrashed: false, trashedAt: null, ...LEAD_ACTION_DRIVES.org });
+      mockDriveRepo.trash.mockResolvedValue(undefined);
+
+      await pageWriteTools.trash_drive.execute!({ id: 'drive-1', confirmDriveName: 'Finance' }, context('priya'));
+
+      expect(mockDriveRepo.trash).toHaveBeenCalledWith('drive-1');
+      expect(leadAuthority.audited).toEqual([expect.objectContaining({ userId: 'priya', driveId: 'drive-1', action: 'trash', via: 'org-admin' })]);
+    });
+
+    it('the lead trashing writes no org-power event', async () => {
+      mockCheckDriveAccess.mockResolvedValue(ownerAccess);
+      mockDriveRepo.findById.mockResolvedValue({ id: 'drive-1', name: 'Finance', slug: 'finance', kind: 'STANDARD' as const, isTrashed: false, trashedAt: null, ...LEAD_ACTION_DRIVES.org });
+      mockDriveRepo.trash.mockResolvedValue(undefined);
+
+      await pageWriteTools.trash_drive.execute!({ id: 'drive-1', confirmDriveName: 'Finance' }, context('lena'));
+
+      expect(leadAuthority.audited).toEqual([]);
+    });
+
+    it('restore_drive asks the lead-authority lookup for the restore action (the lead, or an org Owner/Admin on an org drive)', async () => {
+      mockDriveRepo.findByIdForLeadAction.mockResolvedValue(null);
+
+      await expect(pageWriteTools.restore_drive.execute!({ id: 'drive-1' }, context('nina'))).rejects.toThrow('do not have permission to restore it');
+      expect(mockDriveRepo.findByIdForLeadAction).toHaveBeenCalledWith('drive-1', expect.objectContaining({ userId: 'nina' }), 'restore');
     });
   });
 
@@ -1757,7 +1820,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1780,7 +1843,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'member-user' , accessActor: credentialActor('member-user', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1807,7 +1870,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'member-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'member-user' , accessActor: credentialActor('member-user', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1830,7 +1893,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'admin-user' , accessActor: credentialActor('admin-user', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.move_page.execute!(
@@ -1883,7 +1946,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'admin-user' } as ToolExecutionContext,
+        experimental_context: { userId: 'admin-user' , accessActor: credentialActor('admin-user', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -1959,7 +2022,7 @@ describe('page-write-tools', () => {
       );
 
       expect(mockMovePagesToDrive).not.toHaveBeenCalled();
-      expect(mockCheckDriveAccess).toHaveBeenCalledWith(SOURCE_DRIVE, 'admin-user');
+      expect(mockCheckDriveAccess).toHaveBeenCalledWith(SOURCE_DRIVE, expect.objectContaining({ userId: 'admin-user' }));
     });
 
     it('denies when the actor cannot administer the DESTINATION drive', async () => {
@@ -2037,7 +2100,7 @@ describe('page-write-tools', () => {
     const agentContext = () => ({
       toolCallId: '1', messages: [],
       experimental_context: {
-        userId: 'user-1',
+        userId: 'user-1', accessActor: credentialActor('user-1', null),
         chatSource: { type: 'page' as const, agentPageId: 'agent-1' },
       } as ToolExecutionContext,
     });
@@ -2093,7 +2156,7 @@ describe('page-write-tools', () => {
           {
             toolCallId: '1', messages: [],
             experimental_context: {
-              userId: 'user-1',
+              userId: 'user-1', accessActor: credentialActor('user-1', null),
               mcpAllowedDriveIds: [SOURCE_DRIVE],
             } as ToolExecutionContext,
           }
@@ -2194,7 +2257,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await expect(
@@ -2216,7 +2279,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.insert_content.execute!(
@@ -2240,7 +2303,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.insert_content.execute!(
@@ -2272,7 +2335,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       const result = await pageWriteTools.insert_content.execute!(
@@ -2330,7 +2393,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       await pageWriteTools.edit_sheet_cells.execute!(
@@ -2389,7 +2452,7 @@ describe('page-write-tools', () => {
 
       const context = {
         toolCallId: '1', messages: [],
-        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
       };
 
       // Act
@@ -2413,7 +2476,7 @@ describe('page-write-tools', () => {
 describe('trash_drive — Home drive guard', () => {
   const context = {
     toolCallId: '1', messages: [],
-    experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+    experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
   };
 
   beforeEach(() => {
@@ -2430,6 +2493,8 @@ describe('trash_drive — Home drive guard', () => {
       kind: 'HOME',
       isTrashed: false,
       trashedAt: null,
+      orgId: null,
+      orgVisibility: 'OPEN' as const,
     });
 
     await expect(
@@ -2453,6 +2518,8 @@ describe('trash_drive — Home drive guard', () => {
       kind: 'HOME',
       isTrashed: false,
       trashedAt: null,
+      orgId: null,
+      orgVisibility: 'OPEN' as const,
     });
 
     try {
@@ -2472,7 +2539,7 @@ describe('trash_drive — Home drive guard', () => {
 describe('restore_drive — Home drive guard', () => {
   const context = {
     toolCallId: '1', messages: [],
-    experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+    experimental_context: { userId: 'user-123' , accessActor: credentialActor('user-123', null)} as ToolExecutionContext,
   };
 
   beforeEach(() => {
@@ -2480,7 +2547,7 @@ describe('restore_drive — Home drive guard', () => {
   });
 
   it('throws when trying to restore a Home drive', async () => {
-    mockDriveRepo.findByIdAndOwner.mockResolvedValue({
+    mockDriveRepo.findByIdForLeadAction.mockResolvedValue({
       id: 'home-drive',
       name: 'Home',
       slug: 'home',
@@ -2488,6 +2555,8 @@ describe('restore_drive — Home drive guard', () => {
       kind: 'HOME',
       isTrashed: true,  // technically trashed (shouldn't happen, but defensive)
       trashedAt: new Date(),
+      orgId: null,
+      orgVisibility: 'OPEN' as const,
     });
 
     await expect(

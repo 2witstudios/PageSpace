@@ -1,5 +1,8 @@
+import { resolvePersonalCapabilityTier } from '@pagespace/lib/billing/deployment-capability';
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, getPrincipalDriveAccess, isAuthError } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { offeredModels } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import {
@@ -24,8 +27,10 @@ function availabilityOptions() {
 }
 
 /**
- * GET /api/ai/settings
- * Returns deployment-level provider availability and the user's selected provider/model.
+ * GET /api/ai/settings[?driveId=]
+ * Returns deployment-level provider availability and the user's selected provider/model. With `driveId` (a drive the
+ * caller can reach), also `allowedModels`: the models that drive's org lets its pickers offer (POL-8), as provider →
+ * allowed model ids (a dynamic provider: the allowed ids, or null for any), or null when nothing is restricted.
  */
 export async function GET(request: Request) {
   try {
@@ -35,6 +40,12 @@ export async function GET(request: Request) {
       return auth.error;
     }
     const userId = auth.userId;
+
+    const driveId = new URL(request.url).searchParams.get('driveId');
+    if (driveId && !(await getPrincipalDriveAccess(auth, driveId))) {
+      // A member the org's sign-in policy holds back is told to sign in again, not just refused (D-OW-45).
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
+    }
 
     const user = await aiSettingsRepository.getUserSettings(userId);
     // Every cloud vendor is OpenRouter-backed and user-visible; on-prem masking is
@@ -62,10 +73,11 @@ export async function GET(request: Request) {
       currentProvider,
       currentModel,
       imageGenerationModel: user?.imageGenerationModel ?? null,
-      userSubscriptionTier: user?.subscriptionTier || 'free',
+      userSubscriptionTier: resolvePersonalCapabilityTier(user?.subscriptionTier),
       isAdmin: auth.role === 'admin',
       providers,
       isAnyProviderConfigured: Object.values(providers).some((p) => p.isAvailable),
+      allowedModels: await offeredModels(driveId),
     });
   } catch (error) {
     loggers.ai.error('Failed to get AI settings', error as Error);
@@ -154,7 +166,7 @@ export async function PATCH(request: Request) {
       return createAdminRestrictedResponse();
     }
 
-    if (requiresProSubscription(provider, model, user.subscriptionTier ?? undefined, auth.role === 'admin')) {
+    if (requiresProSubscription(provider, model, resolvePersonalCapabilityTier(user.subscriptionTier), auth.role === 'admin')) {
       return NextResponse.json(
         {
           error: 'Subscription required',

@@ -1,0 +1,1 @@
+CREATE INDEX "idx_security_audit_org_chain_seq" ON "security_audit_log" USING btree (("details" ->> 'orgId'),"chain_seq") WHERE ("security_audit_log"."details" ->> 'orgId') IS NOT NULL;

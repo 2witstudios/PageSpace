@@ -4,6 +4,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, checkMC
 import { getActivityById, previewRollback } from '@/services/api';
 import type { RollbackContext } from '@pagespace/lib/permissions/rollback-permissions';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -65,18 +66,18 @@ export async function GET(
   if (activity.pageId) {
     const canView = await canPrincipalViewPage(auth, activity.pageId);
     if (!canView) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), activity.pageId, NextResponse.json(
         { error: 'Unauthorized - you do not have access to this page' },
         { status: 403 }
-      );
+      ));
     }
   } else if (activity.driveId) {
     const isMember = await isPrincipalDriveMember(auth, activity.driveId);
     if (!isMember) {
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), activity.driveId, NextResponse.json(
         { error: 'Unauthorized - you do not have access to this drive' },
         { status: 403 }
-      );
+      ));
     }
   } else if (activity.userId !== userId) {
     // User-level activities can only be viewed by the activity owner
@@ -89,7 +90,7 @@ export async function GET(
   auditRequest(request, { eventType: 'data.read', userId, resourceType: 'activity', resourceId: activityId });
 
   // Get rollback preview to determine eligibility
-  const preview = await previewRollback(activityId, userId, rollbackContext);
+  const preview = await previewRollback(activityId, actorFromAuth(auth), rollbackContext);
 
   return NextResponse.json({
     activity,

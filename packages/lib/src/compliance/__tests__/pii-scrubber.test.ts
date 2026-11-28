@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scrubPII } from '../pii-scrubber';
+import { scrubEmails, scrubPII } from '../pii-scrubber';
 
 describe('scrubPII', () => {
   it('given_emailAddress_replacesWithRedactedMarker', () => {
@@ -70,3 +70,34 @@ describe('scrubPII', () => {
     expect(result).not.toContain('[CC_REDACTED]');
   });
 });
+
+describe('scrubEmails — linear, and exactly the old email regex (CodeQL js/polynomial-redos, #2760)', () => {
+  const REGEX = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+
+  it('redacts exactly what the global regex matched, on 20,000 random strings built from the characters that matter', () => {
+    const alphabet = 'aZ9._%+-@ .xy@:';
+    // A fixed-seed LCG: the same strings every run, so a mismatch is reproducible.
+    let seed = 2760;
+    const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let n = 0; n < 20_000; n++) {
+      const len = Math.floor(next() * 30);
+      let text = '';
+      for (let i = 0; i < len; i++) text += alphabet[Math.floor(next() * alphabet.length)];
+      expect(scrubEmails(text), JSON.stringify(text)).toBe(text.replace(REGEX, '[EMAIL_REDACTED]'));
+    }
+  });
+
+  it('matches the regex on the shapes that matter', () => {
+    for (const text of ['a@b.co', 'x a.b+c@d-e.example.com y', 'a@b@c.com', 'a@.com', 'a@b.c', 'a@b.c0m.io9', '@b.com', 'a@b.com@c.org', 'u@h.co.uk.', 'q@w.ee,r@t.yy']) {
+      expect(scrubEmails(text), text).toBe(text.replace(REGEX, '[EMAIL_REDACTED]'));
+    }
+  });
+
+  it('stays linear on the input that made the regex quadratic: a long run of local-part characters with no @', () => {
+    const started = Date.now();
+    expect(scrubPII('%'.repeat(200_000))).toBe('%'.repeat(200_000));
+    expect(scrubEmails(`${'a.'.repeat(100_000)}@${'b'.repeat(100_000)}`)).toContain('@');
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+

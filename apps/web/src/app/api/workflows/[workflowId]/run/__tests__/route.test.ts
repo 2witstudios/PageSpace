@@ -15,7 +15,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockReturning: vi.fn().mockResolvedValue([{ id: 'wf_1' }]),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
@@ -67,6 +69,10 @@ vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
 }));
 
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
 import { POST } from '../../run/route';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
@@ -114,6 +120,10 @@ const createDriveFixture = (overrides: { id: string; name: string; ownerId?: str
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const mockWorkflow = {
@@ -132,7 +142,8 @@ const mockWorkflow = {
   eventDebounceSecs: null,
   instructionPageId: null,
   nextRunAt: null,
-  createdBy: 'user_123',
+  createdBy: 'user_123' as string | null,
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -170,6 +181,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       durationMs: 1,
     });
     vi.mocked(getNextRunDate).mockReturnValue(new Date('2025-06-01T09:00:00Z'));
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
   });
 
   test('returns 401 when not authenticated', async () => {
@@ -203,76 +215,18 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     expect(response.status).toBe(403);
   });
 
-  describe('credit-gate refusals', () => {
-    test('given an unclaimed agent refused with requires_funding, should answer 402 with the claim payload, not advance the schedule, and not audit a run', async () => {
-      vi.mocked(executeWorkflow).mockResolvedValue({
-        success: false,
-        durationMs: 0,
-        runId: 'run_refused',
-        error: 'AI credit gate denied: requires_funding',
-        refusal: { reason: 'requires_funding', kind: 'terminal' },
-      });
+  test.each([
+    ['flagged owner-left', { ownerLeftAt: new Date() }],
+    ['whose creator deleted their account', { createdBy: null }],
+  ])('SPEND-6 (partial) a Run of a workflow %s is refused 409 owner_left before the executor or any gate ([D-OW-36])', async (_label, overrides) => {
+    mockSelectWhere.mockResolvedValue([{ ...mockWorkflow, ...overrides }]);
 
-      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
-      const body = await response.json();
+    const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
 
-      expect(response.status).toBe(402);
-      expect(body.code).toBe('requires_funding');
-      // The Run button toasts `error` verbatim, so it reads as a sentence, not a code.
-      expect(body.error).toMatch(/claim/);
-      expect(body.claim_url).toEqual(expect.any(String));
-      expect(getNextRunDate).not.toHaveBeenCalled();
-      expect(mockUpdateSet).not.toHaveBeenCalled();
-      expect(auditRequest).not.toHaveBeenCalled();
-    });
-
-    test('given a concurrency refusal, should answer 429 too_many_in_flight', async () => {
-      vi.mocked(executeWorkflow).mockResolvedValue({
-        success: false,
-        durationMs: 0,
-        runId: 'run_refused',
-        error: 'AI credit gate denied: too_many_in_flight',
-        refusal: { reason: 'too_many_in_flight', kind: 'transient' },
-      });
-
-      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
-
-      expect(response.status).toBe(429);
-      expect((await response.json()).code).toBe('too_many_in_flight');
-      expect(getNextRunDate).not.toHaveBeenCalled();
-    });
-
-    test('out of credits: 402 with a readable error and no claim_url, and the schedule is not advanced', async () => {
-      vi.mocked(executeWorkflow).mockResolvedValue({
-        success: false,
-        skipped: true,
-        durationMs: 0,
-        runId: 'run_refused',
-        error: 'AI credit gate denied: out_of_credits',
-        refusal: { reason: 'out_of_credits', kind: 'terminal' },
-      });
-
-      const response = await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
-      const body = await response.json();
-
-      expect(response.status).toBe(402);
-      expect(body.code).toBe('out_of_credits');
-      expect(body.error).toMatch(/credit balance is too low/);
-      expect(body.claim_url).toBeUndefined();
-      expect(getNextRunDate).not.toHaveBeenCalled();
-    });
-
-    test('hands the executor only the run input, billed to the workflow owner (not the clicker) — the executor gates it inside its claim', async () => {
-      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
-      vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
-
-      await POST(new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }), createContext('wf_1'));
-
-      const call = vi.mocked(executeWorkflow).mock.calls[0];
-      expect(call).toHaveLength(1);
-      expect(call[0].createdBy).toBe('user_123');
-      expect(call[0].source).toEqual({ table: 'manual', id: null, triggerAt: null });
-    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'owner_left' });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
   });
 
   test('returns 409 when executor reports a claim conflict', async () => {
@@ -317,7 +271,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       agentPageId: mockWorkflow.agentPageId,
       prompt: mockWorkflow.prompt,
       timezone: mockWorkflow.timezone,
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   test('non-scheduled workflow is treated as not found', async () => {
@@ -364,5 +318,98 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const body = await response.json();
     expect(body.success).toBe(false);
     expect(body.error).toBe('Agent crashed');
+  });
+
+  describe('credit gate', () => {
+    const run = () => POST(
+      new Request('https://example.com/api/workflows/wf_1/run', { method: 'POST' }),
+      createContext('wf_1'),
+    );
+
+    // An executor stand-in that consults `admit` the way the real one does
+    // (inside its claim): a refusal comes back as a skipped run.
+    const executorThatAdmits = () => vi.mocked(executeWorkflow).mockImplementation(async (_input, options) => {
+      const admission = await options?.admit?.();
+      if (admission && !admission.admitted) {
+        const reason = admission.reason as 'out_of_credits' | 'too_many_in_flight' | 'requires_funding';
+        const kind = reason === 'too_many_in_flight' ? 'transient' as const : 'terminal' as const;
+        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error, refusal: { reason, kind } };
+      }
+      return { success: true, durationMs: 1 };
+    });
+
+    const denyWith = (reason: string) => mockCreditAdmission.mockImplementation(
+      () => async () => ({ admitted: false, error: `AI credit gate denied: ${reason}`, reason }),
+    );
+
+    test('SPEND-6 (partial) WAL-7 (partial) hands the executor the credit gate as its admit hook: the drive the workflow runs in pays, and the person who pressed Run is gated, so their caps bind', async () => {
+      vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth('admin_clicker'));
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
+      await run();
+
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', undefined, 'admin_clicker');
+      expect(input.createdBy).toBe('user_123');
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(mockWorkflow.driveId);
+    });
+
+    test('out of credits: 402 with a readable error, and the schedule is not advanced', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
+
+      const response = await run();
+
+      expect(response.status).toBe(402);
+      // The Run button toasts `error` verbatim, so it must read as a sentence, not a code.
+      const body = await response.json();
+      expect(body.code).toBe('out_of_credits');
+      expect(body.error).toMatch(/credit balance is too low/);
+      expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('an unclaimed agent: 402 requires_funding with the claim_url it needs, a readable error, no schedule advance and no run audit', async () => {
+      executorThatAdmits();
+      denyWith('requires_funding');
+
+      const response = await run();
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body.code).toBe('requires_funding');
+      expect(body.error).toMatch(/claim/);
+      expect(body.claim_url).toEqual(expect.any(String));
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+
+    test('out of credits carries no claim_url', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
+
+      expect((await (await run()).json()).claim_url).toBeUndefined();
+    });
+
+    test('in-flight cap: 429', async () => {
+      executorThatAdmits();
+      denyWith('too_many_in_flight');
+
+      const response = await run();
+
+      expect(response.status).toBe(429);
+    });
+
+    test('an admitted run returns the normal result', async () => {
+      executorThatAdmits();
+
+      const response = await run();
+
+      expect(response.status).toBe(200);
+      expect((await response.json()).success).toBe(true);
+    });
   });
 });

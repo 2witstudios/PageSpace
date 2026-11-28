@@ -14,7 +14,7 @@ const globalAssistantView = readFileSync(
 
 describe('GlobalAssistantView home guidance', () => {
   it('keeps the full Home guidance in the empty state without mounting a conversation status strip', () => {
-    expect(globalAssistantView).toContain('<HomeLine line={homeLine} />');
+    expect(globalAssistantView).toContain('<HomeLine line={homeLine} signInRequired={homeSignInRequired} />');
     expect(globalAssistantView).toContain('<HomeSuggestions suggestions={homeLine.suggestions} onSelect={setInput} />');
     expect(globalAssistantView).not.toContain('HomeStrip');
   });

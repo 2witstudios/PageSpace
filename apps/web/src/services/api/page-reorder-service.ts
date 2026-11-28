@@ -6,6 +6,7 @@ import { validatePageMove } from '@pagespace/lib/pages/circular-reference-guard'
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from './page-mutation-service';
 import { syncTaskItemOnMove } from './task-sync-service';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Result types for page reorder operations
@@ -28,7 +29,7 @@ export interface ReorderParams {
   pageId: string;
   newParentId: string | null;
   newPosition: number;
-  userId: string;
+  actor: AccessActor;
   metadata?: Record<string, unknown>;
 }
 
@@ -49,7 +50,8 @@ export const pageReorderService = {
    * Handles authorization, validation, and the actual move in a transaction
    */
   async reorderPage(params: ReorderParams): Promise<ReorderResult> {
-    const { pageId, newParentId, newPosition, userId } = params;
+    const { pageId, newParentId, newPosition, actor } = params;
+    const userId = actor.userId;
 
     let driveId: string | null = null;
     let pageTitle: string | null = null;
@@ -83,7 +85,7 @@ export const pageReorderService = {
 
       // Check authorization: user must be owner or ACCEPTED admin — a pending
       // ADMIN invite grants nothing.
-      const isOwnerOrAdmin = await isDriveOwnerOrAdmin(userId, driveId);
+      const isOwnerOrAdmin = await isDriveOwnerOrAdmin(actor, driveId);
 
       if (!isOwnerOrAdmin) {
         return { success: false, error: 'Only drive owners and admins can reorder pages.', status: 403 };

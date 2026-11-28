@@ -63,11 +63,6 @@ describe('Rate Limit Middleware', () => {
       expect(requiresProSubscription('anthropic', PAID_MODEL, 'pro')).toBe(false);
     });
 
-    it('does not gate the founder tier on any model in cloud mode', () => {
-      vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
-      expect(requiresProSubscription('anthropic', PAID_MODEL, 'founder')).toBe(false);
-    });
-
     it('treats any non-free truthy tier as paid (full catalog) in cloud mode', () => {
       vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
       // Any truthy tier other than 'free' gets the full catalog.

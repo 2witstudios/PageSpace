@@ -17,7 +17,7 @@ export const channelsSendHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.channels.send({ pageId: channelId, content: message }));
+  const result = await callSdk(ctx, () => ctx.sdk.channels.send({ pageId: channelId, content: message }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

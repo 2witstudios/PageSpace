@@ -3,9 +3,13 @@
 import { useAuth } from "@/hooks/useAuth";
 import { useSocket } from "@/hooks/useSocket";
 import { useAccessRevocation } from "@/hooks/useAccessRevocation";
+import { useOrgRealtime } from "@/hooks/useOrgs";
+import { useSurfaceOrgId } from "@/hooks/useSurfaceOrgId";
+import { OrgSurfaceBanner } from "@/components/orgs/OrgSurfaceBanner";
 import { useNotificationToasts } from "@/hooks/useNotificationToasts";
 import { useDesktopNotifications } from "@/hooks/useDesktopNotifications";
 import { useNativeBadgeSync } from "@/hooks/useNativeBadgeSync";
+import { useAppleTransactionObserver } from "@/hooks/useAppleTransactionObserver";
 import TopBar from "@/components/layout/main-header";
 import MemoizedSidebar from "@/components/layout/left-sidebar/MemoizedSidebar";
 import CenterPanel from "@/components/layout/middle-content/CenterPanel";
@@ -17,6 +21,7 @@ import { VoiceSessionProvider } from "@/contexts/VoiceSessionContext";
 import { useBreakpoint } from "@/hooks/useBreakpoint";
 import { motion, AnimatePresence } from "motion/react";
 import { DebugPanel } from "./DebugPanel";
+import { OrgReauthenticationPrompt } from "@/components/auth/OrgReauthenticationPrompt";
 import { useLayoutStore } from "@/stores/useLayoutStore";
 import { useHasHydrated } from "@/hooks/useHasHydrated";
 import { usePerformanceMonitor } from "@/hooks/usePerformanceMonitor";
@@ -170,6 +175,10 @@ function Layout({ children }: LayoutProps) {
   // Handle real-time permission revocation (zero-trust security)
   useAccessRevocation();
 
+  // X-4: the picker's org groups, the crumb and Account Settings follow org:changed (join, leave, rename, delete),
+  // and so does the org this screen belongs to: its banner turns on or off live when it lapses or is paid.
+  useOrgRealtime(useSurfaceOrgId());
+
   // Show live toast popups for new notifications, anywhere in the app
   useNotificationToasts();
 
@@ -178,6 +187,9 @@ function Layout({ children }: LayoutProps) {
 
   // Keep the native app-icon badge in sync with the unread count (reactive SSOT projection)
   useNativeBadgeSync();
+
+  // iOS In-App Purchase: deliver renewals, Ask to Buy and interrupted purchases to the server
+  useAppleTransactionObserver(isAuthenticated);
 
   // Monitor performance
   usePerformanceMonitor();
@@ -498,6 +510,8 @@ function Layout({ children }: LayoutProps) {
                       </motion.div>
                     )}
                   </AnimatePresence>
+                  {/* SEAT-9: the lapse banner on every org surface (org pages, open org drives) */}
+                  <OrgSurfaceBanner />
                   {children ? (
                     <div className="flex flex-1 flex-col min-h-0 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
                       {children}
@@ -573,6 +587,8 @@ function Layout({ children }: LayoutProps) {
           </ResizablePanelGroup>
 
           <DebugPanel />
+          {/* D-OW-45: one prompt for every org sign-in denial the fetch layer reports. */}
+          <OrgReauthenticationPrompt />
         </div>
 
         {isSheetBreakpoint && (

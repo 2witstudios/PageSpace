@@ -22,6 +22,7 @@
  * handshake runs against fakes with no live network and no real microphone.
  */
 
+import { readSpendFallbackBody, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { REALTIME_DATA_CHANNEL } from './session';
 import type { VoiceTarget } from './voice-target';
 import { parseEvent } from '@pagespace/lib/realtime/voice-events';
@@ -78,6 +79,10 @@ export type VoiceConnection = {
   readonly attached: boolean;
   /** The server-enforced ceiling on this call, for chaining ahead of it. */
   readonly maxDurationMs: number | undefined;
+  /** SPEND-4: the call's opening gate moved it to another source (the route's `spendFallback`); null otherwise. */
+  readonly spendFallback: SpendFallbackNotice | null;
+  /** POL-8: why the conversation's earlier messages were left out of this call, or null when they were not. */
+  readonly historyWithheld: string | null;
   /** The stream this connection OWNS. Stopped by `stop`, and only by `stop`. */
   readonly microphone: MediaStream;
   /** Silence or unsilence the mic without renegotiating or dropping the call. */
@@ -370,6 +375,9 @@ export const connectVoiceCall = async (
       body: JSON.stringify({
         sdp: offer.sdp,
         conversationId: deps.target.conversationId,
+        // Names the page of a fresh page-agent thread (no row until its first message),
+        // so the server can resolve the drive the call spends in (SPEND-1).
+        ...(deps.target.agentPageId === undefined ? {} : { agentPageId: deps.target.agentPageId }),
         ...(deps.timezone === undefined ? {} : { timezone: deps.timezone }),
         ...(deps.locationContext === undefined
           ? {}
@@ -397,12 +405,16 @@ export const connectVoiceCall = async (
   let callId: string;
   let attached: boolean;
   let maxDurationMs: number | undefined;
+  let spendFallback: SpendFallbackNotice | null = null;
+  let historyWithheld: string | null = null;
   try {
     const body = (await response.json()) as {
       callId?: unknown;
       answerSdp?: unknown;
       attached?: unknown;
       maxDurationMs?: unknown;
+      spendFallback?: unknown;
+      historyWithheld?: unknown;
     };
     if (typeof body.callId !== 'string' || body.callId.length === 0) {
       stop();
@@ -424,6 +436,8 @@ export const connectVoiceCall = async (
     attached = body.attached === true;
     maxDurationMs =
       typeof body.maxDurationMs === 'number' ? body.maxDurationMs : undefined;
+    spendFallback = readSpendFallbackBody(body.spendFallback);
+    historyWithheld = typeof body.historyWithheld === 'string' && body.historyWithheld.length > 0 ? body.historyWithheld : null;
 
     await peer.setRemoteDescription({ type: 'answer', sdp: body.answerSdp });
   } catch (error) {
@@ -441,6 +455,8 @@ export const connectVoiceCall = async (
       callId,
       attached,
       maxDurationMs,
+      spendFallback,
+      historyWithheld,
       microphone,
       setMicrophoneEnabled,
       stop,

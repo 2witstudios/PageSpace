@@ -34,6 +34,16 @@ STYLE:
 • Be concise but conversational - like a knowledgeable colleague
 • Match user energy - conversational when exploring, efficient when executing`;
 
+/**
+ * How the agent sees drive files. Stated plainly because agents that were never
+ * told this concluded they "can't see files" and wrote that into memory pages.
+ * Copying a file's real bytes into the sandbox is covered by copy_content's own
+ * description.
+ */
+export const FILE_VISION_PROMPT = `FILES:
+• read_page shows you images and PDFs when your model has vision: an image FILE page arrives as the image, and a scanned or image-only PDF arrives as the PDF itself or as page images. Pass \`pages\` (e.g. "6-10") to page through a long PDF; the result says which pages to ask for next.
+• Look at a file with read_page before saying you cannot see it, and never note in memory that you can't see files. Without vision, read_page returns the file's details and any extracted text: tell the user that switching this chat to a vision model would let you see it.`;
+
 export const TOOL_DISCOVERY_PROMPT = `TOOLS:
 Core tools (list/read drives and pages, search, create, edit content) can be called directly.
 All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first. If a call IS rejected for bad parameters, the rejection carries the schema — correct it and call again, no tool_search needed. Note that unrecognised OPTIONAL keys are dropped rather than rejected, so a filter or limit you invented is silently ignored: look the schema up when the result has to be narrowed correctly.`;
@@ -408,6 +418,12 @@ function buildSandboxInstructions(availableTools?: string[]): string {
         : null,
     ].filter(Boolean).join(' '),
     persistenceBullet,
+    // Drive files <-> sandbox. Said plainly because the failure it prevents is
+    // an agent concluding "I can't work with that upload" (and writing that
+    // into its memory) when copy_content would have put the file itself here.
+    has('copy_content')
+      ? '• Drive files: copy_content copies an uploaded FILE page (PDF, image, archive, …) into /workspace as the REAL FILE — its original bytes, not its extracted text — so you can work on it with tools (pdfimages, tesseract, python). To put a sandbox file into the drive as a real file, copy it with to.kind "new_file_page" (a parentId and a title with its extension).'
+      : null,
     hasBash ? '• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not).' : null,
     hasBash && hasAnyGitFamily
       ? '• bash has NO GitHub credentials. For anything touching GitHub (clone/fetch/pull/push, PRs, issues) use the dedicated git_*/gh_* tools — they carry your connected GitHub auth.'
@@ -510,6 +526,7 @@ export function buildSystemPrompt(
     personalizationPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
+    allowedToolNames === undefined || allowedToolNames.includes('read_page') ? FILE_VISION_PROMPT : null,
     includeSandboxInstructions ? buildSandboxInstructions(allowedToolNames) : null,
   ].filter(Boolean);
 

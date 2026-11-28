@@ -21,6 +21,7 @@ vi.mock('@pagespace/db/schema/members', () => ({
   },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(async () => false),
 }));
 vi.mock('@pagespace/lib/pages/circular-reference-guard', () => ({
@@ -40,6 +41,7 @@ import { db } from '@pagespace/db/db';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { applyPageMutation } from '../page-mutation-service';
 import { pageReorderService } from '../page-reorder-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 type MockFn = ReturnType<typeof vi.fn>;
 type MemberRow = { driveId: string; userId: string; role: string; acceptedAt: Date | null };
@@ -82,7 +84,7 @@ function seed(row: MemberRow, canonicalAnswer: boolean) {
 }
 
 const reorder = (userId: string) =>
-  pageReorderService.reorderPage({ pageId: 'page-1', newParentId: null, newPosition: 1, userId });
+  pageReorderService.reorderPage({ pageId: 'page-1', newParentId: null, newPosition: 1, actor: credentialActor(userId, null) });
 
 describe('pageReorderService.reorderPage — pending invites', () => {
   beforeEach(() => {
@@ -104,7 +106,7 @@ describe('pageReorderService.reorderPage — pending invites', () => {
     const result = await reorder('user-1');
 
     expect(result).toEqual({ success: true, driveId: 'drive-1', pageTitle: 'Page' });
-    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith('user-1', 'drive-1');
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'drive-1');
     expect(applyPageMutation).toHaveBeenCalledTimes(1);
   });
 
@@ -133,5 +135,34 @@ describe('pageReorderService.reorderPage — pending invites', () => {
 
     expect(result).toMatchObject({ success: false, status: 403 });
     expect(applyPageMutation).not.toHaveBeenCalled();
+  });
+});
+
+describe('pageReorderService.reorderPage — org drives (B7c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('X-6 (partial) a stale source=org ADMIN row reorders nothing: the org-aware isDriveOwnerOrAdmin refuses, and the service reads no drive_members row of its own', async () => {
+    seed({ driveId: 'drive-1', userId: 'user-1', role: 'ADMIN', acceptedAt: new Date('2026-09-01') }, false);
+    const fromTables: string[] = [];
+    const inner = mockDb.select.getMockImplementation() as () => { from: (t: { __table: string }) => unknown };
+    mockDb.select.mockImplementation(() => ({ from: (t: { __table: string }) => { fromTables.push(t.__table); return inner().from(t); } }));
+
+    const result = await reorder('user-1');
+
+    expect(result).toMatchObject({ success: false, status: 403 });
+    expect(fromTables).toContain('pages');
+    expect(fromTables).not.toContain('driveMembers');
+    expect(applyPageMutation).not.toHaveBeenCalled();
+  });
+
+  it('ORG-4 (partial) an org Admin with no drive_members row reorders pages, because isDriveOwnerOrAdmin answers ADMIN through org power', async () => {
+    seed({ driveId: 'drive-1', userId: 'someone-else', role: 'MEMBER', acceptedAt: new Date('2026-09-01') }, true);
+
+    const result = await reorder('org-admin-1');
+
+    expect(result).toMatchObject({ success: true });
+    expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: 'org-admin-1' }), 'drive-1');
   });
 });

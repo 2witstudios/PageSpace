@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 
 // Schema tables are opaque markers in these tests; the mock tx ignores them.
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', driveId: 'pages.driveId', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));

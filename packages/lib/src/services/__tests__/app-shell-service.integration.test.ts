@@ -6,17 +6,26 @@
  *   ./scripts/test-with-db.sh
  *   bun run --filter '@pagespace/lib' test -- src/services/__tests__/app-shell-service.integration.test.ts
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
+import { db, pool } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { connections } from '@pagespace/db/schema/social';
 import { loadAppShell } from '../app-shell-service';
+import { cleanupNorthwind, northwind } from '../../permissions/__tests__/fixtures/northwind-org-drives';
+import { credentialActor } from '../../permissions/access-actor';
+
 
 describe('loadAppShell (integration)', () => {
+  // Each integration file gets its own pool in the shared fork; release it so later files keep
+  // their connections (lib test:integration runs every file in one fork).
+  afterAll(async () => {
+    await pool.end();
+  });
+
   beforeEach(async () => {
     // FK-order delete to avoid cascade contention.
     await db.delete(channelMessages);
@@ -45,7 +54,7 @@ describe('loadAppShell (integration)', () => {
       acceptedAt: new Date(),
     });
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.user.id).toBe(callerUser.id);
     expect(shell.user.email).toBe(callerUser.email);
@@ -81,7 +90,7 @@ describe('loadAppShell (integration)', () => {
     const otherDrive = await factories.createDrive(otherUser.id);
     await factories.createPage(otherDrive.id);
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.drives.map((d) => d.id)).toEqual([callerDrive.id]);
     expect(shell.driveMembers.every((m) => m.driveId === callerDrive.id)).toBe(true);
@@ -104,7 +113,7 @@ describe('loadAppShell (integration)', () => {
       canDelete: false,
     });
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: otherDrive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: otherDrive.id });
 
     expect(shell.drives.map((d) => d.id)).not.toContain(otherDrive.id);
     expect(shell.driveMembers.some((m) => m.driveId === otherDrive.id)).toBe(false);
@@ -122,7 +131,7 @@ describe('loadAppShell (integration)', () => {
       acceptedAt: null,
     });
 
-    const shell = await loadAppShell(callerUser.id);
+    const shell = await loadAppShell(credentialActor(callerUser.id, null));
 
     expect(shell.drives.map((d) => d.id)).not.toContain(pendingDrive.id);
     expect(shell.driveMembers.some((m) => m.driveId === pendingDrive.id)).toBe(false);
@@ -140,7 +149,7 @@ describe('loadAppShell (integration)', () => {
     // Trashed page should NOT appear in the tree.
     await factories.createPage(drive.id, { isTrashed: true, trashedAt: new Date() });
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: drive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: drive.id });
 
     expect(shell.activeDrive?.driveId).toBe(drive.id);
     const treeIds = shell.activeDrive?.tree.map((n) => n.id).sort() ?? [];
@@ -153,7 +162,7 @@ describe('loadAppShell (integration)', () => {
     const otherDrive = await factories.createDrive(stranger.id);
     await factories.createPage(otherDrive.id);
 
-    const shell = await loadAppShell(callerUser.id, { activeDriveId: otherDrive.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { activeDriveId: otherDrive.id });
 
     expect(shell.activeDrive).toBeUndefined();
   });
@@ -163,7 +172,7 @@ describe('loadAppShell (integration)', () => {
     const drive = await factories.createDrive(callerUser.id);
     const page = await factories.createPage(drive.id, { type: 'DOCUMENT', title: 'Hello' });
 
-    const shell = await loadAppShell(callerUser.id, { currentPageId: page.id });
+    const shell = await loadAppShell(credentialActor(callerUser.id, null), { currentPageId: page.id });
 
     expect(shell.currentPage?.page.id).toBe(page.id);
     expect(shell.currentPage?.page.title).toBe('Hello');
@@ -172,6 +181,25 @@ describe('loadAppShell (integration)', () => {
   });
 
   it('throws when the caller user does not exist', async () => {
-    await expect(loadAppShell('does-not-exist')).rejects.toThrow(/user not found/);
+    await expect(loadAppShell(credentialActor('does-not-exist', null))).rejects.toThrow(/user not found/);
+  });
+
+  describe('org drives (B7c)', () => {
+    afterEach(async () => {
+      await cleanupNorthwind();
+    }, 120_000);
+
+    const shellDrives = async (userId: string) =>
+      (await loadAppShell(credentialActor(userId, null))).drives.map((d) => `${d.name}:${d.role}:${d.isOwned ? 'owned' : 'joined'}`).sort();
+
+    it('DRV-5 (partial) X-6 (partial) the shell lists what the org-aware member-drive set lists: an implicit Open member with no row, never a stale org row, and the lead of an org drive owns it', async () => {
+      const f = await northwind();
+
+      expect(await shellDrives(f.people.nina.id)).toEqual(['Marcus Notes:ADMIN:joined', 'Product:MEMBER:joined']);
+      expect(await shellDrives(f.people.dana.id)).toEqual(['Acme Wiki:OWNER:owned', 'Marcus Notes:MEMBER:joined']);
+      expect(await shellDrives(f.people.marcus.id)).toEqual(['Marcus Notes:OWNER:owned', 'Product:MEMBER:joined']);
+      expect(await shellDrives(f.people.priya.id)).toEqual(['Product:ADMIN:joined']);
+      expect(await shellDrives(f.people.lena.id)).toEqual(['Customer Research:OWNER:owned', 'Finance:OWNER:owned', 'Product:OWNER:owned']);
+    });
   });
 });

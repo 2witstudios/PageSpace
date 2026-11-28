@@ -62,6 +62,27 @@ describe('buildSystemPrompt — general', () => {
   });
 });
 
+describe('buildSystemPrompt — seeing files', () => {
+  it('says plainly that read_page shows images and PDFs to vision models', () => {
+    const result = buildSystemPrompt();
+    expect(result).toContain('read_page shows you images and PDFs');
+    expect(result).toMatch(/vision/);
+    expect(result).toContain('pages');
+  });
+
+  it('tells the agent not to record that it cannot see files', () => {
+    expect(buildSystemPrompt()).toMatch(/never note .*can't see files/i);
+  });
+
+  it('is present when read_page is in the allowed tools', () => {
+    expect(buildSystemPrompt(false, undefined, false, ['read_page'])).toContain('read_page shows you images and PDFs');
+  });
+
+  it('is left out when the agent cannot call read_page', () => {
+    expect(buildSystemPrompt(false, undefined, false, ['list_pages'])).not.toContain('read_page shows you images and PDFs');
+  });
+});
+
 describe('buildSystemPrompt — sandbox guidance', () => {
   it('given codeExecutionEnabled true, should include the sandbox guidance section', () => {
     const result = buildSystemPrompt(false, undefined, true);
@@ -447,6 +468,20 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('editFile');
     // reuse-don't-recreate
     expect(result).toContain('gh_pr_list');
+  });
+
+  it('given copy_content with sandbox tools, should say it copies the REAL FILE into the sandbox and back as a FILE page', () => {
+    // The incident: an agent recorded "I can't work with that PDF" in its
+    // memory when copy_content would have put the PDF itself in /workspace.
+    const result = buildSystemPrompt(false, undefined, true, ['bash', 'copy_content']);
+    expect(result).toMatch(/copy_content copies an uploaded FILE page[^\n]*REAL FILE/);
+    expect(result).toContain('not its extracted text');
+    expect(result).toContain('new_file_page');
+  });
+
+  it('given sandbox tools WITHOUT copy_content, should not name it', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['bash']);
+    expect(result).not.toContain('copy_content copies');
   });
 
   it('given the sandbox guidance, should include the Constraints{} block treating tool output as untrusted', () => {

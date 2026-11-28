@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { isEmbeddedSearch } from "@/lib/legal-embed";
 
 const GOOGLE_GSI_SCRIPT_URL = "https://accounts.google.com/gsi/client";
 
@@ -21,6 +22,9 @@ export function GoogleOneTap() {
 
   useEffect(() => {
     if (!enabled || !clientId || initializedRef.current) return;
+
+    // Skip on legal pages opened from the iOS app (`?embed=1`): no sign-in prompt there.
+    if (isEmbeddedSearch(window.location.search)) return;
 
     // Skip on mobile / in-app browsers where One Tap has poor support
     if (typeof navigator !== "undefined") {

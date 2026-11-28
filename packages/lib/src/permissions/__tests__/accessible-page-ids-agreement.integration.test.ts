@@ -28,6 +28,7 @@ import { driveRoles } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2';
 import { accessiblePageIds } from '../accessible-page-ids';
 import { getUserAccessLevel } from '../permissions';
+import { credentialActor } from '../access-actor';
 
 const seededUserIds: string[] = [];
 
@@ -43,6 +44,15 @@ afterAll(async () => {
   // from the seeded users, so this removes exactly this file's rows.
   await db.delete(users).where(inArray(users.id, seededUserIds));
 });
+
+// accessible_page_ids_for_user resolves the CASE per row after joining every
+// non-trashed page in the database, so each call scans the whole pages table,
+// not the user's drives. Measured here: ~0.4s at 21k pages, ~0.95s at 100k,
+// ~2.3s at 300k unloaded. CI runs this after every workspace has seeded the
+// shared database, under turbo's parallel coverage run, and timed out at 5s
+// (run 37323255723). The budget covers that; the scan itself needs a
+// migration rewriting the function (IMG-4.2a handoff).
+const AGREEMENT_TIMEOUT_MS = 30_000;
 
 const ON = { canView: true, canEdit: false, canShare: false };
 const OFF = { canView: false, canEdit: false, canShare: false };
@@ -129,21 +139,39 @@ describe('accessible_page_ids_for_user agrees with getUserAccessLevel (integrati
           await factories.createPagePermission(privatePage2.id, u, { canView: true });
         },
       },
+      {
+        label: 'guest with one grant',
+        setup: async (u) => {
+          await factories.createDriveMember(drive.id, u, { role: 'GUEST' });
+          await factories.createPagePermission(open2.id, u, { canView: true });
+        },
+      },
+      {
+        label: 'guest with no grant',
+        setup: async (u) => { await factories.createDriveMember(drive.id, u, { role: 'GUEST' }); },
+      },
+      {
+        label: 'guest carrying a custom role that would grant drive-wide',
+        setup: async (u) => {
+          await factories.createDriveMember(drive.id, u, { role: 'GUEST', customRoleId: await role({ [privatePage.id]: ON }, ON) });
+          await factories.createPagePermission(open.id, u, { canView: true });
+        },
+      },
     ];
 
     for (const c of cases) {
       const userId = c.label === 'owner' ? owner.id : (await seedUser()).id;
       await c.setup(userId);
 
-      const fromSql = new Set(await accessiblePageIds(userId));
+      const fromSql = new Set(await accessiblePageIds(credentialActor(userId, null)));
       const sqlInDrive = pageIds.filter((id) => fromSql.has(id)).sort();
 
       const fromTs: string[] = [];
       for (const pageId of pageIds) {
-        if ((await getUserAccessLevel(userId, pageId))?.canView) fromTs.push(pageId);
+        if ((await getUserAccessLevel(credentialActor(userId, null), pageId))?.canView) fromTs.push(pageId);
       }
 
       expect(sqlInDrive, c.label).toEqual(fromTs.sort());
     }
-  });
+  }, AGREEMENT_TIMEOUT_MS);
 });

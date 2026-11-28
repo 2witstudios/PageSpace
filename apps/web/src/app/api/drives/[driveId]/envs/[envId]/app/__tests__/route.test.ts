@@ -11,6 +11,9 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+vi.mock('@pagespace/lib/billing/compute-gate', () => ({ admitDriveComputeCreator: vi.fn(), admitDriveOrgActive: vi.fn() }));
+vi.mock('@pagespace/lib/permissions/app-unpark-authority', () => ({ canUnparkPublishedApp: vi.fn() }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
@@ -63,11 +66,15 @@ vi.mock('@pagespace/db/db', () => ({
 }));
 vi.mock('@/lib/app-hosting/published-app-dto', () => ({
   findPublishedAppByEnvId: vi.fn(),
-  toPublishedAppDTO: vi.fn((app: { id: string }) => ({ id: app.id })),
+  toPublishedAppDTO: vi.fn((app: { id: string }, viewerCanUnpark = false) => ({ id: app.id, viewerCanUnpark })),
 }));
 
-import { POST } from '../route';
-import { authenticateRequestWithOptions, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { GET, POST } from '../route';
+import { canUnparkPublishedApp } from '@pagespace/lib/permissions/app-unpark-authority';
+import { admitDriveComputeCreator, admitDriveOrgActive } from '@pagespace/lib/billing/compute-gate';
+import { getDrivePolicies } from '@pagespace/lib/organizations/policy-reader';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
+import { authenticateRequestWithOptions, isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { createPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { findPublishedAppByEnvId } from '@/lib/app-hosting/published-app-dto';
@@ -91,12 +98,36 @@ const appRow = { id: PUBLISHED_APP_ID, envId: ENV_ID, subdomain: 'staging-abc' }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getDrivePolicies).mockResolvedValue({ policies: DEFAULT_ORG_POLICIES } as never);
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: USER_ID } as never);
   vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
   vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
   vi.mocked(findPublishedAppByEnvId).mockResolvedValue(null);
+  vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: true });
+  vi.mocked(admitDriveOrgActive).mockResolvedValue({ allowed: true });
   vi.mocked(createPublishedApp).mockResolvedValue({ ok: true, app: appRow } as never);
   updateReturning.mockReset().mockResolvedValue([{ id: PUBLISHED_APP_ID, status: 'building' }]);
+});
+
+describe('POST /app — an org that turned published apps off', () => {
+  it('POL-10 refuses 403 org_policy before the buildability check, the snapshot or the provisioner', async () => {
+    vi.mocked(getDrivePolicies).mockResolvedValue({ policies: { ...DEFAULT_ORG_POLICIES, publishedApps: false } } as never);
+    const response = await POST(postReq(), envParams);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy', policy: 'publishedApps' });
+    expect(ensureBuildableSource).not.toHaveBeenCalled();
+    expect(snapshotEnvFilesystem).not.toHaveBeenCalled();
+    expect(createPublishedApp).not.toHaveBeenCalled();
+  });
+
+  it('POL-10 maps the provisioner\'s own org_policy refusal the same way', async () => {
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
+    vi.mocked(snapshotEnvFilesystem).mockResolvedValue({ ok: true, tarPath: '/t.tar.gz', cleanup: vi.fn() } as never);
+    vi.mocked(createPublishedApp).mockResolvedValue({ ok: false, reason: 'org_policy' } as never);
+    const response = await POST(postReq(), envParams);
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'org_policy' });
+  });
 });
 
 describe('POST /app — the up-front buildability refusal (D1)', () => {
@@ -235,5 +266,82 @@ describe('POST /app — the up-front buildability refusal (D1)', () => {
     expect(ensureBuildableSource).toHaveBeenCalledWith(envRow.sandboxId);
     expect(snapshotEnvFilesystem).toHaveBeenCalled();
     expect(enqueuePublishBuild).toHaveBeenCalled();
+  });
+});
+
+describe('POST /app — the publisher\'s per-member cap ([D-OW-28])', () => {
+  it('WAL-2 (partial) a FIRST publish by a member at their cap is refused 402 before any snapshot, and no app is created', async () => {
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, code: 'org_member_cap_reached', message: 'You have used your allowance' });
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: 'You have used your allowance', code: 'org_member_cap_reached' });
+    expect(admitDriveComputeCreator).toHaveBeenCalledWith({ driveId: expect.any(String), userId: USER_ID });
+    expect(snapshotEnvFilesystem).not.toHaveBeenCalled();
+    expect(createPublishedApp).not.toHaveBeenCalled();
+  });
+
+  it('a RE-publish creates nothing new, so it is not re-admitted', async () => {
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue({ allowed: false, code: 'org_member_cap_reached', message: 'cap' });
+
+    await POST(postReq(), envParams);
+
+    expect(admitDriveComputeCreator).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /app — a lapsed org publishes nothing (review #2761 P2-1)', () => {
+  const LAPSED = { allowed: false as const, code: 'org_lapsed' as const, message: 'This organization\'s subscription has lapsed.' };
+
+  it('SEAT-9 (partial) a RE-publish of an existing app in a lapsed org is refused 402 org_lapsed before any snapshot, upload or build', async () => {
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+    vi.mocked(admitDriveOrgActive).mockResolvedValue(LAPSED);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(402);
+    expect(await response.json()).toEqual({ error: LAPSED.message, code: 'org_lapsed' });
+    expect(admitDriveOrgActive).toHaveBeenCalledWith({ driveId: DRIVE_ID });
+    expect(ensureBuildableSource).not.toHaveBeenCalled();
+    expect(snapshotEnvFilesystem).not.toHaveBeenCalled();
+    expect(enqueuePublishBuild).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) a FIRST publish in a lapsed org is refused with code org_lapsed, not the member-cap code', async () => {
+    vi.mocked(admitDriveOrgActive).mockResolvedValue(LAPSED);
+    vi.mocked(admitDriveComputeCreator).mockResolvedValue(LAPSED);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(402);
+    expect((await response.json()).code).toBe('org_lapsed');
+    expect(createPublishedApp).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /app — whether this viewer may un-park a parked app', () => {
+  const getReq = () => new Request(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}/app`);
+
+  it('WAL-2 (partial) asks the permissions module for a PARKED app and says so on the row', async () => {
+    vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'parked', driveId: DRIVE_ID, costOwnerId: USER_ID } as never);
+    vi.mocked(canUnparkPublishedApp).mockResolvedValue(true);
+
+    const response = await GET(getReq(), envParams);
+
+    expect(await response.json()).toEqual({ app: { id: PUBLISHED_APP_ID, viewerCanUnpark: true } });
+    expect(canUnparkPublishedApp).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), expect.objectContaining({ driveId: DRIVE_ID, costOwnerId: USER_ID }));
+  });
+
+  it('does not ask for an app that is not parked', async () => {
+    vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
+    vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'running' } as never);
+
+    const response = await GET(getReq(), envParams);
+
+    expect(await response.json()).toEqual({ app: { id: PUBLISHED_APP_ID, viewerCanUnpark: false } });
+    expect(canUnparkPublishedApp).not.toHaveBeenCalled();
   });
 });

@@ -2,6 +2,7 @@ import 'server-only';
 import { NextRequest, NextResponse } from 'next/server';
 import {
   authenticateSessionRequest,
+  type SessionAuthResult,
   isAuthError as isAuthResultError,
 } from './index';
 
@@ -9,6 +10,7 @@ export { isSafeReturnUrl, isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '.
 export { getClientIP } from '@pagespace/lib/security/client-ip';
 
 export interface AuthUser {
+  authentication?: SessionAuthResult['authentication'];
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
@@ -33,6 +35,7 @@ async function getAuthUser(request: Request | NextRequest): Promise<AuthUser | n
     tokenVersion: result.tokenVersion,
     tokenType: 'session',
     sessionId: result.sessionId,
+    authentication: result.authentication,
   } satisfies AuthUser;
 }
 

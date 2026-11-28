@@ -44,11 +44,12 @@ describe('pageRevocationKickPayloads (pure)', () => {
 });
 
 describe('driveScopedKickPayloads (pure)', () => {
-  it('targets only the drive, drive calendar, and drive activity rooms', () => {
+  it('targets only the drive, drive calendar, drive wallet and drive activity rooms', () => {
     const payloads = driveScopedKickPayloads({ userId, driveId, driveName: 'Team', reason: 'member_removed' });
     expect(payloads.map((p) => p.roomPattern)).toEqual([
       `drive:${driveId}`,
       `drive:${driveId}:calendar`,
+      `drive:${driveId}:wallet`,
       `activity:drive:${driveId}`,
     ]);
     expect(payloads[0].metadata).toEqual({ driveId, driveName: 'Team' });
@@ -61,7 +62,7 @@ describe('driveScopedKickPayloads (pure)', () => {
 });
 
 describe('driveRevocationKickPayloads (pure)', () => {
-  it('targets drive, drive calendar, drive activity, and every page room in the drive', () => {
+  it('targets drive, drive calendar, drive wallet, drive activity, and every page room in the drive', () => {
     const payloads = driveRevocationKickPayloads({
       userId,
       driveId,
@@ -73,6 +74,7 @@ describe('driveRevocationKickPayloads (pure)', () => {
     expect(payloads.map((p) => p.roomPattern)).toEqual([
       `drive:${driveId}`,
       `drive:${driveId}:calendar`,
+      `drive:${driveId}:wallet`,
       `activity:drive:${driveId}`,
       pageA,
       `activity:page:${pageA}`,
@@ -82,12 +84,12 @@ describe('driveRevocationKickPayloads (pure)', () => {
     expect(payloads.every((p) => p.userId === userId && p.reason === 'member_removed')).toBe(true);
     // Drive-level payloads carry the driveName so the client can explain the kick.
     expect(payloads[0].metadata).toEqual({ driveId, driveName: 'Team' });
-    expect(payloads[3].metadata).toEqual({ pageId: pageA });
+    expect(payloads[4].metadata).toEqual({ pageId: pageA });
   });
 
   it('omits driveName from metadata when not provided and handles zero pages', () => {
     const payloads = driveRevocationKickPayloads({ userId, driveId, pageIds: [], reason: 'member_removed' });
-    expect(payloads).toHaveLength(3);
+    expect(payloads).toHaveLength(4);
     expect(payloads[0].metadata).toEqual({ driveId });
   });
 });
@@ -140,6 +142,7 @@ describe('kickForDriveMembershipRevocation (shell)', () => {
       expect.arrayContaining([
         `drive:${driveId}`,
         `drive:${driveId}:calendar`,
+        `drive:${driveId}:wallet`,
         `activity:drive:${driveId}`,
         pageA,
         `activity:page:${pageA}`,
@@ -197,6 +200,7 @@ describe('kickForDriveMembershipRevocation (shell)', () => {
       expect.arrayContaining([
         `drive:${driveId}`,
         `drive:${driveId}:calendar`,
+        `drive:${driveId}:wallet`,
         `activity:drive:${driveId}`,
         pageA,
         `activity:page:${pageA}`,

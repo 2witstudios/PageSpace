@@ -9,10 +9,10 @@
  */
 
 import {
-  getUserStorageQuota,
-  checkStorageQuota,
+  resolveUploadQuotaTarget,
+  checkUploadQuotaTarget,
   reserveConcurrentUploadSlot,
-  updateStorageUsage,
+  chargeStorageForStore,
   shouldChargeForStore,
 } from '@pagespace/lib/services/storage-limits';
 import { releasePendingUpload } from '@pagespace/lib/services/pending-uploads';
@@ -29,12 +29,31 @@ import {
 } from '@pagespace/lib/services/attachment-upload-core';
 import { sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isUploadBlocked } from '@pagespace/lib/content-safety/upload-gate';
+import { CONTENT_BLOCKED_MESSAGE, CONTENT_BLOCKED_STATUS } from '@pagespace/lib/content-safety/policy';
 import { getActorInfo, logFileActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { checkObjectExists, issuePresignedPutUrl } from './s3-effects';
+import { checkObjectExists, deleteStoredObject, issuePresignedPutUrl } from './s3-effects';
+import { promoteStagedUpload } from './promote-staged-upload';
+import { buildUploadStagingKey } from './upload-staging';
 import { verifyAttachmentBytes, type AttachmentVerifyResult } from './attachment-verify-effect';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const PRESIGN_TTL = 900;
+
+/** Neutral refusal for a blocklisted hash — never says why. */
+const contentBlockedResult = (): OrchestratorResult => ({
+  status: CONTENT_BLOCKED_STATUS,
+  body: { error: CONTENT_BLOCKED_MESSAGE },
+});
+
+/** IDs recorded on the audit event when a blocked attachment is refused. */
+function blockedAttemptDetails(target: AttachmentTarget): Record<string, unknown> {
+  return {
+    targetType: target.type,
+    targetId: target.type === 'page' ? target.pageId : target.conversationId,
+  };
+}
 
 export interface OrchestratorResult {
   status: number;
@@ -59,14 +78,24 @@ export interface PresignAttachmentArgs {
 export async function presignAttachment(args: PresignAttachmentArgs): Promise<OrchestratorResult> {
   const { userId, target, request, contentHash, filename, mimeType, fileSize } = args;
 
-  const quota = await getUserStorageQuota(userId);
-  if (!quota) return { status: 500, body: { error: 'Could not retrieve storage quota' } };
+  // WAL-9, O-9: a channel attachment in an org drive is checked against the org's quota; a DM
+  // attachment has no drive and stays on the uploader's. Resolved once, so the org's usage is
+  // read once per request (#2719 review P2-2).
+  const fileDriveId = attachmentFileDriveId(target);
+  const quotaTarget = await resolveUploadQuotaTarget(userId, fileDriveId);
+  if (!quotaTarget) return { status: 500, body: { error: 'Could not retrieve storage quota' } };
+  const { quota } = quotaTarget;
 
   const validation = validateAttachmentPresign({ contentHash, mimeType, fileSize, tier: quota.tier });
   if (!validation.ok) return { status: validation.status, body: { error: validation.error } };
   const canonicalHash = validation.canonicalHash;
 
-  const quotaCheck = await checkStorageQuota(userId, fileSize);
+  // Content blocklist — before any storage probe, slot or presigned URL.
+  if (await isUploadBlocked({ contentHash: canonicalHash, userId, entryPoint: 'attachment.presign', request, details: blockedAttemptDetails(target) })) {
+    return contentBlockedResult();
+  }
+
+  const quotaCheck = await checkUploadQuotaTarget(quotaTarget, fileSize);
   if (!quotaCheck.allowed) {
     return { status: 413, body: { error: quotaCheck.reason, storageInfo: quotaCheck.quota } };
   }
@@ -107,7 +136,9 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
       return { status: 200, body: { alreadyExists: true, jobId, key } };
     }
 
-    const url = await issuePresignedPutUrl(key, mimeType, fileSize, PRESIGN_TTL);
+    // A per-job staging key, never `key` itself: completion publishes only bytes
+    // it hashed, so a re-PUT later can't overwrite the served object.
+    const url = await issuePresignedPutUrl(buildUploadStagingKey(jobId), mimeType, fileSize, PRESIGN_TTL);
     const expiresAt = new Date(Date.now() + PRESIGN_TTL * 1000).toISOString();
 
     auditRequest(request, {
@@ -127,7 +158,7 @@ export async function presignAttachment(args: PresignAttachmentArgs): Promise<Or
 }
 
 export interface CompleteAttachmentArgs {
-  userId: string;
+  actor: AccessActor;
   target: AttachmentTarget;
   request: Request;
   jobId: string;
@@ -141,7 +172,8 @@ export interface CompleteAttachmentArgs {
  * target-agnostic FileAttachment the client references when sending the message.
  */
 export async function completeAttachment(args: CompleteAttachmentArgs): Promise<OrchestratorResult> {
-  const { userId, target, request, jobId, filename } = args;
+  const { actor, target, request, jobId, filename } = args;
+  const userId = actor.userId;
 
   // hash/size/mime + target come from the presign-reserved slot, never the body —
   // and the slot must be an attachment slot bound to *this* target.
@@ -152,7 +184,43 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // Only the content hash is read from the slot: the MIME and byte length are
   // taken from the processor's verification result (authoritative), not the
   // client-declared presign values.
-  const { contentHash } = reserved;
+  const { contentHash, fileSize: reservedSize } = reserved;
+
+  // Content blocklist, re-checked: the hash may have been blocked since presign,
+  // and the dedup path reaches here without any PUT. Before the processor reads it.
+  // A lookup that throws must still release both reservations, like every other
+  // failure below, then propagate.
+  let blocked: boolean;
+  try {
+    blocked = await isUploadBlocked({ contentHash, userId, entryPoint: 'attachment.complete', request, details: blockedAttemptDetails(target) });
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    throw err;
+  }
+  if (blocked) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    return contentBlockedResult();
+  }
+
+  // Publish the staged bytes to the served key, but only a server-only copy this
+  // server hashed (promote-staged-upload.ts). With no staging object (dedup
+  // fast-path) the served object is already there; the processor verify below
+  // re-hashes it either way and supplies the true MIME type.
+  try {
+    const promoted = await promoteStagedUpload({ jobId, contentHash, maxBytes: reservedSize, servedKey: buildS3Key(contentHash) });
+    if (promoted.status === 'mismatch') {
+      uploadSemaphore.releaseUploadSlot(jobId);
+      await releasePendingUpload(jobId).catch(() => undefined);
+      return { status: 422, body: { error: 'Uploaded file failed integrity verification' } };
+    }
+  } catch (err) {
+    uploadSemaphore.releaseUploadSlot(jobId);
+    await releasePendingUpload(jobId).catch(() => undefined);
+    loggers.api.error('Attachment staging promotion failed', err as Error);
+    return { status: 503, body: { error: 'File verification is temporarily unavailable. Please try again.' } };
+  }
 
   // Synchronous byte verification before any rows exist. The processor re-hashes
   // the stored object (deleting it on mismatch) and returns the true MIME type and
@@ -161,7 +229,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
   // semaphore's stale-slot sweep and the user hits their concurrency cap meanwhile.
   let verify: AttachmentVerifyResult;
   try {
-    verify = await verifyAttachmentBytes({ userId, target, contentHash });
+    verify = await verifyAttachmentBytes({ actor, target, contentHash });
   } catch (err) {
     uploadSemaphore.releaseUploadSlot(jobId);
     await releasePendingUpload(jobId).catch(() => undefined);
@@ -217,10 +285,7 @@ export async function completeAttachment(args: CompleteAttachmentArgs): Promise<
       });
     });
     if (shouldChargeForStore(fileWasInserted)) {
-      await updateStorageUsage(userId, resolvedSize, {
-        driveId: attachmentFileDriveId(target) ?? undefined,
-        eventType: 'upload',
-      });
+      await chargeStorageForStore(userId, attachmentFileDriveId(target), resolvedSize, { eventType: 'upload' });
     }
     auditRequest(request, {
       eventType: 'data.write',
@@ -271,5 +336,7 @@ export async function cancelAttachment(args: { userId: string; jobId: string }):
 
   uploadSemaphore.releaseUploadSlot(jobId);
   await releasePendingUpload(jobId).catch(() => undefined);
+  // Whatever was PUT for this job is served by nothing; best-effort removal.
+  await Promise.resolve().then(() => deleteStoredObject(buildUploadStagingKey(jobId))).catch(() => undefined);
   return { status: 200, body: { success: true } };
 }

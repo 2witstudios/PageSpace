@@ -491,6 +491,7 @@ describe('recordDedicatedSubscription', () => {
   const facts = (over: Record<string, unknown> = {}) => ({
     publishedAppId: 'app_1',
     userId: 'user_1',
+    orgId: null,
     stripeSubscriptionId: 'sub_1',
     stripePriceId: 'price_1',
     guestPreset: 'shared-cpu-1x-512',
@@ -506,6 +507,7 @@ describe('recordDedicatedSubscription', () => {
     id: 'pas_1',
     publishedAppId: 'app_1',
     userId: 'user_1',
+    orgId: null,
     stripeSubscriptionId: 'sub_1',
     stripePriceId: 'price_1',
     guestPreset: 'shared-cpu-1x-512',

@@ -1,0 +1,153 @@
+import { describe, test } from 'vitest';
+import { assert } from 'riteway/vitest';
+import { pointers } from '../chat-model/fixtures';
+import { agentFor, agentMenu, imagoPageIdOf } from './chat-agents';
+
+const builtins = pointers().agents;
+const driveAgents = [
+  { id: 'a1', title: 'Support' },
+  { id: 'a2', title: 'Release notes' },
+];
+
+describe('agentMenu()', () => {
+  test('Imago agents first, then the drive’s', () => {
+    assert({
+      given: "the viewer's Imago and the agents the server lists in the open drive, with Imago answering",
+      should: 'offer Imago first, then the drive’s agents under its name, with Imago chosen',
+      actual: agentMenu({ builtins, driveAgents, driveName: 'Alpha', selected: null }),
+      expected: {
+        value: 'p-imago',
+        groups: [
+          {
+            label: 'Imago',
+            options: [
+              { value: 'p-imago', title: 'Imago', disabled: false, meta: 'Global · your chosen model', imago: true },
+            ],
+          },
+          {
+            label: 'Agents in Alpha',
+            options: [
+              { value: 'a1', title: 'Support', disabled: false },
+              { value: 'a2', title: 'Release notes', disabled: false },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  test('in the Home drive', () => {
+    const home = [{ id: 'p-imago', title: 'Imago' }, { id: 'a9', title: 'Journal' }];
+    assert({
+      given: 'the Home drive, whose agent list holds Imago too',
+      should: 'list Imago once, in the Imago group',
+      actual: agentMenu({ builtins, driveAgents: home, driveName: 'Home', selected: null }).groups.map((group) =>
+        group.options.map((option) => option.value),
+      ),
+      expected: [['p-imago'], ['a9']],
+    });
+  });
+
+  test('Imago not provisioned yet', () => {
+    assert({
+      given: 'Imago with no page yet',
+      should: 'show it, but not as something to choose',
+      actual: agentMenu({ builtins: pointers({ imago: null }).agents, driveAgents: [], selected: null }).groups,
+      expected: [
+        {
+          label: 'Imago',
+          options: [{ value: 'pending:imago', title: 'Imago', disabled: true, meta: 'Global · your chosen model', imago: true }],
+        },
+      ],
+    });
+  });
+
+  test('the chosen agent', () => {
+    const elsewhere = agentMenu({ builtins, driveAgents, driveName: 'Beta', selected: { id: 'b7', title: 'Legal' } });
+    assert({
+      given: 'an agent of the drive chosen, and one chosen in another drive before moving here',
+      should: 'name the chosen one as the value, and keep the one from elsewhere offered so the header still names it',
+      actual: [
+        agentMenu({ builtins, driveAgents, driveName: 'Alpha', selected: { id: 'a2', title: 'Release notes' } }).value,
+        elsewhere.value,
+        elsewhere.groups.map((group) => group.label),
+        elsewhere.groups.at(-1)?.options,
+      ],
+      expected: ['a2', 'b7', ['Imago', 'Agents in Beta', 'Chosen'], [{ value: 'b7', title: 'Legal', disabled: false }]],
+    });
+  });
+
+  test('nothing loaded yet', () => {
+    assert({
+      given: 'neither list loaded, and no drive open',
+      should: 'offer nothing and choose nothing',
+      actual: [agentMenu({ selected: null }), agentMenu({ builtins, selected: null }).groups.length],
+      expected: [{ value: '', groups: [] }, 1],
+    });
+  });
+});
+
+describe('agentFor()', () => {
+  test('a chosen option', () => {
+    const lists = { builtins, driveAgents };
+    assert({
+      given: 'Imago, a drive agent, an unprovisioned Imago and an unknown value',
+      should: 'answer null for Imago (the default), the agent for the drive one, and undefined for what cannot be chosen',
+      actual: [
+        agentFor(lists, 'p-imago'),
+        agentFor(lists, 'a1'),
+        agentFor({ builtins: pointers({ imago: null }).agents }, 'pending:imago'),
+        agentFor(lists, 'zz'),
+      ],
+      expected: [null, { id: 'a1', title: 'Support' }, undefined, undefined],
+    });
+  });
+});
+
+describe('the v3 picker rows (IMC-2.1)', () => {
+  const builtins = [{ key: 'imago', title: 'Imago', pageId: 'p-imago' }] as const;
+  const driveAgents = [
+    { id: 'a1', title: 'Launch Agent', aiModel: 'claude-sonnet-5-5', parentId: 'f-launch' },
+    { id: 'a2', title: 'Inbox Triage', aiModel: 'claude-haiku-5-5', parentId: 'root' },
+  ];
+  const folders: Readonly<Record<string, string>> = { 'f-launch': 'Launch' };
+  const menu = agentMenu({
+    builtins: [...builtins],
+    driveAgents,
+    driveName: 'Studio',
+    selected: null,
+    folderTitle: (id) => folders[id],
+  });
+
+  test('Imago first, then the drive’s agents', () => {
+    assert({
+      given: 'the Imago agent and two drive agents',
+      should: 'offer Imago (global, your model) then "Agents in Studio" with model · folder',
+      actual: menu.groups.map((group) => [group.label, group.options.map((option) => [option.title, option.meta])]),
+      expected: [
+        ['Imago', [['Imago', 'Global · your chosen model']]],
+        ['Agents in Studio', [['Launch Agent', 'claude-sonnet-5-5 · Launch'], ['Inbox Triage', 'claude-haiku-5-5 · Studio']]],
+      ],
+    });
+  });
+});
+
+describe('imagoPageIdOf()', () => {
+  test('a provisioned Imago', () => {
+    assert({
+      given: "the viewer's Imago pointers",
+      should: "name Imago's page",
+      actual: imagoPageIdOf(builtins),
+      expected: 'p-imago',
+    });
+  });
+
+  test('before it loads or is provisioned', () => {
+    assert({
+      given: 'no pointers yet, and an Imago with no page',
+      should: 'name no page',
+      actual: [imagoPageIdOf(undefined), imagoPageIdOf([{ key: 'imago', pageId: null, title: 'Imago' }])],
+      expected: [null, null],
+    });
+  });
+});

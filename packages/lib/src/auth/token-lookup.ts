@@ -83,6 +83,8 @@ export async function findMCPTokenByValue(
  * OAuth 2.1 access token record with user relation (ADR 0003 §3.1-3.2).
  */
 export interface OAuthAccessTokenRecord {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   id: string;
   userId: string;
   scopes: string[];

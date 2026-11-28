@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { getHasMoreTasks, isLoadingNextTaskPage, redistributeTasksAcrossPages, getTaskLoadMoreState, getLoadMoreButtonLabel } from '../TaskListView';
 import type { TaskItem } from '../task-list-types';
 

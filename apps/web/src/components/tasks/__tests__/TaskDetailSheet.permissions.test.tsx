@@ -23,7 +23,7 @@
  */
 import React from 'react';
 import { describe, it, vi, beforeEach } from 'vitest';
-import { assert } from '@/hooks/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { render, screen } from '@testing-library/react';
 import type { Task } from '../types';
 

@@ -110,7 +110,7 @@
  * Envs differ from sessions in exactly one billing-relevant way, and it is a
  * structural one: an env has NO owner column to fall back to (`createdBy` is
  * audit only), so its payer is the drive owner or nobody — see
- * `resolveEnvPayerId`, and the skip-on-unresolvable rule below.
+ * `resolveEnvPayer`, and the skip-on-unresolvable rule below.
  *
  * **Widened once more by published apps, on exactly the same terms.** A published
  * app's rootfs is the only cost a stopped app still incurs — its awake-seconds go
@@ -144,7 +144,17 @@
  */
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
-import { resolveEnvPayerId } from '../../billing/sandbox-payer';
+import {
+  payerForDrive,
+  resolveEnvCharge,
+  type DriveBillingFacts,
+  type LookupDriveBillingFacts,
+} from '../../billing/sandbox-payer';
+import { capAccrualCostDollars, computeChargeFor, type ComputeCharge } from '../../billing/compute-charge';
+import type { OrgPoolAccrualReservation } from '../../billing/credit-gate';
+import { orgBacklogStart } from '../../billing/org-compute-epoch-core';
+import { chargeMillicents } from '../../billing/credit-core';
+import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { storageBillingTarget, type StorageSubject } from './sandbox-storage-attribution';
 import { loggers } from '../../logging/logger-config';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
@@ -279,7 +289,7 @@ export interface AgentSessionStorageRow {
  *
  *  - `driveId` is NOT nullable. An env has no user-scoped form (there is no
  *    "global assistant env"), so there is no `ownerId` branch and no payer of
- *    last resort — see `resolveEnvPayerId`.
+ *    last resort — see `resolveEnvPayer`.
  *  - there is no `ownerId` at all. `drive_envs.createdBy` is AUDIT ONLY and is
  *    deliberately not read here.
  *
@@ -295,6 +305,8 @@ export interface DriveEnvStorageRow {
   envId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** Last opportunistically-measured used bytes on the ENV Sprite; null when never measured. */
   measuredBytes: number | null;
@@ -337,6 +349,8 @@ export interface PublishedAppStorageRow {
   publishedAppId: string;
   /** The owning drive — NOT NULL, and the ONLY route to a payer. */
   driveId: string;
+  /** D-OW-28: whose cap this charge counts against — the env's creator; null = the drive lead. */
+  costOwnerId: string | null;
   storageLastBilledAt: Date;
   /** The pinned image's registry size, from `imageSizeBytes`; null until the first build lands. */
   measuredBytes: number | null;
@@ -371,16 +385,30 @@ export interface ReconcileSandboxStorageDeps {
    */
   listPublishedAppRootfs: () => Promise<PublishedAppStorageRow[]>;
   /**
-   * Resolves a drive's ownerId; null when it can't be resolved (e.g. a stale
-   * read of a drive mid-delete). Used for every env and published-app row, and
-   * for a session subject whose `driveId` is set — the session `driveId === null`
-   * case bypasses this entirely (see `storageBillingTarget`, whose `{ ownerId }`
-   * branch is already resolved, pure data with no IO needed).
+   * Resolves a drive's billing facts (ownerId, orgId); null when it can't be
+   * resolved (e.g. a stale read of a drive mid-delete). Used for every env and
+   * published-app row, and for a session subject whose `driveId` is set — the
+   * session `driveId === null` case bypasses this entirely (see
+   * `storageBillingTarget`, whose `{ ownerId }` branch is already resolved, pure
+   * data with no IO needed). An org drive's storage bills the org (WAL-9).
    */
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
+  lookupDriveBillingFacts: LookupDriveBillingFacts;
   /**
-   * Charges the payer for this subject's accrued storage cost. Not hold-gated —
-   * a background reconcile charge, mirroring reconcile-ai-cost. `driveId` is
+   * WAL-9: hold the ORG POOL for one org row's accrual before it is charged, so a background
+   * storage charge can never put a pool into debt: a paused pool or one with nothing spendable is
+   * forgiven, and one that covers only part is held (and charged) for that part. The production
+   * composition binds `reserveOrgPoolAccrual` (credit-gate). A personal row is not asked.
+   */
+  reserveOrgAccrual: (input: {
+    charge: Extract<ComputeCharge, { kind: 'org' }>;
+    chargeMillicents: number;
+  }) => Promise<OrgPoolAccrualReservation>;
+  /** Frees an org accrual hold whose charge did not go ahead (a throw before it settled). */
+  releaseAccrualHold: (holdId: string) => Promise<void>;
+  /**
+   * Charges the payer for this subject's accrued storage cost. A personal row is a background
+   * reconcile charge, mirroring reconcile-ai-cost; an org row settles on the pool hold
+   * `reserveOrgAccrual` placed (`hold`), never past it. `driveId` is
    * omitted only for a global-assistant agent-session (no drive to attribute
    * usage-breakdown to); an env always has one.
    *
@@ -389,13 +417,16 @@ export interface ReconcileSandboxStorageDeps {
    * vocabulary.
    */
   chargeStorage: (input: {
-    payerId: string;
+    /** Who pays: a person's personal root, or the org POOL for an org drive (WAL-9). */
+    charge: ComputeCharge;
     driveId?: string;
     subjectKind: StorageSubjectKind;
     /** The `agent_workspaces` id or the `drive_envs` id, per `subjectKind`. */
     subjectId: string;
     costDollars: number;
     gbMonths: number;
+    /** The org pool hold this charge settles on (WAL-9); absent for a personal row and where billing is off. */
+    hold?: { holdId: string; walletId: string };
   }) => Promise<UsageTrackingOutcome>;
   /**
    * Persists the new watermark for an `agent_workspaces` Sprite, on the ROW
@@ -417,6 +448,20 @@ export interface ReconcileSandboxStorageDeps {
     billedThrough: Date;
   }) => Promise<WatermarkWriteOutcome>;
   now: () => Date;
+  /**
+   * The instant org compute billing went live on this deployment (WAL-9) — stamped once, by the
+   * first tick that meets an org row, and read back after. An org row's accrual before it is
+   * forgiven, never charged: the interim refusal left those watermarks behind while nothing could
+   * bill an org. Asked only when an org row is met, at most once per tick.
+   */
+  orgComputeBillingEpoch: (tickStart: Date) => Promise<Date>;
+  /**
+   * D-OW-32 (SEAT-9): whether an org is LAPSED now. A lapsed org is charged nothing for storage —
+   * its data is kept, never deleted — and the watermark still advances, so the lapsed span is never
+   * billed after a re-subscribe. Asked at most once per org per tick. The production composition
+   * (sandbox-storage-billing) binds the org status read; a deps object without it bills every org.
+   */
+  isOrgLapsed?: (orgId: string) => Promise<boolean>;
 }
 
 export interface ReconcileSandboxStorageResult {
@@ -539,6 +584,29 @@ export interface ReconcileSandboxStorageResult {
    */
   watermarkSuperseded: number;
   /**
+   * WAL-9: org-drive rows whose accrual from BEFORE org compute billing went live was forgiven
+   * this tick (the interim refusal left their watermarks behind). The span before the epoch is
+   * never charged; a warn line names each row and the forgiven span. Only rows the refusal left
+   * behind ever count here — a row created or moved into an org later bills normally.
+   */
+  orgBacklogForgiven: number;
+  /**
+   * D-OW-32: org-drive rows NOT charged this tick because their org is lapsed. Their watermark moved
+   * to the tick (the span is forgiven, not deferred), so a re-subscribe bills from then on only.
+   */
+  orgLapsedForgiven: number;
+  /**
+   * WAL-9: org-drive rows NOT charged this tick because the org's pool is PAUSED or has nothing
+   * spendable. The pool is never put into debt by a background accrual: the window closes
+   * uncharged (forgiven, not deferred), logged by name.
+   */
+  orgPoolForgiven: number;
+  /**
+   * WAL-9: org-drive rows charged only PART of their accrual because the pool could cover no more.
+   * The charge stops at what the pool had; the rest is forgiven, never debt.
+   */
+  orgPoolCapped: number;
+  /**
    * Rows that had something to charge this tick — a positive accrual, before any
    * attempt to resolve a payer or move money.
    *
@@ -606,8 +674,8 @@ interface BillableStorageSubject {
   subjectId: string;
   /** The drive this charge attributes to in the usage breakdown; undefined for a global-assistant session. */
   attributionDriveId: string | undefined;
-  /** Who to bill; null means UNRESOLVABLE — the caller skips the cycle rather than substituting a payer. */
-  resolvePayerId: () => Promise<string | null>;
+  /** What to charge; null means UNRESOLVABLE — the caller skips the cycle rather than substituting a payer. */
+  resolveCharge: () => Promise<ComputeCharge | null>;
   /** Reports which of the three things the monotonic write did (see the deps' contract). */
   advanceWatermark: (billedThrough: Date) => Promise<WatermarkWriteOutcome>;
   storageLastBilledAt: Date;
@@ -618,7 +686,7 @@ interface BillableStorageSubject {
 
 function toSessionSubject(
   session: AgentSessionStorageRow,
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  lookupDriveBillingFacts: LookupDriveBillingFacts,
   deps: ReconcileSandboxStorageDeps,
 ): BillableStorageSubject {
   const subject: StorageSubject = { workspaceId: session.workspaceId, driveId: session.driveId, ownerId: session.ownerId };
@@ -635,7 +703,20 @@ function toSessionSubject(
     // the drive-lookup branch can leave this unresolved.
     // Already memoized per tick by the caller, so this is a method call on a
     // closure rather than a bare deps reference — no `this` to lose.
-    resolvePayerId: async () => ('ownerId' in target ? target.ownerId : await lookupDriveOwnerId(target.driveId)),
+    // An org drive's session charges the org pool, recorded under the session's owner.
+    //
+    // OWNER-keyed, deliberately, unlike the compute a session RUNS (charged to its actor) — review
+    // #2760 P3-2, open for the Decision Log. A session's disk outlives every run in it and has no
+    // single "actor": storage is a standing cost of the session, so it stays with the person whose
+    // session it is. The known cost: a capped member filling a drive-mate's session disk counts on
+    // the owner's seat. STORAGE IS SETTLED AFTER THE FACT (P3-3), here and for envs and apps below:
+    // there is nothing to refuse, so past a cap only an overshoot row is recorded and the pool
+    // absorbs it — bounded by the disk, and documented beside D-OW-28.
+    resolveCharge: async () => {
+      if ('ownerId' in target) return { kind: 'user', userId: target.ownerId };
+      const facts = await lookupDriveBillingFacts(target.driveId);
+      return facts ? computeChargeFor(payerForDrive(facts), session.ownerId) : null;
+    },
     advanceWatermark: (billedThrough) =>
       deps.advanceAgentSessionWatermark({ workspaceId: session.workspaceId, billedThrough }),
     storageLastBilledAt: session.storageLastBilledAt,
@@ -647,7 +728,7 @@ function toSessionSubject(
 
 function toEnvSubject(
   env: DriveEnvStorageRow,
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  lookupDriveBillingFacts: LookupDriveBillingFacts,
   deps: ReconcileSandboxStorageDeps,
 ): BillableStorageSubject {
   return {
@@ -655,15 +736,16 @@ function toEnvSubject(
     subjectId: env.envId,
     // Always attributed: an env's `driveId` is NOT NULL.
     attributionDriveId: env.driveId,
-    // The drive owner, with NO fallback — an env has no owner column to fall
+    // The drive's payer, with NO fallback — an env has no owner column to fall
     // back to, and inventing one would bill a machine to somebody who does not
-    // own it. See `resolveEnvPayerId`.
-    // The memoized closure, not a bare deps reference: `resolveEnvPayerId`
-    // invokes its input off its own object, so handing over `deps.lookupDriveOwnerId`
+    // own it. See `resolveEnvCharge` (an org drive: the org pool, recorded under
+    // the env's creator, [D-OW-28] `costOwnerId`, else the lead).
+    // The memoized closure, not a bare deps reference: `resolveEnvCharge`
+    // invokes its input off its own object, so handing over `deps.lookupDriveBillingFacts`
     // directly would drop `this` for any deps implementation that is a real
     // object rather than a literal — billing every session correctly while every
     // env threw and counted as `failed`, every tick.
-    resolvePayerId: () => resolveEnvPayerId({ driveId: env.driveId, lookupDriveOwnerId }),
+    resolveCharge: () => resolveEnvCharge({ driveId: env.driveId, costOwnerId: env.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) => deps.advanceDriveEnvWatermark({ envId: env.envId, billedThrough }),
     storageLastBilledAt: env.storageLastBilledAt,
     measuredBytes: env.measuredBytes,
@@ -674,7 +756,7 @@ function toEnvSubject(
 
 function toHostingSubject(
   app: PublishedAppStorageRow,
-  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  lookupDriveBillingFacts: LookupDriveBillingFacts,
   deps: ReconcileSandboxStorageDeps,
 ): BillableStorageSubject {
   return {
@@ -685,7 +767,7 @@ function toHostingSubject(
     // The drive owner, with no fallback — identical to an env's, because a
     // published app hangs off an env and an env is drive-owned. The memoized
     // closure, not a bare deps reference (see `toEnvSubject`).
-    resolvePayerId: () => resolveEnvPayerId({ driveId: app.driveId, lookupDriveOwnerId }),
+    resolveCharge: () => resolveEnvCharge({ driveId: app.driveId, costOwnerId: app.costOwnerId, lookupDriveBillingFacts }),
     advanceWatermark: (billedThrough) =>
       deps.advancePublishedAppWatermark({ publishedAppId: app.publishedAppId, billedThrough }),
     storageLastBilledAt: app.storageLastBilledAt,
@@ -786,6 +868,7 @@ async function listSource<T>(
 
 export async function reconcileSandboxStorage(
   deps: ReconcileSandboxStorageDeps,
+  signal?: AbortSignal,
 ): Promise<ReconcileSandboxStorageResult> {
   // ONE drive-owner lookup per DRIVE per tick, not per row.
   //
@@ -799,13 +882,13 @@ export async function reconcileSandboxStorage(
   //
   // Null is cached too — deliberately. An unresolvable drive means SKIP, and
   // re-asking per row would neither change that answer nor rescue the rows.
-  const ownerByDrive = new Map<string, string | null>();
-  const lookupDriveOwnerIdOnce = async (driveId: string): Promise<string | null> => {
-    const cached = ownerByDrive.get(driveId);
+  const factsByDrive = new Map<string, DriveBillingFacts | null>();
+  const lookupDriveBillingFactsOnce = async (driveId: string): Promise<DriveBillingFacts | null> => {
+    const cached = factsByDrive.get(driveId);
     if (cached !== undefined) return cached;
-    const ownerId = await deps.lookupDriveOwnerId(driveId);
-    ownerByDrive.set(driveId, ownerId);
-    return ownerId;
+    const facts = await deps.lookupDriveBillingFacts(driveId);
+    factsByDrive.set(driveId, facts);
+    return facts;
   };
 
   // Both sources are read BEFORE any charging (so the whole tick is planned
@@ -821,9 +904,9 @@ export async function reconcileSandboxStorage(
     listSource('hosting', () => deps.listPublishedAppRootfs()),
   ]);
   const subjects: BillableStorageSubject[] = [
-    ...sessions.rows.map((session) => toSessionSubject(session, lookupDriveOwnerIdOnce, deps)),
-    ...envs.rows.map((env) => toEnvSubject(env, lookupDriveOwnerIdOnce, deps)),
-    ...hosting.rows.map((app) => toHostingSubject(app, lookupDriveOwnerIdOnce, deps)),
+    ...sessions.rows.map((session) => toSessionSubject(session, lookupDriveBillingFactsOnce, deps)),
+    ...envs.rows.map((env) => toEnvSubject(env, lookupDriveBillingFactsOnce, deps)),
+    ...hosting.rows.map((app) => toHostingSubject(app, lookupDriveBillingFactsOnce, deps)),
   ];
   const failedSources: StorageSubjectKind[] = [];
   if (sessions.failed) failedSources.push('session');
@@ -835,6 +918,22 @@ export async function reconcileSandboxStorage(
   let chargedButUnadvanced = 0;
 
   let watermarkSuperseded = 0;
+  let orgBacklogForgiven = 0;
+  let orgLapsedForgiven = 0;
+  let orgPoolForgiven = 0;
+  let orgPoolCapped = 0;
+  const orgLapsedThisTick = new Map<string, Promise<boolean>>();
+  const orgLapsedOnce = (orgId: string): Promise<boolean> => {
+    let known = orgLapsedThisTick.get(orgId);
+    if (!known) {
+      known = deps.isOrgLapsed ? deps.isOrgLapsed(orgId) : Promise.resolve(false);
+      orgLapsedThisTick.set(orgId, known);
+    }
+    return known;
+  };
+  // Read at most once per tick, and only if an org row is met (see the deps' doc).
+  let orgEpoch: Promise<Date> | undefined;
+  const orgComputeBillingEpochOnce = (): Promise<Date> => (orgEpoch ??= deps.orgComputeBillingEpoch(now));
   let spanClamped = 0;
   let totalCostDollars = 0;
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
@@ -859,7 +958,17 @@ export async function reconcileSandboxStorage(
   // because the alert picks its cause label from exactly that comparison.
   let unbillableFailed = 0;
 
-  for (const subject of subjects) {
+  // The reconcile lock is what stops two runs charging the same window from the same watermark.
+  // Once it is lost another run may already be charging: stop before the next charge or write,
+  // leaving every remaining window open for the next run to bill exactly once.
+  const stopOnLockLoss = (remaining: number): boolean => {
+    if (!signal?.aborted) return false;
+    loggers.ai.warn('Sandbox storage reconcile lost its advisory lock — stopping this run; the remaining windows are billed next run', { remaining });
+    return true;
+  };
+
+  for (const [index, subject] of subjects.entries()) {
+    if (stopOnLockLoss(subjects.length - index)) break;
     const attributionDriveId = subject.attributionDriveId;
     // Set the moment this row is known to owe something. Until then a failure
     // cannot be attributed to the billing record.
@@ -868,7 +977,7 @@ export async function reconcileSandboxStorage(
     // Everything up to (but NOT including) the charge itself: pure accrual
     // computation plus the owner lookup. A throw anywhere in here means
     // nothing was billed, so it counts as `failed` exactly like before.
-    let resolved: { ownerId: string; costDollars: number; gbMonths: number; clamped: boolean } | undefined;
+    let resolved: { charge: ComputeCharge; costDollars: number; gbMonths: number; clamped: boolean } | undefined;
     try {
       const { elapsedMs, clamped, lastMeasuredGB, stale, gbMonths, costDollars } = priceSubjectWindow(subject, now);
       // Two DISTINCT health signals, and conflating them would hide the worse
@@ -922,18 +1031,14 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // Deliberately NOT the charge-time fallback (billing/sandbox-payer.ts's
-      // `resolveSessionPayerId` falls back to the session owner when the lookup
-      // fails, which is right at CHARGE time — someone must pay for compute
-      // already consumed — and wrong here). A failed lookup during a storage
-      // sweep usually means a stale read of a drive mid-delete; billing it to an
-      // owner who may not be the drive owner would be a misattributed money
-      // movement we cannot take back, whereas skipping costs one cycle of
-      // accrual and self-corrects on the next tick. For an ENV there is not even
-      // a fallback available (`resolveEnvPayerId`) — the skip is the only
-      // honest answer.
-      const ownerId = await subject.resolvePayerId();
-      if (!ownerId) {
+      // The same rule as charge time (billing/sandbox-payer.ts's `resolveSessionPayer`
+      // has no payer for a drive it cannot resolve, WAL-9). A failed lookup during a
+      // storage sweep usually means a stale read of a drive mid-delete; billing it to an
+      // owner who may not be the drive owner would be a misattributed money movement we
+      // cannot take back, whereas skipping costs one cycle of accrual and self-corrects
+      // on the next tick.
+      const charge = await subject.resolveCharge();
+      if (!charge) {
         // Can't resolve who to bill (e.g. the drive vanished). Leave the
         // watermark untouched so this window keeps accruing until it either
         // resolves on a later run or the row itself is torn down/deleted.
@@ -951,8 +1056,58 @@ export async function reconcileSandboxStorage(
         billingByKind[subject.kind].skipped += 1;
         continue;
       }
-
-      resolved = { ownerId, costDollars, gbMonths, clamped };
+      // D-OW-32 (SEAT-9): a LAPSED org is charged nothing for storage. The data is kept; the
+      // watermark moves to this tick, so the lapsed span is forgiven — never billed after a
+      // re-subscribe (at most one tick of it can fall before the re-subscribe is seen).
+      if (charge.kind === 'org' && (await orgLapsedOnce(charge.orgId))) {
+        orgLapsedForgiven += 1;
+        if (knownBillable) billingByKind[subject.kind].billable -= 1;
+        knownBillable = false;
+        loggers.ai.info('Sandbox storage: org is lapsed — storage not charged (D-OW-32)', {
+          driveId: attributionDriveId,
+          subjectKind: subject.kind,
+          subjectId: subject.subjectId,
+          orgId: charge.orgId,
+        });
+        if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
+        continue;
+      }
+      // WAL-9: an org row charges the org pool — but never for accrual from BEFORE org
+      // compute billing went live, which the interim refusal left behind on its watermark.
+      // The billable window starts at the later of the watermark and the epoch; the span
+      // before is forgiven (logged, counted), never charged and never billed to a person.
+      if (charge.kind === 'org') {
+        const backlogStart = orgBacklogStart({ watermark: subject.storageLastBilledAt, epoch: await orgComputeBillingEpochOnce() });
+        if (backlogStart !== null) {
+          orgBacklogForgiven += 1;
+          // The size of what is written off, priced exactly as a charge would have been
+          // (same window pricing and cap, same machine markup), not only that it happened.
+          const backlog = priceSubjectWindow(subject, backlogStart);
+          const wouldHaveChargedMillicents = chargeMillicents(backlog.costDollars, MACHINE_MARKUP_BPS);
+          loggers.ai.warn('Sandbox storage: org backlog from before org compute billing forgiven — not charged', {
+            driveId: attributionDriveId,
+            subjectKind: subject.kind,
+            subjectId: subject.subjectId,
+            orgId: charge.orgId,
+            forgivenFrom: subject.storageLastBilledAt.toISOString(),
+            forgivenThrough: backlogStart.toISOString(),
+            wouldHaveChargedMillicents,
+            wouldHaveChargedCents: Math.round(wouldHaveChargedMillicents / 1000),
+          });
+          const repriced = priceSubjectWindow({ ...subject, storageLastBilledAt: backlogStart }, now);
+          if (repriced.costDollars <= 0) {
+            // Nothing after the epoch to charge (the first org-billed tick): close the
+            // backlog by moving the watermark to this tick, and charge nothing. The row
+            // owes nothing after all, so it leaves the billable count it entered above.
+            if (knownBillable) billingByKind[subject.kind].billable -= 1;
+            knownBillable = false;
+            if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
+            continue;
+          }
+          resolved = { charge, costDollars: repriced.costDollars, gbMonths: repriced.gbMonths, clamped: repriced.clamped };
+        }
+      }
+      resolved ??= { charge, costDollars, gbMonths, clamped };
     } catch (error) {
       if (knownBillable) billingByKind[subject.kind].failed += 1;
       else unbillableFailed += 1;
@@ -970,17 +1125,74 @@ export async function reconcileSandboxStorage(
     // failed") are never conflated. `charged`/`totalCostDollars` move only on a
     // charge that PERSISTED: a resolved call is not a settled one, and treating it
     // as one is what used to close a window over spend that never reached a row.
+    // Last check before the money moves. Never between the charge and its watermark advance
+    // below: skipping that write after a charge is exactly what re-bills a window.
+    if (stopOnLockLoss(subjects.length - index)) break;
+    // WAL-9: an org row is charged only on a hold the pool can cover. A paused or empty pool's
+    // accrual is forgiven (the window closes uncharged, never debt); a pool that covers part is
+    // held, and charged, for that part alone.
+    let hold: { holdId: string; walletId: string } | undefined;
+    if (resolved.charge.kind === 'org') {
+      let reservation: OrgPoolAccrualReservation;
+      try {
+        reservation = await deps.reserveOrgAccrual({
+          charge: resolved.charge,
+          chargeMillicents: chargeMillicents(resolved.costDollars, MACHINE_MARKUP_BPS),
+        });
+      } catch (error) {
+        billingByKind[subject.kind].failed += 1;
+        loggers.ai.error(
+          'Sandbox storage reconcile: the org pool hold could not be placed — the window is left open for the next run',
+          error instanceof Error ? error : new Error(String(error)),
+          { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+        );
+        continue;
+      }
+      if (reservation.kind === 'forgive') {
+        orgPoolForgiven += 1;
+        billingByKind[subject.kind].billable -= 1;
+        loggers.ai.info('Sandbox storage: org pool is paused or has nothing spendable — storage not charged (WAL-9)', {
+          driveId: attributionDriveId,
+          subjectKind: subject.kind,
+          subjectId: subject.subjectId,
+          orgId: resolved.charge.orgId,
+          reason: reservation.reason,
+        });
+        if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
+        continue;
+      }
+      if (reservation.kind === 'held') {
+        hold = { holdId: reservation.holdId, walletId: reservation.walletId };
+        const capped = capAccrualCostDollars({ costDollars: resolved.costDollars, markupBps: MACHINE_MARKUP_BPS, capMillicents: reservation.chargeMillicents });
+        if (capped < resolved.costDollars) {
+          orgPoolCapped += 1;
+          loggers.ai.warn('Sandbox storage: org pool covers only part of this accrual — charged what it covers, the rest forgiven (WAL-9)', {
+            driveId: attributionDriveId,
+            subjectKind: subject.kind,
+            subjectId: subject.subjectId,
+            orgId: resolved.charge.orgId,
+            accruedCostDollars: resolved.costDollars,
+            chargedCostDollars: capped,
+          });
+          resolved = { ...resolved, costDollars: capped };
+        }
+      }
+      // `unavailable` (no pool) and `unmetered` (billing off) charge as before: the former settles
+      // nothing and leaves the window open, the latter moves no money.
+    }
     let settle: UsageTrackingOutcome;
     try {
       settle = await deps.chargeStorage({
-        payerId: resolved.ownerId,
+        charge: resolved.charge,
         driveId: attributionDriveId,
         subjectKind: subject.kind,
         subjectId: subject.subjectId,
         costDollars: resolved.costDollars,
         gbMonths: resolved.gbMonths,
+        ...(hold ? { hold } : {}),
       });
     } catch (error) {
+      if (hold) await deps.releaseAccrualHold(hold.holdId).catch(() => {});
       // Isolated per-row: one subject's charge failure must not drop every
       // other subject in this run from being billed. Nothing was moved, so
       // this is a genuine failure — the accrual is retried next run.
@@ -1082,6 +1294,10 @@ export async function reconcileSandboxStorage(
     staleMeasurements: sumHealth((of) => of.stale),
     neverMeasured: sumHealth((of) => of.neverMeasured),
     watermarkSuperseded,
+    orgBacklogForgiven,
+    orgLapsedForgiven,
+    orgPoolForgiven,
+    orgPoolCapped,
     spanClamped,
     billableRows: sumBilling((of) => of.billable),
     billingByKind,

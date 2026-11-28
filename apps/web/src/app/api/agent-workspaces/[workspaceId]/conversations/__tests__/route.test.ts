@@ -80,7 +80,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/conversations', () => {
     expect(typeof body.conversationId).toBe('string');
     expect(mockCreateConversationInSession).toHaveBeenCalledWith({
       conversationId: body.conversationId,
-      userId: 'user-1',
+      actor: expect.objectContaining({ userId: 'user-1' }),
       agentPageId: 'agent-1',
       workspaceId: SESSION_ID,
     });

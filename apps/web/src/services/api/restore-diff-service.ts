@@ -2,6 +2,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPages, pageVersions } from '@pagespace/db/schema/versioning';
 import { pages } from '@pagespace/db/schema/core';
+import { readSnapshotWithheld } from './backup-sign-in-gate';
 
 export type RestoreDiff = {
   toCreate:    { pageId: string; title: string; type: string }[];
@@ -129,6 +130,11 @@ export async function fetchAndComputeRestoreDiff(
     .from(pages)
     .where(eq(pages.driveId, driveId));
 
+  // D-OW-62: a page the snapshot withheld (a memory page its taker could not read) is not in the backup by design, not
+  // because it was deleted since: the restore leaves it exactly as it is — not trashed, its permissions untouched.
+  const withheldAtSnapshot = new Set(readSnapshotWithheld(backup.metadata).pageIds);
+  const restorablePages = currentPages.filter(p => !withheldAtSnapshot.has(p.id));
+
   const backupPageMap = new Map<string, BackupPageRow>(
     backupPageRows.map(row => [row.pageId, row as BackupPageRow]),
   );
@@ -142,7 +148,7 @@ export async function fetchAndComputeRestoreDiff(
       parentId: r.parentId ?? null,
       position: r.position ?? null,
     })),
-    currentPages.map(p => ({
+    restorablePages.map(p => ({
       id: p.id,
       stateHash: p.stateHash,
       title: p.title,

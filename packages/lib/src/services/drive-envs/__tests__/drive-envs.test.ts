@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   createDriveEnv,
+  ensureHomeDriveEnv,
   listDriveEnvs,
   renameDriveEnv,
   deleteDriveEnv,
@@ -8,9 +9,11 @@ import {
   deriveDriveEnvStatus,
   toDriveEnvDTO,
   type CreateDriveEnvDeps,
+  type EnsureHomeDriveEnvDeps,
   type DeleteDriveEnvDeps,
   type RebuildDriveEnvDeps,
 } from '../drive-envs';
+import { DEFAULT_ORG_POLICIES } from '../../../organizations/policies-core';
 import { isUniqueViolation } from '../drive-envs-store';
 import { driveEnvDtoSchema } from '../../../drive-envs/env-contract';
 import { getDriveEnvLimit } from '../../sandbox/quota';
@@ -25,8 +28,10 @@ function makeCreateDeps(
 ): CreateDriveEnvDeps {
   return {
     store: store.store,
+    getDriveOrgPolicies: async () => null,
     resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'pro' }),
     now: () => NOW,
+    admitCreator: async () => ({ allowed: true }),
     ...over,
   };
 }
@@ -37,6 +42,26 @@ function makeDeleteDeps(
 ): DeleteDriveEnvDeps {
   return { store: store.store, host: host.host, now: () => NOW };
 }
+
+describe('persistent environments follow the org policy', () => {
+  const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+
+  it('POL-10 refuses to create an environment when the org turns them off, and writes nothing', async () => {
+    const store = makeDriveEnvStore();
+    const create = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('POL-10 creates normally when the org allows them, or the drive has no org', async () => {
+    for (const read of [async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: true }), async () => null]) {
+      const store = makeDriveEnvStore();
+      const result = await createDriveEnv({ driveId: DRIVE_ID, name: 'staging', createdBy: 'u', deps: makeCreateDeps(store, { getDriveOrgPolicies: read }) });
+      expect(result.ok).toBe(true);
+    }
+  });
+});
 
 describe('createDriveEnv', () => {
   it('should mint a row WITHOUT provisioning — envs provision lazily, on the first session inside one', async () => {
@@ -51,6 +76,40 @@ describe('createDriveEnv', () => {
     expect(result.env.spriteKey).toBeNull();
   });
 
+  it('WAL-2 (partial) [D-OW-28] a creator at their cap of the org\'s credits is refused, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const asked: Array<{ driveId: string; userId: string }> = [];
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, {
+        admitCreator: async (input) => {
+          asked.push(input);
+          return { allowed: false, message: 'cap reached' };
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'member_cap_reached', message: 'cap reached' });
+    expect(asked).toEqual([{ driveId: DRIVE_ID, userId: 'member-marcus' }]);
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) a LAPSED org refuses the create as org_lapsed, not as the member\'s cap, and nothing is minted', async () => {
+    const store = makeDriveEnvStore();
+    const createIfUnderLimit = vi.spyOn(store.store, 'createIfUnderLimit');
+    const result = await createDriveEnv({
+      driveId: DRIVE_ID,
+      name: 'staging',
+      createdBy: 'member-marcus',
+      deps: makeCreateDeps(store, { admitCreator: async () => ({ allowed: false, code: 'org_lapsed', message: 'lapsed' }) }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(createIfUnderLimit).not.toHaveBeenCalled();
+  });
+
   it('given a vanished drive, should fail closed rather than meter the request against anybody else', async () => {
     const store = makeDriveEnvStore();
     const countEnvsOwnedBy = vi.spyOn(store.store, 'countEnvsOwnedBy');
@@ -58,7 +117,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => null }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => null }),
     });
 
     expect(result).toEqual({ ok: false, reason: 'drive_not_found' });
@@ -86,7 +145,7 @@ describe('createDriveEnv', () => {
       driveId: DRIVE_ID,
       name: 'staging',
       createdBy: null,
-      deps: makeCreateDeps(store, { resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
+      deps: makeCreateDeps(store, { getDriveOrgPolicies: async () => null, resolvePayer: async () => ({ payerId: PAYER_ID, tier: 'free' }) }),
     });
 
     expect(result.ok).toBe(false);
@@ -170,6 +229,13 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
 
+  it('should project isHome, so a client can show Home as the default env — and the result must satisfy the wire schema', () => {
+    const home = toDriveEnvDTO(makeEnvRecord({ name: 'Home', isHome: true }));
+    expect(home.isHome).toBe(true);
+    expect(driveEnvDtoSchema.safeParse(home).success).toBe(true);
+    expect(toDriveEnvDTO(makeEnvRecord()).isHome).toBe(false);
+  });
+
   describe('substrate (Local Environments epic)', () => {
     it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
@@ -180,7 +246,7 @@ describe('listDriveEnvs / the DTO', () => {
 
     it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected', enrolled: true });
-      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', isHome: false, substrate: 'local', status: 'connected', label: 'jono-macstudio', enrolled: true, createdAt: NOW.toISOString() });
       expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
     });
 
@@ -588,9 +654,26 @@ describe('rebuildDriveEnv', () => {
         return { ok: true, sandboxId: handle.sandboxId, resumed: false };
       },
       now: () => NOW,
+      admitOrgActive: async () => ({ allowed: true }),
       ...over,
     };
   }
+
+  it('SEAT-9 (partial) review #2761: a LAPSED org\'s env is not rebuilt — refused org_lapsed BEFORE any teardown or provision', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord()]);
+    const host = makeSpriteHost();
+    const asked: string[] = [];
+    const deps = makeRebuildDeps(store, host, {
+      admitOrgActive: async ({ driveId }) => {
+        asked.push(driveId);
+        return { allowed: false, code: 'org_lapsed', message: 'lapsed' };
+      },
+    });
+    expect(await rebuildDriveEnv({ envId: ENV_ID, deps })).toEqual({ ok: false, reason: 'org_lapsed', message: 'lapsed' });
+    expect(asked).toEqual([DRIVE_ID]);
+    expect(host.calls.kill).toEqual([]);
+    expect(host.calls.provision).toEqual([]);
+  });
 
   it('given a LOCAL env, should refuse substrate_unsupported BEFORE any teardown or provision — the machine is the user\'s, there is no Sprite to replace (C1)', async () => {
     const store = makeDriveEnvStore([makeEnvRecord({ substrate: 'local' })]);
@@ -717,5 +800,105 @@ describe('rebuildDriveEnv', () => {
     const store = makeDriveEnvStore();
     const result = await rebuildDriveEnv({ envId: 'nope', deps: makeRebuildDeps(store, makeSpriteHost()) });
     expect(result).toEqual({ ok: false, reason: 'not_found' });
+  });
+});
+
+describe('ensureHomeDriveEnv', () => {
+  const HOME_DRIVE = 'home-drive-1';
+  const OWNER = 'owner-1';
+  const deps = (store: ReturnType<typeof makeDriveEnvStore>, over: Partial<EnsureHomeDriveEnvDeps> = {}): EnsureHomeDriveEnvDeps => ({
+    store: store.store,
+    getDriveOrgPolicies: async () => null,
+    now: () => NOW,
+    ...over,
+  });
+
+  it('given an owner with no Home env, should mint one named "Home" in their Home drive without provisioning a Sprite', async () => {
+    const store = makeDriveEnvStore();
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.env).toMatchObject({ driveId: HOME_DRIVE, name: 'Home', isHome: true, createdBy: OWNER, sandboxId: null });
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the Home env already exists, should return it and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    const second = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(first.ok && second.ok && second.env.id === first.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given two first uses at once, should end with exactly one Home env', async () => {
+    const store = makeDriveEnvStore();
+    const [a, b] = await Promise.all([
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+      ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) }),
+    ]);
+    expect(a.ok && b.ok && a.env.id === b.env.id).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given the payer is at their env ceiling (or on the free tier), should still provide Home — it is not metered by the env cap', async () => {
+    const store = makeDriveEnvStore();
+    store.ownedEnvs.set(OWNER, 1_000);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the user already made an env called "Home" in that drive, should adopt it as Home rather than fail on the name', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'mine', driveId: HOME_DRIVE, name: 'Home' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env.id === 'mine' && result.env.isHome).toBe(true);
+    expect(store.rows.size).toBe(1);
+  });
+
+  it('given an org policy that turns environments off, should refuse and mint nothing', async () => {
+    const store = makeDriveEnvStore();
+    const off = async () => ({ ...DEFAULT_ORG_POLICIES, persistentEnvironments: false });
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store, { getDriveOrgPolicies: off }) });
+    expect(result).toMatchObject({ ok: false, reason: 'org_policy' });
+    expect(store.rows.size).toBe(0);
+  });
+
+  it('given the user renamed Home, should keep returning it — the flag, not the name, makes it Home', async () => {
+    const store = makeDriveEnvStore();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    await renameDriveEnv({ envId: first.env.id, name: 'my-box', deps: { store: store.store, now: () => NOW } });
+    const again = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(again.ok && again.env).toMatchObject({ id: first.env.id, name: 'my-box', isHome: true });
+  });
+
+  it('given a delete of the Home env, should REFUSE it (even forced) and touch nothing — Rebuild is how Home is wiped, so its identity and createdAt stay stable', async () => {
+    const store = makeDriveEnvStore();
+    const host = makeSpriteHost();
+    const first = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    if (!first.ok) throw new Error('expected Home');
+    for (const force of [false, true]) {
+      const deleted = await deleteDriveEnv({ envId: first.env.id, force, deps: makeDeleteDeps(store, host) });
+      expect(deleted).toEqual({ ok: false, reason: 'is_home' });
+    }
+    expect(store.calls.deleteIfUnoccupied).toBe(0);
+    expect(store.rows.get(first.env.id)).toMatchObject({ isHome: true, createdAt: first.env.createdAt });
+  });
+
+  it('given a LOCAL "Home" AND envs already named "Home sandbox" and "Home sandbox 2", should mint Home under the first free name — never fail the drive forever', async () => {
+    const store = makeDriveEnvStore([
+      makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' }),
+      makeEnvRecord({ id: 'mine-1', driveId: HOME_DRIVE, name: 'Home sandbox' }),
+      makeEnvRecord({ id: 'mine-2', driveId: HOME_DRIVE, name: 'Home sandbox 2' }),
+    ]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox 3', isHome: true, substrate: 'sprite' });
+    expect(store.rows.size).toBe(4);
+  });
+
+  it('given a LOCAL env already named "Home", should mint Home beside it rather than adopt somebody\'s computer', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ id: 'laptop', driveId: HOME_DRIVE, name: 'Home', substrate: 'local' })]);
+    const result = await ensureHomeDriveEnv({ homeDriveId: HOME_DRIVE, ownerId: OWNER, deps: deps(store) });
+    expect(result.ok && result.env).toMatchObject({ name: 'Home sandbox', isHome: true, substrate: 'sprite' });
+    expect(store.rows.get('laptop')?.isHome).toBe(false);
   });
 });

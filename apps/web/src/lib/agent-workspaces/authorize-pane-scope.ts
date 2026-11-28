@@ -42,6 +42,7 @@ import { canAccessConversation } from '@pagespace/lib/permissions/conversation-a
 import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
 import type { PaneTargetKind, WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /** The conversation facts the chat rule needs — a subset of a `conversations` row. */
 export interface PaneScopeConversationRow {
@@ -65,7 +66,7 @@ export interface PaneScopeAuthorityDeps {
   findConversation: (conversationId: string) => Promise<PaneScopeConversationRow | null>;
   /** The workspace a shell belongs to, or `null` when there is no such shell. */
   findShellWorkspace: (shellId: string) => Promise<string | null>;
-  canViewPage: (userId: string, pageId: string) => Promise<boolean>;
+  canViewPage: (actor: AccessActor, pageId: string) => Promise<boolean>;
 }
 
 /** The slice of a Drizzle client the row lookups need — `db` and a transaction alike. */
@@ -113,7 +114,7 @@ export function paneScopeDeps(executor: PaneScopeExecutor = db): PaneScopeAuthor
         .limit(1);
       return row?.workspaceId ?? null;
     },
-    canViewPage: async (userId, pageId) => (await getUserAccessLevel(userId, pageId)) !== null,
+    canViewPage: async (actor, pageId) => (await getUserAccessLevel(actor, pageId)) !== null,
   };
 }
 
@@ -136,20 +137,20 @@ export interface AuthorizablePaneTarget {
 }
 
 /**
- * May `viewerId` bind `scope` into `workspaceId`'s grid? See the module doc
+ * May `viewer` bind `scope` into `workspaceId`'s grid? See the module doc
  * for the per-kind rule. An unbound scope (`targetId: null` — the picker just
  * chose a kind) needs no authority: there is nothing to resolve yet.
  */
 export async function authorizePaneScope(
-  input: { viewerId: string; workspaceId: string; scope: AuthorizablePaneTarget },
+  input: { viewer: AccessActor; workspaceId: string; scope: AuthorizablePaneTarget },
   deps: PaneScopeAuthorityDeps = defaultDeps,
 ): Promise<boolean> {
-  const { viewerId, workspaceId, scope } = input;
+  const { viewer, workspaceId, scope } = input;
   if (scope.targetId === null) return true;
 
   switch (scope.kind) {
     case 'page':
-      return deps.canViewPage(viewerId, scope.targetId);
+      return deps.canViewPage(viewer, scope.targetId);
 
     case 'terminal':
       return (await deps.findShellWorkspace(scope.targetId)) === workspaceId;
@@ -167,8 +168,8 @@ export async function authorizePaneScope(
       // here, so the conversation is one this workspace already lists to them
       // (with its title redacted, if the listing rule says so).
       if (row.workspaceId === workspaceId) return true;
-      return canAccessConversation(viewerId, row, {
-        getPageAccess: (userId, pageId) => deps.canViewPage(userId, pageId),
+      return canAccessConversation(viewer, row, {
+        getPageAccess: (actor, pageId) => deps.canViewPage(actor, pageId),
       });
     }
   }
@@ -217,12 +218,12 @@ export function introducedPaneTargets(
 
 /** Authorize a set of targets, refusing the whole write on the first denial. */
 export async function authorizePaneTargets(
-  input: { viewerId: string; workspaceId: string; targets: readonly AuthorizablePaneTarget[] },
+  input: { viewer: AccessActor; workspaceId: string; targets: readonly AuthorizablePaneTarget[] },
   deps: PaneScopeAuthorityDeps = defaultDeps,
 ): Promise<boolean> {
   for (const scope of input.targets) {
     const allowed = await authorizePaneScope(
-      { viewerId: input.viewerId, workspaceId: input.workspaceId, scope },
+      { viewer: input.viewer, workspaceId: input.workspaceId, scope },
       deps,
     );
     if (!allowed) return false;

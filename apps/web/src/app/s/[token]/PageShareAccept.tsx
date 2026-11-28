@@ -7,6 +7,14 @@ import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/useAuth';
 import { useCSRFToken } from '@/hooks/useCSRFToken';
 import type { ShareTokenInfo } from '@pagespace/lib/permissions/share-link-service';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
+import {
+  V3_BUTTON_PRIMARY,
+  V3_H1,
+  V3_LEAD,
+  V3_SPINNER,
+  V3_STRONG,
+} from '@/components/auth/authCardV3';
 
 interface PageShareAcceptProps {
   token: string;
@@ -39,8 +47,17 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
           return;
         }
 
-        const data = (await res.json()) as { type: string; pageId: string; driveId: string };
-        router.push(`/dashboard/${data.driveId}/${data.pageId}`);
+        const data = (await res.json()) as { type: string; pageId?: string; driveId?: string; status?: string; message?: string };
+        // POL-2: the org requires an Owner or Admin to approve guests; nothing is granted yet, so stay here and say so.
+        if (data.status === 'pending_approval') {
+          setError(data.message ?? 'Your request is waiting for approval.');
+          return;
+        }
+        router.push(
+          isV3AuthEnabled()
+            ? `/imago/${data.driveId}/files/${data.pageId}`
+            : `/dashboard/${data.driveId}/${data.pageId}`,
+        );
       } catch (err) {
         if ((err as Error).name === 'AbortError') return;
         setError('Something went wrong. Please try again.');
@@ -50,6 +67,24 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
     accept();
     return () => controller.abort();
   }, [isAuthenticated, csrfToken, token, router]);
+
+  if (!authLoading && !isAuthenticated && isV3AuthEnabled()) {
+    return (
+      <div>
+        <h1 className={V3_H1}>You’re invited</h1>
+        <p className={V3_LEAD}>
+          Sign in to open <strong className={V3_STRONG}>{info.pageTitle ?? 'this page'}</strong>.
+        </p>
+        <button
+          type="button"
+          className={`${V3_BUTTON_PRIMARY} mt-6`}
+          onClick={() => router.push(`/auth/signin?next=/s/${token}`)}
+        >
+          Sign in to continue
+        </button>
+      </div>
+    );
+  }
 
   if (!authLoading && !isAuthenticated) {
     return (
@@ -85,6 +120,19 @@ export function PageShareAccept({ token, info }: PageShareAcceptProps) {
         <Link href="/dashboard">
           <Button variant="outline" className="w-full">Go to dashboard</Button>
         </Link>
+      </div>
+    );
+  }
+
+  if (isV3AuthEnabled()) {
+    return (
+      <div className="space-y-4">
+        <p className={V3_LEAD}>
+          Opening <strong className={V3_STRONG}>{info.pageTitle ?? 'page'}</strong>…
+        </p>
+        <div className="flex justify-center">
+          <div className={V3_SPINNER} />
+        </div>
       </div>
     );
   }

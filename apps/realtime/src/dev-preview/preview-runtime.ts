@@ -63,8 +63,9 @@ export function buildRealtimePreviewAccessDeps(): PreviewAccessDeps {
       const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
       return drive ? { payerId: drive.ownerId } : null;
     },
-    canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
-    isSessionUsable: ({ sessionId, userId }) => sessionService.isSessionUsableById(sessionId, userId),
+    canRunCode: ({ actor, driveId, ownerId }) => canRunCode({ actor, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
+    // The cookie's minting session, as the actor (its ceremony evidence) every drive's org sign-in policy is asked of.
+    loadSessionActor: ({ sessionId, userId }) => sessionService.loadUsableSessionActor(sessionId, userId),
     attach: async (sandboxId) => {
       try {
         return await (await createConnectScopedSandboxHost()).attach({ sandboxId });

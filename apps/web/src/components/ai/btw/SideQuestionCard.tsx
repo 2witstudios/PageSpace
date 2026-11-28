@@ -1,6 +1,7 @@
 'use client';
 
 import { Button } from '@/components/ui/button';
+import { SpendFallbackNotice } from '@/components/messages/SpendFallbackNotice';
 import type { SideQuestionState } from './useSideQuestion';
 
 export function SideQuestionCard({
@@ -25,6 +26,11 @@ export function SideQuestionCard({
           Dismiss
         </Button>
       </div>
+      {state.spendFallback && (
+        <div className="mt-2">
+          <SpendFallbackNotice data={state.spendFallback} />
+        </div>
+      )}
       <div className="mt-2 whitespace-pre-wrap" role="status" aria-live="polite" aria-busy={state.loading}>
         {state.error ? <span className="text-destructive">{state.error}</span> : state.text || 'Thinking…'}
       </div>

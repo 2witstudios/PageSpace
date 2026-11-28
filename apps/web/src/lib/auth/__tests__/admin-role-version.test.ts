@@ -162,7 +162,7 @@ describe('Admin Role Versioning', () => {
         expiresAt: new Date(Date.now() + 3600000),
       });
 
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: adminUserId,
         type: 'user',
         scopes: ['*'],
@@ -197,7 +197,7 @@ describe('Admin Role Versioning', () => {
         expiresAt: new Date(Date.now() + 3600000),
       });
 
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: regularUserId,
         type: 'user',
         scopes: ['*'],

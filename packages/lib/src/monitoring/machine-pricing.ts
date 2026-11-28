@@ -35,6 +35,7 @@ import {
   PUBLISHED_APP_ASSUMED_CPUS,
   PUBLISHED_APP_ASSUMED_MEMORY_GB,
 } from '../billing/credit-pricing';
+import { exactCentsFromDollars } from '../billing/money-model';
 
 export interface MachineUsageQuantity {
   /** Wall-clock seconds the machine was ACTIVE (not hibernating) for this run. */
@@ -147,6 +148,6 @@ export function calculateDedicatedMonthlyFloorCents(shape: MachineShape): number
   const { cpus, memoryGB } = shape;
   if (!Number.isFinite(cpus) || !Number.isFinite(memoryGB) || cpus < 0 || memoryGB < 0) return 0;
   const usdPerHour = cpus * MACHINE_RATES.usdPerCpuHour + memoryGB * MACHINE_RATES.usdPerMemGbHour;
-  const substrateCents = usdPerHour * HOURS_PER_BILLING_MONTH * 100;
+  const substrateCents = exactCentsFromDollars(usdPerHour * HOURS_PER_BILLING_MONTH);
   return Math.ceil((substrateCents * MACHINE_MARKUP_BPS) / 10000);
 }

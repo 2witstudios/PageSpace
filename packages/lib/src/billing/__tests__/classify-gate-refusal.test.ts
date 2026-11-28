@@ -15,6 +15,10 @@ describe('classifyGateRefusal', () => {
     expect(classifyGateRefusal('daily_cap_exceeded')).toBe('terminal');
   });
 
+  it('given source_refused, should be terminal (the named source refuses by policy; a retry names the same source)', () => {
+    expect(classifyGateRefusal('source_refused')).toBe('terminal');
+  });
+
   it('given out_of_credits, should be terminal (someone must add credits)', () => {
     expect(classifyGateRefusal('out_of_credits')).toBe('terminal');
   });

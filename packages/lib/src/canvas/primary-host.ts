@@ -28,6 +28,9 @@
  * The thin shell that fetches the active domains from the DB calls this.
  */
 
+/** The host every drive's subdomain site is served under: `<subdomain>.pagespace.site`. */
+export const PUBLISH_HOST = 'pagespace.site';
+
 /**
  * Minimal shape of an active custom domain needed for primary-host resolution.
  * `createdAt` is the row creation timestamp (earliest-registered), used as a

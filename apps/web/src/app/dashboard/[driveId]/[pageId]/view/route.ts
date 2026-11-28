@@ -9,6 +9,8 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { isDangerousMimeType, sanitizeFilenameForHeader } from '@pagespace/lib/utils/file-security';
 import { generatePresignedUrl, getPresignedUrlTtl } from '@/lib/presigned-url';
 import { verifyCanvasFileViewToken } from '@/lib/canvas/file-view-token';
+import { actorFromVerifiedUser, deniedResponse } from '@/lib/auth/request-actor';
+import { refuseRemovedContent } from '@/lib/content-safety/removed-response';
 
 interface RouteParams {
   params: Promise<{
@@ -54,9 +56,9 @@ export async function GET(request: Request, context: RouteParams) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const canView = await canUserViewPage(user.id, pageId);
+    const canView = await canUserViewPage(actorFromVerifiedUser(user), pageId);
     if (!canView) {
-      return NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 });
+      return deniedResponse(actorFromVerifiedUser(user), pageId, NextResponse.json({ error: 'You do not have access to this file' }, { status: 403 }));
     }
   }
 
@@ -68,6 +70,8 @@ export async function GET(request: Request, context: RouteParams) {
   if (!contentHash) {
     return NextResponse.json({ error: 'Invalid file path' }, { status: 500 });
   }
+  const removed = await refuseRemovedContent(contentHash);
+  if (removed) return removed;
   const mimeType = page.mimeType || 'application/octet-stream';
   const ttl = getPresignedUrlTtl(mimeType);
   const filename = sanitizeFilenameForHeader(page.originalFileName || page.title || contentHash);

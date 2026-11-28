@@ -10,7 +10,7 @@
  * composition: same cron, same advisory lock, same credit pipeline, one extra
  * SELECT and one extra watermark UPDATE. The only place the two units diverge
  * is the payer — an env resolves to its DRIVE OWNER with no fallback
- * (`resolveEnvPayerId`), because `drive_envs` has no owner column to fall back
+ * (`resolveEnvPayer`), because `drive_envs` has no owner column to fall back
  * to. Nothing here names a substrate: an env that later runs on a bigger guest,
  * a GPU host or a non-Fly platform bills through these exact lines.
  *
@@ -57,9 +57,15 @@ import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
-import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
+import { lookupDriveBillingFacts } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { computeSettleWalletId, UNSETTLED_COMPUTE } from '../../billing/compute-gate';
+import { reserveOrgPoolAccrual } from '../../billing/credit-gate';
+import { releaseHold } from '../../billing/credit-consume';
+import { computeSpendKind } from '../../billing/compute-charge';
+import { stampOrgComputeBillingEpoch } from '../../billing/org-compute-epoch';
+import { isOrgActive } from '../../organizations/status';
 import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
   reconcileSandboxStorage,
@@ -134,6 +140,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .select({
         envId: driveEnvs.id,
         driveId: driveEnvs.driveId,
+        costOwnerId: driveEnvs.costOwnerId,
         storageLastBilledAt: driveEnvs.storageLastBilledAt,
         measuredBytes: driveEnvs.storageMeasuredBytes,
         measuredAt: driveEnvs.storageMeasuredAt,
@@ -176,6 +183,8 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .select({
         publishedAppId: publishedApps.id,
         driveId: publishedApps.driveId,
+        // D-OW-28: an app's compute counts against its cost owner (its publisher, else the lead).
+        costOwnerId: publishedApps.costOwnerId,
         storageLastBilledAt: publishedApps.storageLastBilledAt,
         measuredBytes: publishedApps.imageSizeBytes,
         measuredAt: publishedApps.imageSizeMeasuredAt,
@@ -184,7 +193,11 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .where(and(ne(publishedApps.status, 'destroying'), eq(publishedApps.tier, 'metered')));
   },
 
-  lookupDriveOwnerId,
+  lookupDriveBillingFacts,
+
+  // D-OW-32: a lapsed org's storage is not charged (the org status read every lapse gate uses, so
+  // onprem and tenant orgs are always active).
+  isOrgLapsed: async (orgId: string) => !(await isOrgActive(orgId)),
 
   /**
    * REPORTS ITS FAILURE. `AIMonitoring.trackUsage` still never throws (a throw
@@ -193,9 +206,21 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
    * credit-ledger outage no longer looks identical to a successful charge, and the
    * reconcile can hold the watermark instead of closing the window over lost spend.
    */
-  chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+  // WAL-9: an org row's accrual is held on the pool before it is charged — never past what the
+  // pool can cover, nothing at all while it is paused (credit-gate reserveOrgPoolAccrual).
+  reserveOrgAccrual: ({ charge, chargeMillicents }) =>
+    reserveOrgPoolAccrual({ orgId: charge.orgId, userId: charge.userId, chargeMillicents, spendKind: computeSpendKind(charge) }),
+  releaseAccrualHold: (holdId: string) => releaseHold(holdId),
+
+  async chargeStorage({ charge, driveId, subjectKind, subjectId, costDollars, gbMonths, hold }) {
+    // WAL-9: an org drive's storage lands on the org pool, recorded under the person the
+    // charge names, settled on the pool hold reserveOrgAccrual placed. A pool that no longer
+    // exists charges nothing (the window stays open) — never the recorded person's wallet.
+    const walletId = hold ? hold.walletId : await computeSettleWalletId(charge);
+    if (walletId === null) return UNSETTLED_COMPUTE;
     return AIMonitoring.trackUsage({
-      userId: payerId,
+      userId: charge.userId,
+      walletId,
       provider: 'sprites',
       // The billed unit, named in the meter line itself. Sessions keep the
       // string they have always written (renaming it would split one meter's
@@ -218,6 +243,9 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
+      // A session's storage is its person's draw on an org pool; an env's or app's is a drive
+      // accrual (resolveEnvCharge) that never counts toward a seat — the charge says which.
+      spendKind: computeSpendKind(charge),
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
       // missing pageId as unattributed-to-a-page, not an error.
@@ -238,8 +266,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // usage row while staying a valid non-negative duration.
       duration: 0,
       success: true,
-      // No holdId: a background reconcile charge, not gated against a
-      // pre-placed hold (mirrors reconcile-ai-cost's settle path).
+      // An org row settles on its pool hold, so the charge can never exceed what the pool
+      // covered (WAL-9). A personal row is a background reconcile charge with no hold
+      // (mirrors reconcile-ai-cost's settle path).
+      ...(hold ? { holdId: hold.holdId } : {}),
       costSource: 'list_price',
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
@@ -308,6 +338,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   },
 
   now: () => new Date(),
+  orgComputeBillingEpoch: stampOrgComputeBillingEpoch,
 };
 
 /**
@@ -346,8 +377,8 @@ export async function reconcileSandboxStorageSerialized(
   deps: ReconcileSandboxStorageDeps,
   pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
 ): Promise<ReconcileSandboxStorageRunResult> {
-  const locked = await withAdvisoryLock(pgPool, RECONCILE_SANDBOX_STORAGE_LOCK_KEY, () =>
-    reconcileSandboxStorage(deps),
+  const locked = await withAdvisoryLock(pgPool, RECONCILE_SANDBOX_STORAGE_LOCK_KEY, (signal) =>
+    reconcileSandboxStorage(deps, signal),
   );
   if (locked.outcome === 'lock_busy') {
     return { outcome: 'lock_busy' };

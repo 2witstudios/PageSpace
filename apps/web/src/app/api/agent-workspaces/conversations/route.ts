@@ -25,6 +25,8 @@ import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { listAllConversationsPaginated } from '@/lib/agent-workspaces/workspace-conversations-runtime';
 import { encodeCursor } from '@/lib/conversations/conversation-recency';
 import { toWireRow, type PastConversationServerRow } from '@/lib/agent-workspaces/past-conversation-dto';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -93,19 +95,19 @@ function maskOrDrop(
   return [row];
 }
 
-async function getBatchDriveMembership(userId: string, driveIds: string[]): Promise<Map<string, boolean>> {
+async function getBatchDriveMembership(actor: AccessActor, driveIds: string[]): Promise<Map<string, boolean>> {
   const distinct = Array.from(new Set(driveIds));
   const entries = await Promise.all(
     distinct.map(async (driveId): Promise<[string, boolean]> => [
       driveId,
-      (await resolveDriveMembership({ userId, driveId })) !== 'none',
+      (await resolveDriveMembership({ actor, driveId })) !== 'none',
     ]),
   );
   return new Map(entries);
 }
 
 async function fetchVisiblePage(
-  ownerId: string,
+  actor: AccessActor,
   scopedDriveId: string | undefined,
   limit: number,
   initialCursor: string | undefined,
@@ -115,7 +117,7 @@ async function fetchVisiblePage(
   let hasMore = true;
 
   for (let i = 0; i < MAX_INTERNAL_FETCHES && visible.length < limit && hasMore; i++) {
-    const result = await listAllConversationsPaginated({ ownerId, driveId: scopedDriveId }, { limit, cursor });
+    const result = await listAllConversationsPaginated({ ownerId: actor.userId, driveId: scopedDriveId }, { limit, cursor });
     hasMore = result.pagination.hasMore;
     cursor = result.pagination.nextCursor ?? undefined;
 
@@ -127,13 +129,13 @@ async function fetchVisiblePage(
           .filter((id): id is string => id !== null),
       ),
     );
-    const pagePermissions = pageIds.length > 0 ? await getBatchPagePermissions(ownerId, pageIds) : null;
+    const pagePermissions = pageIds.length > 0 ? await getBatchPagePermissions(actor, pageIds) : null;
     const canViewPage = (agentPageId: string) => pagePermissions?.get(agentPageId)?.canView ?? false;
 
     const sessionDriveIds = result.conversations
       .filter((c) => c.type === 'global' && c.workspaceId !== null && c.driveId !== null)
       .map((c) => c.driveId as string);
-    const driveMembership = sessionDriveIds.length > 0 ? await getBatchDriveMembership(ownerId, sessionDriveIds) : null;
+    const driveMembership = sessionDriveIds.length > 0 ? await getBatchDriveMembership(actor, sessionDriveIds) : null;
     const canAccessSessionDrive = (driveId: string) => driveMembership?.get(driveId) ?? false;
 
     for (const row of result.conversations) {
@@ -183,7 +185,7 @@ export async function GET(request: Request) {
     // metadata keyed only on conversation ownership). Batch-checked inside
     // `fetchVisiblePage`, once per internal DB fetch.
     const { conversations, hasMore, nextCursor } = await fetchVisiblePage(
-      auth.userId,
+      actorFromAuth(auth),
       scopedDriveId,
       limit,
       cursor,

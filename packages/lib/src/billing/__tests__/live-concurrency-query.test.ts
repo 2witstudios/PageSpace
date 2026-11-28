@@ -11,7 +11,9 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
-import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditHolds } from '@pagespace/db/schema/credits';
+import { wallets } from '@pagespace/db/schema/wallets';
+import { users } from '@pagespace/db/schema/auth';
 import { factories } from '@pagespace/db/test/factories';
 import { getLiveInFlightHolds } from '../live-concurrency-query';
 import { requireDb } from '@pagespace/db/test/require-db';
@@ -20,13 +22,20 @@ let dbAvailable = false;
 
 async function cleanup(userId: string): Promise<void> {
   await db.delete(creditHolds).where(eq(creditHolds.userId, userId));
-  await db.delete(creditBalances).where(eq(creditBalances.userId, userId));
+  await db.delete(wallets).where(eq(wallets.userId, userId));
+  await db.delete(users).where(eq(users.id, userId));
+}
+
+/** Holds are per wallet (WAL-5): each user's personal root wallet. */
+async function walletOf(userId: string): Promise<string> {
+  const [wallet] = await db.insert(wallets).values({ ownerType: 'user', userId }).returning({ id: wallets.id });
+  return wallet.id;
 }
 
 describe('getLiveInFlightHolds', () => {
   beforeAll(async () => {
     try {
-      await db.select().from(creditBalances).limit(1);
+      await db.select().from(wallets).limit(1);
       dbAvailable = true;
     } catch (error) {
       requireDb('live-concurrency-query.test.ts', error);
@@ -50,10 +59,12 @@ describe('getLiveInFlightHolds', () => {
     const other = await factories.createUser();
     try {
       const future = new Date(Date.now() + 60_000);
+      const userWallet = await walletOf(user.id);
+      const otherWallet = await walletOf(other.id);
       await db.insert(creditHolds).values([
-        { userId: user.id, estCents: 2, expiresAt: future },
-        { userId: user.id, estCents: 2, expiresAt: future },
-        { userId: other.id, estCents: 2, expiresAt: future },
+        { userId: user.id, walletId: userWallet, estCents: 2, expiresAt: future },
+        { userId: user.id, walletId: userWallet, estCents: 2, expiresAt: future },
+        { userId: other.id, walletId: otherWallet, estCents: 2, expiresAt: future },
       ]);
 
       expect(await getLiveInFlightHolds(user.id)).toBe(2);
@@ -70,9 +81,10 @@ describe('getLiveInFlightHolds', () => {
     try {
       const past = new Date(Date.now() - 1_000);
       const future = new Date(Date.now() + 60_000);
+      const walletId = await walletOf(user.id);
       await db.insert(creditHolds).values([
-        { userId: user.id, estCents: 2, expiresAt: past },
-        { userId: user.id, estCents: 2, expiresAt: future },
+        { userId: user.id, walletId, estCents: 2, expiresAt: past },
+        { userId: user.id, walletId, estCents: 2, expiresAt: future },
       ]);
 
       expect(await getLiveInFlightHolds(user.id)).toBe(1);
@@ -90,9 +102,10 @@ describe('getLiveInFlightHolds', () => {
       // a real machine hold both look before settle — there is no field to
       // filter on, which is exactly why this counts all in-flight AI activity
       // for the payer, not machine-specific sessions.
+      const walletId = await walletOf(user.id);
       await db.insert(creditHolds).values([
-        { userId: user.id, estCents: 2, expiresAt: future, aiUsageLogId: null },
-        { userId: user.id, estCents: 25, expiresAt: future, aiUsageLogId: null },
+        { userId: user.id, walletId, estCents: 2, expiresAt: future, aiUsageLogId: null },
+        { userId: user.id, walletId, estCents: 25, expiresAt: future, aiUsageLogId: null },
       ]);
 
       expect(await getLiveInFlightHolds(user.id)).toBe(2);

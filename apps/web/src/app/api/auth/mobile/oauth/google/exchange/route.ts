@@ -67,6 +67,8 @@ import { getClientIP } from '@/lib/auth';
 import { createSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const oauthExchangeSchema = z.object({
   idToken: z.string().min(1, 'ID token is required'),
@@ -266,6 +268,9 @@ export async function POST(req: Request) {
       provider: user.provider,
     });
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(user.id);
+
     // Provision the user's Home drive (idempotent). Non-fatal: a failure is
     // retried lazily on the next login through any auth path.
     await provisionHomeDriveIfNeeded(user.id).catch((error) => {
@@ -276,7 +281,10 @@ export async function POST(req: Request) {
     });
 
     // Create session token (opaque, stored in DB)
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'google' }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId: user.id,
       type: 'user',
       scopes: ['*'],
@@ -298,6 +306,7 @@ export async function POST(req: Request) {
 
     // Create or validate device token for the mobile device
     const { deviceToken: deviceTokenValue } = await validateOrCreateDeviceToken({
+      authentication,
       providedDeviceToken,
       userId: user.id,
       deviceId,

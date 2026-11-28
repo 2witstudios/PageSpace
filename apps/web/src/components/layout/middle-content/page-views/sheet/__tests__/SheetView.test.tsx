@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import {
   MAX_CONDITIONAL_RULES,
   createEmptySheet,
@@ -31,6 +31,10 @@ const documentState: { current: { content: string; isDirty: boolean } | undefine
   current: undefined,
 };
 const lacksEditPermission = { current: false };
+// What the content fetch reports: true when stored content is available.
+const contentLoads = { current: true };
+// One stable function, like the real memoized callback, so calls can be counted.
+const initializeAndActivate = vi.fn(() => Promise.resolve(contentLoads.current));
 
 /**
  * `useSheetPersistence` runs for real; only its boundary to the store and the
@@ -44,7 +48,7 @@ vi.mock('@/hooks/useDocument', () => ({
     document: documentState.current ? { ...documentState.current } : undefined,
     isLoading: false,
     isSaving: false,
-    initializeAndActivate: vi.fn(),
+    initializeAndActivate,
     updateContent: vi.fn(),
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),
@@ -105,7 +109,7 @@ type SheetViewProps = React.ComponentProps<typeof SheetView>;
 type TestPage = SheetViewProps['page'];
 
 /** A minimal TreePage; SheetView reads only these fields. */
-const makePage = (content: string): TestPage =>
+const makePage = (content: string | undefined): TestPage =>
   ({
     id: 'page-1',
     title: 'Budget',
@@ -131,6 +135,8 @@ const cellText = (address: string): string =>
 describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
+    contentLoads.current = true;
+    initializeAndActivate.mockClear();
     // A primed `mockImplementationOnce` that never fires would leak into the
     // next test's setup, so clear any leftover between tests.
     vi.mocked(serializeSheetContent).mockClear();
@@ -501,6 +507,55 @@ describe('SheetView', () => {
     render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+  });
+
+  it('stays read-only until the stored content has loaded', () => {
+    // Tree pages carry no content. Before the fetch lands the grid is an empty
+    // placeholder, and an edit to it would autosave over the stored cells.
+    documentState.current = undefined;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+    expect((screen.getAllByRole('button', { name: 'Add row' })[0] as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('shows the load-failure banner when the content fetch fails', async () => {
+    documentState.current = undefined;
+    contentLoads.current = false;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('could not be loaded');
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+  });
+
+  it('becomes editable only once the fetched sheet is on screen', () => {
+    // The fetch lands after the first render: the grid must show the stored
+    // cells, not the placeholder, by the time editing is allowed.
+    documentState.current = undefined;
+    const { rerender } = render(<SheetView page={makePage(undefined)} />);
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+
+    documentState.current = { content: contentWith({ A1: 'stored' }), isDirty: false };
+    rerender(<SheetView page={makePage(undefined)} />);
+
+    expect(cellText('A1')).toBe('stored');
+    expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('false');
+  });
+
+  it('retries a failed content fetch from the banner', async () => {
+    documentState.current = undefined;
+    contentLoads.current = false;
+
+    render(<SheetView page={makePage(undefined)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+
+    await waitFor(() => expect(initializeAndActivate).toHaveBeenCalledTimes(2));
+    expect(initializeAndActivate).toHaveBeenLastCalledWith({ emptyOnFailure: false });
   });
 
   it('survives a serialization failure instead of blanking the page', () => {

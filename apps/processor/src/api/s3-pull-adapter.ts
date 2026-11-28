@@ -1,8 +1,10 @@
+import { deleteOriginalUnlessHeld } from '../services/takedown-guard';
 import { contentStore } from '../server';
 import {
   setPageProcessing,
   setPageCompleted,
   setPageVisual,
+  setPageVisualWithContent,
   setPageVideoProcessed,
   setPageFailed,
 } from '../db';
@@ -11,11 +13,20 @@ import {
   detectContentType,
   isAllowedContentType,
   extractTextContent,
+  withPdf,
+  extractPdfContent,
+  isScanLikePdf,
+  leadingPdfPages,
+  pdfPagesPaintingImages,
+  rasterizePdfPages,
+  pdfPagePreset,
+  resolveMaxRasterizedPdfPages,
   generateImageVariants,
   extractVideoMetadata,
   extractVideoThumbnail,
 } from '../services/processing-pipeline';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { createSemaphore, positiveIntOr } from '../utils/semaphore';
 
 /**
  * S3 pull adapter — the only layer that performs I/O. It fetches the stored
@@ -52,8 +63,8 @@ export async function fetchObjectFromS3(contentHash: string, opts: FetchOptions 
   throw new Error(`Object not found in S3 after ${maxAttempts} attempts: ${contentHash}`);
 }
 
+// PDFs are processed on their own (processPdfPage): a scan is visual, not text.
 const TEXT_EXTRACTABLE = new Set([
-  'application/pdf',
   // .docx only — mammoth cannot read legacy binary .doc (application/msword)
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'text/plain',
@@ -105,7 +116,7 @@ export async function runPullPipeline(job: PullJob, fetchOpts: FetchOptions = {}
  */
 async function rejectAndFail(pageId: string, contentHash: string, reason: string): Promise<void> {
   try {
-    await contentStore.deleteOriginal(contentHash);
+    await deleteOriginalUnlessHeld(contentHash);
   } catch (err) {
     loggers.processor.error('Failed to delete rejected object', err instanceof Error ? err : undefined, { pageId, contentHash });
   }
@@ -134,6 +145,11 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
     return;
   }
 
+  if (mimeType === 'application/pdf') {
+    await processPdfPage(pageId, contentHash, bytes);
+    return;
+  }
+
   if (TEXT_EXTRACTABLE.has(mimeType)) {
     const text = await extractTextContent(bytes, mimeType);
     await setPageCompleted(pageId, text ?? '', { mimeType }, 'text');
@@ -142,4 +158,74 @@ async function dispatch(pageId: string, contentHash: string, bytes: Buffer, mime
 
   // Allowed but not specifically processable — keep the file, mark visual.
   await setPageVisual(pageId);
+}
+
+/**
+ * Rendering a scan is the heaviest thing the processor does (hundreds of MB off
+ * heap, near-second event-loop stalls per page on a shared CPU), and both the
+ * upload queue (pull-verify) and Reprocess (ingest-file) reach processPdfPage.
+ * One process-wide limit covers the whole PDF pass, load and parse included, so
+ * a PDF waiting its turn holds no parsed document.
+ */
+const pdfProcessing = createSemaphore(positiveIntOr(process.env.PDF_RASTER_CONCURRENCY, 1));
+
+/**
+ * A PDF with a real text layer stays a `completed` text document with all its
+ * text, so every text reader (read_page, MCP, search) keeps it. Its low-text
+ * pages that paint an image — scanned exhibits, photos — are still rendered to
+ * `pdf-page-{n}` JPEG presets, listed in extractionMetadata.renderedPages, so
+ * read_page can offer those pages to vision models.
+ *
+ * A PDF with no real text layer — a scan — is marked `visual`, keeping
+ * whatever text it had, and its leading pages are rendered.
+ *
+ * Shared by the upload pipeline and the ingest-file worker (Reprocess), so a
+ * reprocessed file gets the same status and page images as a new upload.
+ * Returns the status it recorded.
+ */
+export async function processPdfPage(pageId: string, contentHash: string, bytes: Buffer): Promise<'completed' | 'visual'> {
+  const mimeType = 'application/pdf';
+  return pdfProcessing.run(() => withPdf(bytes, async (pdf) => {
+    const content = await extractPdfContent(pdf);
+    const { text, pageCount } = content;
+    const scan = isScanLikePdf(content);
+    const maxPages = resolveMaxRasterizedPdfPages();
+    // A scan renders its leading pages. A text document renders only low-text
+    // pages that paint an image (a scanned exhibit, a photo), not its blank
+    // separators or text-only covers.
+    const toRender = scan
+      ? leadingPdfPages(pageCount, maxPages)
+      : await pdfPagesPaintingImages(pdf, content.lowTextPageNumbers, maxPages);
+
+    let renderedPages: number[] = [];
+    if (toRender.length > 0) {
+      try {
+        ({ rendered: renderedPages } = await rasterizePdfPages(pdf, {
+          pages: toRender,
+          // Each page is cached as soon as it is rendered, and one at a time:
+          // saveCache read-modify-writes the hash's cache metadata.
+          onPage: async (page) => {
+            await contentStore.saveCache(contentHash, pdfPagePreset(page.pageNumber), page.buffer, page.mimeType);
+          },
+        }));
+      } catch (err) {
+        // The page stays readable (as a PDF, or by its text) without page images.
+        loggers.processor.warn('PDF page rendering failed; recording no page images', {
+          pageId,
+          contentHash,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        renderedPages = [];
+      }
+    }
+
+    if (!scan) {
+      await setPageCompleted(pageId, text, { mimeType, pageCount, ...(renderedPages.length > 0 ? { renderedPages } : {}) }, 'text');
+      return 'completed';
+    }
+    // A scan always records its list, even empty: "processed, nothing rendered"
+    // is different from a PDF processed before page images existed.
+    await setPageVisualWithContent(pageId, text, { mimeType, pageCount, renderedPages });
+    return 'visual';
+  }));
 }

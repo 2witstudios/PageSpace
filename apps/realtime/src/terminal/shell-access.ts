@@ -27,11 +27,13 @@
  * chain (replaced wholesale by the session access decision).
  */
 
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import { resolveShellLaunchSpec } from '@pagespace/lib/services/agent-workspaces/shell-types';
 import type { AgentSessionAccessSubject } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { SpriteInstanceLike } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { computeChargeTier, type ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 import type { ShellCheckAuthFn } from './shell-handler';
 
 /**
@@ -57,17 +59,21 @@ export interface ShellCheckAuthDeps {
     | { ok: false; reason: 'not_found' }
   >;
   /** The ONE session access decision — `checkAgentSessionAccess` wired with real IO. DB-only, never wakes a Sprite. */
-  checkSessionAccess: (input: { requesterId: string; workspaceId: string }) => Promise<ShellSessionAccessResult>;
+  checkSessionAccess: (input: { requester: AccessActor; workspaceId: string }) => Promise<ShellSessionAccessResult>;
   /**
    * Who pays for this session's runtime, and which drive an audit row lands
-   * under. Payer = the session's own DRIVE owner, falling back to the
-   * session's own owner when there is no drive (a global-assistant session)
-   * or the drive has vanished — the drive-owner ?? session-owner attribution
-   * rule.
+   * under. Payer = the session's own DRIVE's payer (`resolveSessionPayer`),
+   * falling back to the session's own owner when there is no drive (a
+   * global-assistant session) or the drive has vanished. An org drive's payer
+   * is the org (WAL-9): the charge is its POOL wallet, recorded under and capped
+   * against `actorId` — the person connecting, who is the one running compute —
+   * never the session's owner (a drive session is shared with drive members).
    */
-  resolvePayer: (session: AgentSessionAccessSubject) => Promise<{ payerId: string; driveId: string | null }>;
+  resolvePayer: (session: AgentSessionAccessSubject, actorId: string) => Promise<{ charge: ComputeCharge; driveId: string | null } | null>;
   /** A user row's tier + email, or undefined when the row is missing. Called for the requester (audit email) and, when different, the payer (slot-eligibility tier). */
   getUser: (userId: string) => Promise<{ subscriptionTier: string | null; email: string | null } | undefined>;
+  /** SEAT-9 / WAL-8: whether an org is lapsed — an org charge then confers no tier, so no slot (review #2761). */
+  isOrgLapsed: (orgId: string) => Promise<boolean>;
   resolveActorEmail: (email: string | null | undefined) => Promise<string>;
   acquireSlot: (args: { userId: string; tier: SubscriptionTier }) => boolean;
   releaseSlot: (userId: string) => void;
@@ -77,7 +83,7 @@ export interface ShellCheckAuthDeps {
    * with real deps by the caller. One code path with the web tier, so the CAS
    * inside it actually serializes concurrent provisioners.
    */
-  ensureSessionSandbox: (input: { workspaceId: string; userId: string }) => Promise<
+  ensureSessionSandbox: (input: { workspaceId: string; actor: AccessActor }) => Promise<
     | { ok: true; sandboxId: string }
     | { ok: false; reason: string }
   >;
@@ -103,7 +109,8 @@ export interface ShellCheckAuthDeps {
  * it.
  */
 export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn {
-  return async ({ userId, shellId }) => {
+  return async ({ actor, shellId }) => {
+    const { userId } = actor;
     // The row IS the address: an unresolvable shellId has nothing to authorize
     // against, so the lookup comes first. It leaks nothing a denial would not —
     // the id is an unguessable cuid, and the session decision downstream keeps
@@ -118,13 +125,22 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // THE access decision — the same pure `decideAgentSessionAccess` verdict
     // the web API routes enforce, reached through the same IO wrapper. Nothing
     // here weighs the facts; it only carries the verdict.
-    const access = await deps.checkSessionAccess({ requesterId: userId, workspaceId: shell.workspaceId });
+    const access = await deps.checkSessionAccess({ requester: actor, workspaceId: shell.workspaceId });
     if (!access.allowed) {
       deps.logDenied(access.reason, { userId, shellId, workspaceId: shell.workspaceId });
       return { ok: false, reason: access.reason };
     }
 
-    const { payerId, driveId } = await deps.resolvePayer(access.session);
+    // WAL-9: an org drive's session charges the org pool. Whether the pool can pay is the
+    // billing gate's hold at PTY start, which refuses a missing, paused or empty pool by name.
+    // A drive session whose drive cannot be resolved has no payer (WAL-9): refused, never billed
+    // to the session's owner.
+    const payer = await deps.resolvePayer(access.session, userId);
+    if (payer === null) {
+      deps.logDenied('payer_unresolved', { userId, shellId, workspaceId: shell.workspaceId });
+      return { ok: false, reason: 'payer_unresolved' };
+    }
+    const { charge, driveId } = payer;
 
     // Decrypt the actor email BEFORE anything is reserved (a decrypt throw here
     // must not leak a reserved slot — same ordering the predecessor had).
@@ -135,8 +151,10 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
     // Pro-owned drive runs on the drive owner's plan. The slot itself is
     // still counted against the REQUESTER (`userId`), keeping per-actor
     // concurrency accounting separate from payer-based entitlement.
-    const payerRow = payerId === userId ? userRow : await deps.getUser(payerId);
-    const tier = (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier;
+    // An org charge runs on the org's tier (SEAT-8), whatever the lead's or requester's plan.
+    const payerRow = charge.kind === 'org' || charge.userId === userId ? userRow : await deps.getUser(charge.userId);
+    const orgLapsed = charge.kind === 'org' ? await deps.isOrgLapsed(charge.orgId) : false;
+    const tier = computeChargeTier(charge, (payerRow?.subscriptionTier ?? 'free') as SubscriptionTier, orgLapsed);
     const actorEmail = await deps.resolveActorEmail(userRow?.email);
 
     return {
@@ -145,7 +163,9 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
       // what lets the caller look up a live session before deciding whether
       // any sandbox work is warranted at all.
       sessionKey: deps.buildSessionKey({ shellId }),
-      payerId,
+      charge,
+      ownerId: access.session.ownerId,
+      actorId: userId,
       /** Billing attribution scope: the session's drive, or null for an owner-attributed global-assistant session. A session is not page-anchored, so there is no pageId to attribute. */
       driveId: access.session.driveId,
 
@@ -175,7 +195,7 @@ export function buildShellCheckAuth(deps: ShellCheckAuthDeps): ShellCheckAuthFn 
         // that verdict lives in `plan-workspace-lifecycle.ts`, not here.
         let ensured: Awaited<ReturnType<ShellCheckAuthDeps['ensureSessionSandbox']>>;
         try {
-          ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, userId });
+          ensured = await deps.ensureSessionSandbox({ workspaceId: shell.workspaceId, actor });
         } catch (error) {
           releaseSlot();
           throw error;

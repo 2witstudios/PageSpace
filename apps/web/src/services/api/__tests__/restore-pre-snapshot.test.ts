@@ -7,6 +7,7 @@ vi.mock('@/services/api/drive-backup-service', () => ({
 
 import { createDriveBackup } from '@/services/api/drive-backup-service';
 import { runPreRestoreSnapshot } from '../restore-backup-service';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Pure function tests (zero mocks, zero I/O)
@@ -49,7 +50,7 @@ describe('runPreRestoreSnapshot', () => {
       error: 'disk full',
     } as never);
 
-    const result = await runPreRestoreSnapshot(driveId, userId, backupId);
+    const result = await runPreRestoreSnapshot(driveId, credentialActor(userId, null), backupId);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Pre-restore snapshot failed');
     expect(result.error).toContain('disk full');
@@ -58,7 +59,7 @@ describe('runPreRestoreSnapshot', () => {
   it('returns failure when createDriveBackup throws', async () => {
     vi.mocked(createDriveBackup).mockRejectedValue(new Error('network error'));
 
-    const result = await runPreRestoreSnapshot(driveId, userId, backupId);
+    const result = await runPreRestoreSnapshot(driveId, credentialActor(userId, null), backupId);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Pre-restore snapshot failed');
   });
@@ -71,7 +72,7 @@ describe('runPreRestoreSnapshot', () => {
       counts: { pages: 5, permissions: 0, members: 0, roles: 0, files: 0 },
     } as never);
 
-    const result = await runPreRestoreSnapshot(driveId, userId, backupId);
+    const result = await runPreRestoreSnapshot(driveId, credentialActor(userId, null), backupId);
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.preRestoreBackupId).toBe('snap-1');
@@ -86,11 +87,11 @@ describe('runPreRestoreSnapshot', () => {
       counts: { pages: 0, permissions: 0, members: 0, roles: 0, files: 0 },
     } as never);
 
-    await runPreRestoreSnapshot(driveId, userId, backupId);
+    await runPreRestoreSnapshot(driveId, credentialActor(userId, null), backupId);
 
     expect(createDriveBackup).toHaveBeenCalledWith(
       driveId,
-      userId,
+      expect.objectContaining({ userId: userId }),
       expect.objectContaining({
         source: 'pre_restore',
         label: decideSnapshotLabel(backupId),

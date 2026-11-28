@@ -4,8 +4,10 @@ import { taskItems } from '@pagespace/db/schema/tasks'
 import { workflows } from '@pagespace/db/schema/workflows';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { executeWorkflow, type WorkflowExecutionInput } from './workflow-executor';
+import { creditAdmission } from './workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { validateAgentTrigger, type AgentTriggerPayload } from './agent-trigger-shared';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 export interface AgentTriggerInput extends AgentTriggerPayload {
   triggerType: 'due_date' | 'completion';
@@ -102,13 +104,17 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
 
     if (existing.length > 0) {
       const workflowId = existing[0].workflowId;
+      // [D-OW-36] Editing the trigger of an owner-left workflow saves the edit but never switches it back
+      // on: only an Owner or Admin's reassignment does.
+      const [current] = await tx.select({ ownerLeftAt: workflows.ownerLeftAt }).from(workflows).where(eq(workflows.id, workflowId));
+      const ownerLeft = Boolean(current?.ownerLeftAt);
       await tx.update(workflows).set({
         agentPageId: agentTrigger.agentPageId,
         prompt: triggerPrompt,
         instructionPageId: agentTrigger.instructionPageId ?? null,
         contextPageIds,
         timezone,
-        isEnabled: true,
+        ...(ownerLeft ? {} : { isEnabled: true }),
       }).where(eq(workflows.id, workflowId));
 
       await tx.update(taskTriggers).set({
@@ -121,7 +127,7 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         eq(taskTriggers.triggerType, triggerType),
       ));
 
-      return { workflowId, triggerId: existing[0].id };
+      return { workflowId, triggerId: existing[0].id, ownerLeft };
     } else {
       const [createdWorkflow] = await tx.insert(workflows).values({
         driveId,
@@ -144,13 +150,14 @@ export async function createTaskTriggerWorkflow(params: CreateTaskTriggerWorkflo
         isEnabled: true,
       }).returning({ id: taskTriggers.id });
 
-      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id };
+      return { workflowId: createdWorkflow.id, triggerId: createdTrigger.id, ownerLeft: false };
     }
   });
 
   await recomputeTaskTriggerMetadata(database, taskId, taskMetadata);
 
-  return { ...result, triggerType, nextRunAt, isEnabled: true };
+  const { ownerLeft, ...ids } = result;
+  return { ...ids, triggerType, nextRunAt, isEnabled: !ownerLeft };
 }
 
 /**
@@ -259,6 +266,17 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       return;
     }
 
+    // [D-OW-36] Nothing runs under a missing person: an owner-left workflow retires the one-shot
+    // trigger with the reason, before any gate or hold.
+    const owner = automationRunOwner(workflow);
+    if (!owner.runs) {
+      await db.update(taskTriggers).set({
+        isEnabled: false,
+        lastFireError: owner.error,
+      }).where(eq(taskTriggers.id, completionTrigger.id));
+      return;
+    }
+
     // The completion instant is this fire's occurrence time: it bounds a
     // transient credit refusal's retries to 24h, here and in the cron.
     const firedAt = new Date();
@@ -266,7 +284,7 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       workflowId: workflow.id,
       workflowName: workflow.name,
       driveId: workflow.driveId,
-      createdBy: workflow.createdBy,
+      createdBy: owner.ownerId,
       agentPageId: workflow.agentPageId,
       prompt: workflow.prompt,
       contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
@@ -274,18 +292,17 @@ export async function fireCompletionTrigger(taskId: string): Promise<void> {
       timezone: workflow.timezone,
       source: { table: 'taskTriggers', id: completionTrigger.id, triggerAt: firedAt },
       taskContext: { taskItemId: taskId, triggerType: 'completion' },
-      // No skipDailyCap: a completion fire is paced by the user (completing
-      // 500 tasks fires 500 runs), not by a schedule, so the tier daily cap
-      // stays on as the per-user/day backstop. The task-triggers cron retries
-      // a completion under the same policy.
-      creditGate: {},
     };
 
-    // executeWorkflow gates credit inside its run claim, on the owner the run
-    // bills. A settled refusal comes back `skipped` (a cancelled run carrying
-    // the reason) and retires the one-shot trigger below; a transient one comes
-    // back `retryable` and is handed to the task-triggers cron.
-    void executeWorkflow(input).then(async (result) => {
+    // The credit gate runs inside the executor's run claim, on the owner the
+    // run bills. 'user-paced', not 'scheduled': a completion fire is paced by
+    // the user (completing 500 tasks fires 500 runs), not by a schedule, so the
+    // tier daily cap stays on as the per-user/day backstop. The task-triggers
+    // cron retries a completion under the same mode. A settled refusal comes
+    // back `skipped` (a cancelled run carrying the reason) and retires the
+    // one-shot trigger below; a transient one comes back `retryable` and is
+    // handed to the task-triggers cron.
+    void executeWorkflow(input, { admit: creditAdmission(input, 'user-paced') }).then(async (result) => {
       try {
         if (result.retryable) {
           // A retryable unstarted run (transient refusal, or the gate threw)

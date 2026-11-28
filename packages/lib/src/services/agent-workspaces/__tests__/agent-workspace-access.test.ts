@@ -7,6 +7,7 @@
 import { describe, it, expect } from 'vitest';
 import { checkAgentSessionAccess, checkAgentSessionEndAccess, type AgentSessionAccessDeps } from '../agent-workspace-access';
 import { DRIVE_ID, OWNER_ID, SESSION_ID } from './fakes';
+import { credentialActor } from '../../../permissions/access-actor';
 
 const subject = { ownerId: OWNER_ID, driveId: DRIVE_ID };
 
@@ -22,7 +23,7 @@ function makeDeps(over: Partial<AgentSessionAccessDeps> = {}): AgentSessionAcces
 describe('checkAgentSessionAccess', () => {
   it('given no such session, should answer session_not_found — a lookup fact, distinct from denial', async () => {
     const result = await checkAgentSessionAccess({
-      requesterId: OWNER_ID,
+      requester: credentialActor(OWNER_ID, null),
       workspaceId: 'missing',
       deps: makeDeps({ findSession: async () => null }),
     });
@@ -32,11 +33,11 @@ describe('checkAgentSessionAccess', () => {
   it('given a drive session, should resolve membership against the ROW driveId', async () => {
     const seen: Array<{ userId: string; driveId: string }> = [];
     await checkAgentSessionAccess({
-      requesterId: 'user-2',
+      requester: credentialActor('user-2', null),
       workspaceId: SESSION_ID,
       deps: makeDeps({
         resolveDriveMembership: async (input) => {
-          seen.push(input);
+          seen.push({ userId: input.actor.userId, driveId: input.driveId });
           return 'member';
         },
       }),
@@ -46,7 +47,7 @@ describe('checkAgentSessionAccess', () => {
 
   it('given a global-assistant session, should NOT fetch a membership at all', async () => {
     const result = await checkAgentSessionAccess({
-      requesterId: OWNER_ID,
+      requester: credentialActor(OWNER_ID, null),
       workspaceId: SESSION_ID,
       deps: makeDeps({
         findSession: async () => ({ ...subject, driveId: null }),
@@ -59,7 +60,7 @@ describe('checkAgentSessionAccess', () => {
   });
 
   it('given a member allowed by everything, should allow', async () => {
-    const result = await checkAgentSessionAccess({ requesterId: 'user-2', workspaceId: SESSION_ID, deps: makeDeps() });
+    const result = await checkAgentSessionAccess({ requester: credentialActor('user-2', null), workspaceId: SESSION_ID, deps: makeDeps() });
     expect(result).toEqual({ allowed: true });
   });
 
@@ -68,7 +69,7 @@ describe('checkAgentSessionAccess', () => {
     // opens sessions, chat and panes; only the compute chokepoints weigh
     // canRunCode.
     const result = await checkAgentSessionAccess({
-      requesterId: 'user-2',
+      requester: credentialActor('user-2', null),
       workspaceId: SESSION_ID,
       deps: makeDeps({
         canRunCode: async () => {
@@ -83,7 +84,7 @@ describe('checkAgentSessionAccess', () => {
 describe('checkAgentSessionEndAccess', () => {
   it('given no such session, should answer session_not_found', async () => {
     const result = await checkAgentSessionEndAccess({
-      requesterId: OWNER_ID,
+      requester: credentialActor(OWNER_ID, null),
       workspaceId: 'missing',
       deps: makeDeps({ findSession: async () => null }),
     });
@@ -92,7 +93,7 @@ describe('checkAgentSessionEndAccess', () => {
 
   it('gathers the REAL capability for a non-owner — an admin without it cannot end (review H3)', async () => {
     const result = await checkAgentSessionEndAccess({
-      requesterId: 'user-2',
+      requester: credentialActor('user-2', null),
       workspaceId: SESSION_ID,
       deps: makeDeps({ resolveDriveMembership: async () => 'admin', canRunCode: async () => false }),
     });
@@ -101,7 +102,7 @@ describe('checkAgentSessionEndAccess', () => {
 
   it('a plain MEMBER with the capability still may NOT end — delete authority required (codex round 12)', async () => {
     const result = await checkAgentSessionEndAccess({
-      requesterId: 'user-2',
+      requester: credentialActor('user-2', null),
       workspaceId: SESSION_ID,
       deps: makeDeps({ canRunCode: async () => true }),
     });
@@ -110,7 +111,7 @@ describe('checkAgentSessionEndAccess', () => {
 
   it('a drive ADMIN with the capability may end — delete authority plus the capability', async () => {
     const result = await checkAgentSessionEndAccess({
-      requesterId: 'user-2',
+      requester: credentialActor('user-2', null),
       workspaceId: SESSION_ID,
       deps: makeDeps({ resolveDriveMembership: async () => 'admin', canRunCode: async () => true }),
     });
@@ -121,7 +122,7 @@ describe('checkAgentSessionEndAccess', () => {
     // Release-of-compute is the owner's emergency exit — the short-circuit in
     // the pure decider, exercised through the gather.
     const result = await checkAgentSessionEndAccess({
-      requesterId: OWNER_ID,
+      requester: credentialActor(OWNER_ID, null),
       workspaceId: SESSION_ID,
       deps: makeDeps({ resolveDriveMembership: async () => 'none', canRunCode: async () => false }),
     });

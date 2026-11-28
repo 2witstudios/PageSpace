@@ -28,7 +28,7 @@ describe('Session Fixation Prevention - Service Layer', () => {
       }));
 
       const { sessionService } = await import('@pagespace/lib/auth/session-service');
-      const token = await sessionService.createSession({
+      const token = await sessionService.createSession({ authentication: null,
         userId: 'user-123',
         type: 'user',
         scopes: ['*'],

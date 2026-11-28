@@ -133,7 +133,7 @@ describe('validateRevokeRequest', () => {
       validateRevokeRequest({
         invite: null,
         requestedDriveId,
-        actorMembership: { role: 'OWNER', acceptedAt: new Date() },
+        actorRole: 'OWNER',
       }),
     ).toEqual({ ok: false, error: 'NOT_FOUND' });
   });
@@ -143,17 +143,17 @@ describe('validateRevokeRequest', () => {
       validateRevokeRequest({
         invite: { ...inviteRow, driveId: 'drive_other' },
         requestedDriveId,
-        actorMembership: { role: 'OWNER', acceptedAt: new Date() },
+        actorRole: 'OWNER',
       }),
     ).toEqual({ ok: false, error: 'NOT_FOUND' });
   });
 
-  it('given actor has no membership on the drive, should return FORBIDDEN', () => {
+  it('given actor has no effective role on the drive (no membership, or only a pending invitation), should return FORBIDDEN', () => {
     expect(
       validateRevokeRequest({
         invite: inviteRow,
         requestedDriveId,
-        actorMembership: null,
+        actorRole: null,
       }),
     ).toEqual({ ok: false, error: 'FORBIDDEN' });
   });
@@ -163,27 +163,7 @@ describe('validateRevokeRequest', () => {
       validateRevokeRequest({
         invite: inviteRow,
         requestedDriveId,
-        actorMembership: { role: 'MEMBER', acceptedAt: new Date() },
-      }),
-    ).toEqual({ ok: false, error: 'FORBIDDEN' });
-  });
-
-  it('given an ADMIN actor with acceptedAt null (pending), should return FORBIDDEN', () => {
-    expect(
-      validateRevokeRequest({
-        invite: inviteRow,
-        requestedDriveId,
-        actorMembership: { role: 'ADMIN', acceptedAt: null },
-      }),
-    ).toEqual({ ok: false, error: 'FORBIDDEN' });
-  });
-
-  it('given an OWNER with acceptedAt null, should return FORBIDDEN (strict gate, matches drive-member-gate-coverage)', () => {
-    expect(
-      validateRevokeRequest({
-        invite: inviteRow,
-        requestedDriveId,
-        actorMembership: { role: 'OWNER', acceptedAt: null },
+        actorRole: 'MEMBER',
       }),
     ).toEqual({ ok: false, error: 'FORBIDDEN' });
   });
@@ -193,7 +173,7 @@ describe('validateRevokeRequest', () => {
       validateRevokeRequest({
         invite: inviteRow,
         requestedDriveId,
-        actorMembership: { role: 'OWNER', acceptedAt: new Date() },
+        actorRole: 'OWNER',
       }),
     ).toEqual({ ok: true, data: inviteRow });
   });
@@ -203,7 +183,7 @@ describe('validateRevokeRequest', () => {
       validateRevokeRequest({
         invite: inviteRow,
         requestedDriveId,
-        actorMembership: { role: 'ADMIN', acceptedAt: new Date() },
+        actorRole: 'ADMIN',
       }),
     ).toEqual({ ok: true, data: inviteRow });
   });

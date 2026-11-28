@@ -48,6 +48,9 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
   color: text('color').notNull(),
   group: text('group', { enum: ['todo', 'in_progress', 'done'] }).notNull(),
   position: integer('position').notNull().default(0),
+  // Advisory work-in-progress limit for this status column. NULL = no limit.
+  // Never enforced on writes — the board only warns when a column exceeds it.
+  wipLimit: integer('wipLimit'),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => {
@@ -87,6 +90,9 @@ export const taskItems = pgTable('task_items', {
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }).unique(),
   status: text('status').notNull().default('pending'),
   priority: text('priority', { enum: ['low', 'medium', 'high'] }).notNull().default('medium'),
+  // Optional start of the task's scheduled span; when set alongside dueDate it
+  // must be on or before it (enforced by the task write routes).
+  startDate: timestamp('startDate', { mode: 'date' }),
   dueDate: timestamp('dueDate', { mode: 'date' }),
   metadata: jsonb('metadata'),
   completedAt: timestamp('completedAt', { mode: 'date' }),

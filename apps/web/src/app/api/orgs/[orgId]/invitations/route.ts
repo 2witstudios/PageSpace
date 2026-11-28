@@ -1,0 +1,130 @@
+import { NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/api-error';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
+import { createOrRotateInvitation, listOpenInvitations } from '@pagespace/lib/organizations/invitations';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { authorizeOrgRequest, ORG_TOKEN_READ_AUTH, ORG_TOKEN_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { inviteCreateSchema } from '@/lib/orgs/org-schemas';
+import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
+import { orgRefusalResponse } from '@/lib/orgs/org-refusal-response';
+import { orgPolicyRefusalResponse } from '@/lib/orgs/org-policy-refusal-response';
+import { defaultSeatBilling } from '@/lib/org-billing/seat-billing';
+
+type Context = { params: Promise<{ orgId: string }> };
+
+/** GET /api/orgs/[orgId]/invitations — open invites; Owner and Admins. */
+export async function GET(request: Request, context: Context) {
+  const { orgId } = await context.params;
+  const gate = await authorizeOrgRequest(request, orgId, 'ADMIN', ORG_TOKEN_READ_AUTH);
+  if (!gate.ok) return gate.response;
+  try {
+    const invitations = await listOpenInvitations(orgId);
+    auditRequest(request, {
+      eventType: 'data.read',
+      userId: gate.userId,
+      resourceType: 'organization_invitations',
+      resourceId: orgId,
+      details: { operation: 'list_org_invitations', count: invitations.length },
+    });
+    return NextResponse.json({ invitations });
+  } catch (error) {
+    loggers.api.error('Error listing organization invitations:', error as Error);
+    return NextResponse.json({ error: 'Failed to list invitations', code: 'internal_error' }, { status: 500 });
+  }
+}
+
+/**
+ * POST /api/orgs/[orgId]/invitations — invite by email (ORG-3); who may is the org's policy (POL-5): Owner and
+ * Admins by default, every member when the org says so.
+ * An expired open invite for the address is rotated in place. A new invite holds a seat
+ * (SEAT-3): inside the purchased count it is free, past it auto-add raises the Stripe quantity
+ * pro rata and otherwise the invite is REFUSED with 402 `seats_full` and a message naming
+ * what to do (SEAT-4).
+ */
+export async function POST(request: Request, context: Context) {
+  const { orgId } = await context.params;
+  // Any member reaches the service: who may invite is the org's policy (POL-5), decided there.
+  const gate = await authorizeOrgRequest(request, orgId, 'MEMBER', ORG_TOKEN_WRITE_AUTH);
+  if (!gate.ok) return gate.response;
+  try {
+    if (!(await isEmailVerified(gate.userId))) {
+      return NextResponse.json(
+        { error: 'Email verification required. Please verify your email to perform this action.', requiresEmailVerification: true, code: 'email_verification_required' },
+        { status: 403 },
+      );
+    }
+    const parsed = inviteCreateSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
+    }
+    const { email, role } = parsed.data;
+
+    const limit = await checkDistributedRateLimit(`org_invite:org:${orgId}:${email}`, DISTRIBUTED_RATE_LIMITS.DRIVE_INVITE);
+    if (!limit.allowed) {
+      return NextResponse.json(
+        { error: 'Too many invitations to this address. Please try again later.', code: 'rate_limited' },
+        { status: 429, headers: { 'Retry-After': String(limit.retryAfter ?? 900) } },
+      );
+    }
+
+    const result = await createOrRotateInvitation({
+      orgId,
+      email,
+      role,
+      invitedBy: gate.userId,
+      seatBilling: defaultSeatBilling(),
+      // [D-OW-26] a key never buys a seat: the service refuses a raise it would need.
+      credential: gate.credential,
+      now: new Date(),
+      deliver: (_invitation, token) => deliverOrgInvite({ orgId, inviterId: gate.userId, email, role, token }),
+    });
+    if (!result.ok) {
+      if (result.reason === 'delivery_failed') {
+        // The service has already undone the invite, so it holds no seat.
+        loggers.api.error('Failed to send organization invitation email', result.cause as Error, { orgId });
+        return NextResponse.json({ error: 'Failed to send the invitation email', code: 'delivery_failed' }, { status: 502 });
+      }
+      // Removed from the org between the gate and the write: the same 404 the gate gives a non-member.
+      if (result.reason === 'not_member') return apiError(404, 'org_not_found', 'Organization not found');
+      if (result.reason === 'org_lapsed') return orgLapsedResponse(result.message);
+      if (result.reason === 'org_policy') return orgPolicyRefusalResponse(result);
+      if (result.reason === 'mcp_token_cannot_move_money') {
+        return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
+      }
+      if (result.reason === 'seats_full') {
+        // The Owner finds this refusal in the audit trail even when an Admin hit it.
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId: gate.userId,
+          resourceType: 'organization',
+          resourceId: orgId,
+          details: { reason: 'seats_full', operation: 'create_org_invitation', purchased: result.purchased, held: result.held },
+        });
+        return orgRefusalResponse({ status: result.status, message: result.message, code: result.reason });
+      }
+      const error =
+        result.reason === 'already_member'
+          ? 'That person is already a member of this organization'
+          : 'That address already has a pending invitation; resend it instead';
+      return NextResponse.json({ error, code: result.reason }, { status: 409 });
+    }
+
+    auditRequest(request, {
+      eventType: 'data.write',
+      userId: gate.userId,
+      resourceType: 'organization_invitation',
+      resourceId: result.invitation.id,
+      details: { operation: result.rotated ? 'rotate_org_invitation' : 'create_org_invitation', orgId, role },
+    });
+    // X-4: the Members & seats page and the hub's pending count update for the org's admins.
+    void announceOrgChange(orgId, 'invitations');
+    return NextResponse.json({ invitation: result.invitation }, { status: result.rotated ? 200 : 201 });
+  } catch (error) {
+    loggers.api.error('Error creating organization invitation:', error as Error);
+    return NextResponse.json({ error: 'Failed to create invitation', code: 'internal_error' }, { status: 500 });
+  }
+}

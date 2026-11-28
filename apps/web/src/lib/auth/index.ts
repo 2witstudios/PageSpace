@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
 import { eq, and, isNull } from '@pagespace/db/operators'
@@ -27,6 +28,7 @@ export { MCP_TOKEN_PREFIX, SESSION_TOKEN_PREFIX, OAUTH_ACCESS_TOKEN_PREFIX };
 export type TokenType = 'mcp' | 'session' | 'oauth' | 'service';
 
 interface BaseAuthDetails {
+  authentication?: SessionClaims['authentication'];
   userId: string;
   role: 'user' | 'admin';
   tokenVersion: number;
@@ -150,6 +152,12 @@ export async function loadServicePrincipal(input: {
   service: 'agent-dispatch';
   allowedDriveIds: string[];
   originatingMcpTokenId?: string;
+  /**
+   * The DISPATCHING credential's ceremony evidence, carried in the signed payload like every derived credential's
+   * (SEC-2/3): the worker opens org drives exactly as far as the person who dispatched it. Null when that credential
+   * carried none, which every org sign-in policy refuses.
+   */
+  authentication: VerifiedAuthentication | null;
 }): Promise<ServiceAuthResult | null> {
   if (!input.userId) return null;
 
@@ -178,6 +186,7 @@ export async function loadServicePrincipal(input: {
   return {
     tokenType: 'service',
     service: input.service,
+    authentication: input.authentication,
     userId: user.id,
     role: user.role as 'user' | 'admin',
     tokenVersion: user.tokenVersion,
@@ -201,6 +210,8 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
         id: true,
         userId: true,
         isScoped: true,
+        authenticatedAt: true,
+        authenticationAssurance: true,
       },
       with: {
         user: {
@@ -268,6 +279,7 @@ export async function validateMCPToken(token: string): Promise<MCPAuthDetails | 
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: tokenRecord.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: tokenRecord.authenticatedAt?.getTime(), assurance: tokenRecord.authenticationAssurance }, Date.now()),
       allowedDriveIds,
     };
   } catch (error) {
@@ -361,6 +373,7 @@ export async function validateOAuthAccessToken(token: string): Promise<OAuthAuth
       tokenVersion: user.tokenVersion,
       adminRoleVersion: user.adminRoleVersion,
       tokenId: record.id,
+      authentication: parseVerifiedAuthentication({ authenticatedAtMs: record.authenticatedAt?.getTime(), assurance: record.authenticationAssurance }, Date.now()),
       scopes: parsed.scopes,
       driveScopes,
       allowedDriveIds,
@@ -474,6 +487,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
           tokenVersion: sessionResult.claims.tokenVersion,
           adminRoleVersion: sessionResult.claims.adminRoleVersion,
           sessionId: sessionResult.claims.sessionId,
+          authentication: sessionResult.claims.authentication,
           tokenType: 'session',
         } satisfies SessionAuthResult;
       }
@@ -508,6 +522,7 @@ export async function authenticateSessionRequest(request: Request): Promise<Auth
     tokenVersion: sessionResult.claims.tokenVersion,
     adminRoleVersion: sessionResult.claims.adminRoleVersion,
     sessionId: sessionResult.claims.sessionId,
+    authentication: sessionResult.claims.authentication,
     tokenType: 'session',
   } satisfies SessionAuthResult;
 }

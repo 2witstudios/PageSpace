@@ -17,7 +17,8 @@ import { directMessages, dmConversations } from '@pagespace/db/schema/social'
 import { pulseSummaries } from '@pagespace/db/schema/dashboard';
 import { userAutomationPreferences } from '@pagespace/db/schema/automation-preferences';
 import { filterPulseEligible } from '@pagespace/lib/billing/automation-preferences';
-import { fetchCalendarContext } from '../calendar-context';
+import { readReusablePulseSummaries } from '../source-admission';
+import { fetchCalendarContext, pulseSourceOrgIds } from '../calendar-context';
 import {
   groupActivitiesForDiff,
   type ActivityForDiff,
@@ -32,13 +33,18 @@ import {
 } from '@pagespace/lib/content/diff-generator';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { accessiblePageIds } from '@pagespace/lib/permissions/accessible-page-ids';
+import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
+import { scopeReadableByModel } from '@/lib/ai/core/org-model-policy';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring, discardUsageOutcome, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
 import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { PERSONAL_SPEND } from '@pagespace/lib/billing/spend-target';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
+import { errorLogFields } from '@pagespace/lib/logging/error-cause';
+import { HELD_DRIVES, automationActor } from '@pagespace/lib/permissions/access-actor';
 
 export async function POST(req: Request) {
   const authError = validateSignedCronRequest(req);
@@ -121,7 +127,7 @@ export async function POST(req: Request) {
         }
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        loggers.api.error(`Pulse cron: Failed for user ${userId}`, { error: errorMsg });
+        loggers.api.error(`Pulse cron: Failed for user ${userId}`, errorLogFields(error));
         errors.push(`${userId}: ${errorMsg}`);
       }
     }
@@ -165,7 +171,10 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   // legitimate scheduled summary once a heavy user hit their interactive ceiling). The
   // credit balance still gates it. No maxInFlight: the cron runs one generation per user
   // per tick, so there is no concurrency to bound.
-  const gate = await canConsumeAI(userId, (user.subscriptionTier ?? 'free') as SubscriptionTier, {
+  const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user.subscriptionTier), {
+    // Pulse summarizes the person's own workspace and is not a drive session, so it
+    // spends their personal credits (SPEND-8).
+    spend: PERSONAL_SPEND,
     skipDailyCap: true,
   });
   if (!gate.allowed) {
@@ -183,7 +192,7 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
   const holdId = gate.holdId;
   let holdHandedOff = false;
   try {
-    await buildAndPersistPulse(user, now, holdId, () => {
+    await buildAndPersistPulse(user, now, { holdId, walletId: gate.walletId }, () => {
       holdHandedOff = true;
     });
     return true;
@@ -201,10 +210,13 @@ async function generatePulseForUser(userId: string, now: Date): Promise<boolean>
 async function buildAndPersistPulse(
   user: typeof users.$inferSelect,
   now: Date,
-  holdId: string | undefined,
+  reservation: { holdId: string | undefined; walletId: string | undefined },
   markHandedOff: () => void,
 ): Promise<void> {
+  const { holdId, walletId } = reservation;
   const userId = user.id;
+  // The scheduled pulse runs for the user with no one signing in (D-OW-34): org sign-in policy does not apply.
+  const actor = automationActor(userId, 'pulse-cron', HELD_DRIVES);
   // Decrypt PII at the edge so the pulse prompt addresses the user in plaintext.
   const userNamePlain = await decryptField(user.name);
   const userEmailPlain = await decryptField(user.email);
@@ -226,17 +238,16 @@ async function buildAndPersistPulse(
   // accepted drive_members row required — that row is only lazily backfilled
   // on first drive access) and explicit page-level grants with no drive
   // membership at all, and excludes trashed pages and pages in trashed drives.
-  const [userDrives, accessiblePagesList] = await Promise.all([
-    db
-      .select({ driveId: driveMembers.driveId })
-      .from(driveMembers)
-      .where(and(
-        eq(driveMembers.userId, userId),
-        isNotNull(driveMembers.acceptedAt)
-      )),
-    accessiblePageIds(userId),
+  const [userDrives, allAccessiblePages] = await Promise.all([
+    // Owned or joined (org-aware; page-level access does not count)
+    getMemberDriveIds(actor, { includeTrashed: true }),
+    accessiblePageIds(actor),
   ]);
-  const driveIds = userDrives.map(d => d.driveId);
+  // POL-8: the digest's model reads only drives (and pages in drives) whose org allows it.
+  const { driveIds, pageIds: accessiblePagesList } = await scopeReadableByModel(
+    { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+    { driveIds: userDrives, pageIds: allAccessiblePages },
+  );
   const accessiblePages = new Set(accessiblePagesList);
 
   // ========================================
@@ -266,7 +277,8 @@ async function buildAndPersistPulse(
     .where(and(
       inArray(driveMembers.driveId, driveIds),
       ne(driveMembers.userId, userId),
-      isNotNull(driveMembers.acceptedAt)
+      isNotNull(driveMembers.acceptedAt),
+      ne(driveMembers.role, 'GUEST')
     )) : [];
   // Decrypt PII at the edge so the team roster in the prompt is plaintext —
   // batched once per unique stored value (the same user repeats across
@@ -682,15 +694,7 @@ async function buildAndPersistPulse(
   // ========================================
   // 8. PREVIOUS PULSES (for deduplication)
   // ========================================
-  const recentPulses = await db
-    .select({
-      summary: pulseSummaries.summary,
-      generatedAt: pulseSummaries.generatedAt,
-    })
-    .from(pulseSummaries)
-    .where(eq(pulseSummaries.userId, userId))
-    .orderBy(desc(pulseSummaries.generatedAt))
-    .limit(5);
+  const recentPulses = await readReusablePulseSummaries(actor, { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL });
 
   // ========================================
   // 9. TASKS
@@ -756,12 +760,18 @@ async function buildAndPersistPulse(
   const endOfTomorrow = new Date(endOfToday.getTime() + 24 * 60 * 60 * 1000);
 
   const calendarContext = await fetchCalendarContext({
-    userId, driveIds, now, endOfToday, endOfTomorrow,
+    actor, model: { provider: BACKGROUND_LIGHT_PROVIDER, modelId: BACKGROUND_LIGHT_MODEL },
+    driveIds, now, endOfToday, endOfTomorrow,
   });
   const { happeningNow, upcomingToday } = calendarContext;
   const tomorrowEvents = calendarContext.tomorrow;
   const pendingRsvps = calendarContext.pendingInvites;
   const allCalendarEvents = calendarContext.allEvents;
+  // SEC-2/3 (D-OW-62): every org whose drive, page or calendar event can feed this summary; readers must satisfy all.
+  const contributingOrgIds = [...new Set([
+      ...await pulseSourceOrgIds({ driveIds, pageIds: accessiblePagesList, calendar: calendarContext }),
+      ...recentPulses.flatMap((pulse) => pulse.orgIds),
+    ])].sort();
 
   // ========================================
   // BUILD THE RICH CONTEXT WITH DIFFS
@@ -901,7 +911,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
   const providerResult = await createAIProvider(userId, {
     selectedProvider: BACKGROUND_LIGHT_PROVIDER,
     selectedModel: BACKGROUND_LIGHT_MODEL,
-  });
+  }, { driveId: null, contentDriveIds: [...driveIds, ...calendarContext.sourceDriveIds], contentOrgIds: contributingOrgIds });
 
   if (isProviderError(providerResult)) {
     // Throws before any model call — the caller's finally releases the reservation.
@@ -936,6 +946,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     providerCostDollars: extractOpenRouterCostDollars(result.steps),
     openrouterGenerationIds: extractOpenRouterGenerationIds(result.steps),
     holdId,
+    walletId,
     success: true,
   }));
   // The hold is now owned by trackUsage — keep the caller's finally from releasing it.
@@ -957,6 +968,7 @@ What would be genuinely useful or interesting to say right now? Maybe it's an ob
     summary,
     greeting,
     type: 'scheduled',
+    orgIds: contributingOrgIds,
     contextData: {
       workspace: contextData.workspace,
       workingOn: contextData.activitySummary.slice(0, 5).map(a => ({

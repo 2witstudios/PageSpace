@@ -21,7 +21,8 @@
  *     rights-request and erasure-suppression exclusions apply on top, as legal
  *     must-skips rather than preferences.
  *   - Each email quotes the recipient's CURRENT spendable balance (one LEFT JOIN
- *     on credit_balances), so "what you keep" is a number, not a promise.
+ *     on their personal root wallet, the former credit_balances row), so "what you
+ *     keep" is a number, not a promise.
  *
  * Usage:
  *   bun scripts/send-free-credits-change-notifications.ts                    # dry run (default)
@@ -42,7 +43,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
-import { creditBalances } from '@pagespace/db/schema/credits';
+import { wallets, isPersonalRootWallet } from '@pagespace/db/schema/wallets';
 import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
 import { and, eq, inArray, isNotNull, isNull, ne, or } from '@pagespace/db/operators';
@@ -53,9 +54,12 @@ import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isValidEmail } from '@pagespace/lib/validators/email';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import {
-  TIER_MONTHLY_ALLOWANCE_CENTS,
-  CREDIT_TOPUP_MIN_CENTS,
-} from '@pagespace/lib/billing/credit-pricing';
+  CREDIT_TOPUP_MIN_CREDITS,
+  centsFromCredits,
+  formatCreditCount,
+  formatDollars,
+  tierAllowanceCents,
+} from '@pagespace/lib/billing/money-model';
 import { FreeCreditsChangeEmail } from '@pagespace/lib/email-templates/FreeCreditsChangeEmail';
 import { renderEmailToHtml } from '@pagespace/lib/email-templates/render-email';
 import {
@@ -95,16 +99,9 @@ const NOTIFICATION_TYPE = 'PRODUCT_UPDATE' as const;
  */
 const IDEMPOTENCY_PREFIX = 'free-credits-change-2026-09';
 
-/** Whole cents → credit units for display ("5", "3.2"). Mirrors apps/web's formatCreditCount. */
-function formatCredits(cents: number): string {
-  const units = cents / 100;
-  return Number.isInteger(units) ? `${units}` : units.toFixed(1);
-}
-
-function formatDollars(cents: number): string {
-  const dollars = cents / 100;
-  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
-}
+// Credit and dollar strings come from the one money model (MON-5): a credit count
+// with no currency symbol, and a dollar price for the real top-up minimum.
+const formatCredits = formatCreditCount;
 
 function defaultLogPath(): string {
   const fromEnv = process.env.FREE_CREDITS_CHANGE_EMAIL_LOG_PATH?.trim();
@@ -158,9 +155,9 @@ async function main(): Promise<number> {
   const baseUrl = resolveBaseUrl();
   const planUrl = `${baseUrl}/settings/plan`;
   const usageUrl = `${baseUrl}/settings/usage`;
-  const starterCredits = formatCredits(TIER_MONTHLY_ALLOWANCE_CENTS.free);
-  const proMonthlyCredits = formatCredits(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
-  const minTopup = formatDollars(CREDIT_TOPUP_MIN_CENTS);
+  const starterCredits = formatCredits(tierAllowanceCents('free'));
+  const proMonthlyCredits = formatCredits(tierAllowanceCents('pro'));
+  const minTopup = formatDollars(centsFromCredits(CREDIT_TOPUP_MIN_CREDITS));
 
   console.log('📢 Free-plan credits change notice');
   console.log(`  Mode:          ${opts.live ? 'LIVE SEND' : 'DRY RUN (no sends) — pass --live to send'}`);
@@ -196,7 +193,7 @@ async function main(): Promise<number> {
     console.warn('  ⚠️  COMPANY_POSTAL_ADDRESS is empty — the footer will carry no postal address.\n');
   }
 
-  // The pages this email links to must be DEPLOYED (with the new "5 credits to
+  // The pages this email links to must be DEPLOYED (with the new "credits to
   // start" copy) before we mail a link to them. An anonymous probe follows the
   // auth redirect; a 2xx sign-in page proves the deploy carries the route.
   if (opts.live) {
@@ -248,13 +245,13 @@ async function main(): Promise<number> {
       id: users.id,
       name: users.name,
       email: users.email,
-      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-      topupRemainingCents: creditBalances.topupRemainingCents,
-      debtCents: creditBalances.debtCents,
-      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
     })
     .from(users)
-    .leftJoin(creditBalances, eq(creditBalances.userId, users.id))
+    .leftJoin(wallets, and(eq(wallets.userId, users.id), isPersonalRootWallet()))
     .where(and(...audience));
 
   console.log(`👥 ${rows.length} free-tier user(s) returned from the database.\n`);
@@ -271,7 +268,7 @@ async function main(): Promise<number> {
       continue;
     }
     const debt = r.debtCents ?? 0;
-    const pendingStarter = r.monthlyPeriodEnd === null ? TIER_MONTHLY_ALLOWANCE_CENTS.free : 0;
+    const pendingStarter = r.monthlyPeriodEnd === null ? tierAllowanceCents('free') : 0;
     const funded = r.monthlyRemainingCents + r.topupRemainingCents + pendingStarter;
     const spendable = debt > 0 ? funded - debt : Math.max(0, funded);
     balanceByUserId.set(

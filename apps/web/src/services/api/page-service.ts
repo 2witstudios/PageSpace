@@ -1,3 +1,4 @@
+import { normalizeEmptyDocumentContent as sanitizeEmptyContent } from '@pagespace/lib/documents/page-save';
 import { db } from '@pagespace/db/db'
 import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { eq, and, asc, desc, isNull } from '@pagespace/db/operators'
@@ -20,7 +21,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
-import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { applyPageMutation, OrgModelPolicyError, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
@@ -29,6 +30,9 @@ import {
   MEMORY_PAGE_DELETE_ERROR,
   MEMORY_PAGE_MOVE_ERROR,
 } from '@pagespace/lib/memory/memory-pages';
+import { OrgLapsedError, checkPageMayLoosen } from '@pagespace/lib/permissions/org-lapse-guard';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Helper to convert DB page result to PageData type
@@ -45,6 +49,7 @@ function toPageData(dbPage: {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -66,6 +71,7 @@ function toPageData(dbPage: {
     createdAt: dbPage.createdAt,
     updatedAt: dbPage.updatedAt,
     revision: dbPage.revision,
+    contentRevision: dbPage.contentRevision,
     stateHash: dbPage.stateHash,
     isTrashed: dbPage.isTrashed,
     trashedAt: dbPage.trashedAt,
@@ -75,46 +81,6 @@ function toPageData(dbPage: {
     enabledTools: dbPage.enabledTools as string[] | null,
     isPaginated: dbPage.isPaginated,
   };
-}
-
-/**
- * Content sanitization utility - cleans empty TipTap structures
- * Internal utility - not exported from module
- */
-function sanitizeEmptyContent(content: string): string {
-  if (!content || content.trim() === '') {
-    return '';
-  }
-
-  const trimmedContent = content.trim();
-
-  const emptyParagraphPatterns = [
-    /^<p><\/p>$/,
-    /^<p><br><\/p>$/,
-    /^<p>\s*<\/p>$/,
-    /^<p><br\s*\/><\/p>$/
-  ];
-
-  for (const pattern of emptyParagraphPatterns) {
-    if (pattern.test(trimmedContent)) {
-      return '';
-    }
-  }
-
-  try {
-    const parsed = JSON.parse(trimmedContent);
-    if (parsed.type === 'doc' &&
-        Array.isArray(parsed.content) &&
-        parsed.content.length === 1 &&
-        parsed.content[0].type === 'paragraph' &&
-        (!parsed.content[0].content || parsed.content[0].content.length === 0)) {
-      return '';
-    }
-  } catch {
-    // Not JSON, continue
-  }
-
-  return content;
 }
 
 /**
@@ -157,6 +123,7 @@ export interface PageData {
   createdAt: Date;
   updatedAt: Date;
   revision: number;
+  contentRevision: number;
   stateHash: string | null;
   isTrashed: boolean;
   trashedAt: Date | null;
@@ -206,6 +173,8 @@ export interface UpdatePageError {
   status: number;
   currentRevision?: number;
   expectedRevision?: number;
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 }
 
 export type UpdatePageResult = UpdatePageSuccess | UpdatePageError;
@@ -283,6 +252,7 @@ export interface CreatePageOptions {
 export interface UpdatePageParams {
   title?: string;
   content?: string;
+  contentMode?: 'html' | 'markdown';
   aiProvider?: string;
   aiModel?: string;
   parentId?: string | null;
@@ -292,6 +262,8 @@ export interface UpdatePageParams {
 
 export interface UpdatePageOptions {
   expectedRevision?: number;
+  /** What an editor saves against: refuses only a change to content that has moved on. */
+  expectedContentRevision?: number;
   context?: Omit<PageMutationContext, 'userId'>;
   source?: PageVersionSource;
   skipPermissionCheck?: boolean;
@@ -409,29 +381,29 @@ export const pageService = {
   /**
    * Check if user can view a page
    */
-  async canUserView(userId: string, pageId: string): Promise<boolean> {
-    return canUserViewPage(userId, pageId);
+  async canUserView(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserViewPage(actor, pageId);
   },
 
   /**
    * Check if user can edit a page
    */
-  async canUserEdit(userId: string, pageId: string): Promise<boolean> {
-    return canUserEditPage(userId, pageId);
+  async canUserEdit(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserEditPage(actor, pageId);
   },
 
   /**
    * Check if user can delete a page
    */
-  async canUserDelete(userId: string, pageId: string): Promise<boolean> {
-    return canUserDeletePage(userId, pageId);
+  async canUserDelete(actor: AccessActor, pageId: string): Promise<boolean> {
+    return canUserDeletePage(actor, pageId);
   },
 
   /**
    * Check if user is drive owner or admin
    */
-  async isDriveOwnerOrAdmin(userId: string, driveId: string): Promise<boolean> {
-    return isDriveOwnerOrAdmin(userId, driveId);
+  async isDriveOwnerOrAdmin(actor: AccessActor, driveId: string): Promise<boolean> {
+    return isDriveOwnerOrAdmin(actor, driveId);
   },
 
   /**
@@ -446,12 +418,12 @@ export const pageService = {
    */
   async getPage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     options?: { authorizeView?: (pageId: string) => Promise<boolean> },
   ): Promise<GetPageResult> {
     // Check authorization — routes serving scoped MCP tokens inject
     // canPrincipalViewPage so the token's own role decides (see CreatePageOptions.authorizeEdit).
-    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(userId, id));
+    const authorizeView = options?.authorizeView ?? ((id: string) => canUserViewPage(actor, id));
     const canView = await authorizeView(pageId);
     if (!canView) {
       return { success: false, error: 'You do not have permission to view this page', status: 403 };
@@ -506,13 +478,14 @@ export const pageService = {
    */
   async updatePage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     updates: UpdatePageParams,
     options?: UpdatePageOptions
   ): Promise<UpdatePageResult> {
+    const userId = actor.userId;
     // Check authorization (can be skipped by callers that have already verified a sufficient permission)
     if (!options?.skipPermissionCheck) {
-      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(userId, id));
+      const authorizeEdit = options?.authorizeEdit ?? ((id: string) => canUserEditPage(actor, id));
       const canEdit = await authorizeEdit(pageId);
       if (!canEdit) {
         return { success: false, error: 'You need edit permission to modify this page', status: 403 };
@@ -543,6 +516,8 @@ export const pageService = {
 
     const updatedFields = Object.keys(processedUpdates);
 
+    let committedPage: typeof pages.$inferSelect | undefined;
+
     if (updatedFields.length > 0) {
       try {
         const actorInfo = options?.context?.actorEmail
@@ -566,32 +541,70 @@ export const pageService = {
           resourceType: options?.context?.resourceType,
         };
 
-        await applyPageMutation({
+        const mutation = {
           pageId,
-          operation: 'update',
+          operation: 'update' as const,
           updates: processedUpdates,
           updatedFields,
           expectedRevision: options?.expectedRevision,
+          expectedContentRevision: options?.expectedContentRevision,
           context: mutationContext,
           source: options?.source,
+        };
+        // Every update holds the row, so the mutation reads the revision it is about to bump under the lock. An
+        // editor's save no longer checks the row revision, so nothing else stops a rename and a save racing: both
+        // would read N and write N+1, and the activity chain would hold two entries claiming the same place.
+        const result = await db.transaction(async (tx) => {
+          const [current] = await tx.select({ isPrivate: pages.isPrivate }).from(pages).where(eq(pages.id, pageId)).for('update');
+          // [D-OW-33] making a page readable by the whole drive loosens access: judged against the locked row, so a
+          // concurrent "make private" cannot slip between the check and the write. Refused (OrgLapsedError) only
+          // when the page is private now and its drive's org is lapsed.
+          if (
+            processedUpdates.isPrivate === false &&
+            current?.isPrivate === true &&
+            (await checkPageMayLoosen(tx, pageId, true))
+          ) {
+            throw new OrgLapsedError();
+          }
+          const mutationResult = await applyPageMutation({ ...mutation, tx: tx as unknown as typeof db });
+          const stored = await tx.query.pages.findFirst({ where: eq(pages.id, pageId) });
+          if (stored) {
+            // A save acknowledges the body and lock written by THIS transaction.
+            // Refetching after commit can attach a later writer's lock to this
+            // client's older buffer and silently authorize its next overwrite.
+            committedPage = {
+              ...stored,
+              content: isSheetType(stored.type as PageTypeEnum)
+                ? (await readSheetDocument(pageId, tx)) ?? stored.content ?? ''
+                : stored.content,
+            };
+          }
+          return mutationResult;
         });
+        result.deferredTrigger?.();
       } catch (error) {
+        // POL-8: a model or provider the drive's org does not allow is refused, nothing saved.
+        if (error instanceof OrgModelPolicyError) {
+          return { success: false, error: error.message, status: error.refusal.status };
+        }
         if (error instanceof PageRevisionMismatchError) {
           return {
             success: false,
             error: error.message,
-            status: error.expectedRevision === undefined ? 428 : 409,
+            status: error.expectedRevision === undefined && error.expectedContentRevision === undefined ? 428 : 409,
             currentRevision: error.currentRevision,
             expectedRevision: error.expectedRevision,
+            currentContentRevision: error.currentContentRevision,
+            expectedContentRevision: error.expectedContentRevision,
           };
         }
         throw error;
       }
     }
 
-    // Refetch the page with details
+    // Related data may be fresh, but the acknowledged body and lock must agree.
     const [updatedPage, children, messages] = await Promise.all([
-      db.query.pages.findFirst({
+      committedPage ?? db.query.pages.findFirst({
         where: eq(pages.id, pageId),
       }),
       // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -612,7 +625,7 @@ export const pageService = {
     // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
     // empty. The web editor happens to read only `revision` off this, which is
     // exactly the kind of accident that stops being true later.
-    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+    const responseContent = !committedPage && isSheetType(updatedPage.type as PageTypeEnum)
       ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
       : pageData.content;
 
@@ -635,11 +648,12 @@ export const pageService = {
    */
   async trashPage(
     pageId: string,
-    userId: string,
+    actor: AccessActor,
     options: { trashChildren: boolean; metadata?: Record<string, unknown>; authorizeDelete?: (pageId: string) => Promise<boolean> },
   ): Promise<TrashPageResult> {
+    const userId = actor.userId;
     // Check authorization — injectable for scoped MCP tokens (canPrincipalDeletePage).
-    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(userId, id));
+    const authorizeDelete = options.authorizeDelete ?? ((id: string) => canUserDeletePage(actor, id));
     const canDelete = await authorizeDelete(pageId);
     if (!canDelete) {
       return { success: false, error: 'You need delete permission to remove this page', status: 403 };
@@ -733,7 +747,8 @@ export const pageService = {
   /**
    * Create a new page
    */
-  async createPage(userId: string, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+  async createPage(actor: AccessActor, params: CreatePageParams, options?: CreatePageOptions): Promise<CreatePageResult> {
+    const userId = actor.userId;
     // Validate required fields
     if (!params.title || !params.type || !params.driveId) {
       return { success: false, error: 'Missing required fields', status: 400 };
@@ -750,7 +765,7 @@ export const pageService = {
 
     // Check authorization — nested pages require edit permission on the parent;
     // root-level pages treat the drive as the root parent and require canEdit on the drive.
-    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(userId, targetId));
+    const authorizeEdit = options?.authorizeEdit ?? ((targetId: string) => canUserEditPage(actor, targetId));
     if (params.parentId) {
       const parentPage = await db.query.pages.findFirst({
         where: and(eq(pages.id, params.parentId), eq(pages.driveId, params.driveId)),
@@ -801,6 +816,13 @@ export const pageService = {
       if (!toolValidation.valid) {
         return { success: false, error: toolValidation.errors.join('. '), status: 400 };
       }
+    }
+
+    // POL-8: a model or provider the request sets must be one the drive's org allows. A defaulted pair (the
+    // creator's own selection) is not a choice made here; the provider factory judges it when it runs.
+    if (isAIChatPage(params.type as PageTypeEnum) && (params.aiProvider || params.aiModel)) {
+      const decision = await agentModelSaveRefusal(drive.id, { provider: params.aiProvider, modelId: params.aiModel });
+      if (!decision.ok) return { success: false, error: decision.message, status: decision.status };
     }
 
     // Get default AI settings for AI_CHAT pages

@@ -5,6 +5,7 @@
  * that the ephemeral secret never appears in a response body.
  */
 
+import { readSpendFallbackHeaders } from '@pagespace/lib/billing/spend-fallback';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
@@ -37,7 +38,7 @@ vi.mock('@/lib/repositories/ai-settings-repository', () => ({
   aiSettingsRepository: { getUserSettings: mockGetUserSettings },
 }));
 vi.mock('@/lib/subscription/rate-limit-middleware', () => ({
-  PAID_TIERS: new Set(['pro', 'founder', 'business']),
+  PAID_TIERS: new Set(['pro', 'business']),
 }));
 vi.mock('@pagespace/lib/auth/broadcast-auth', () => ({
   createSignedBroadcastHeaders: mockSignHeaders,
@@ -46,8 +47,24 @@ vi.mock('@/lib/ai/realtime/call-handshake', () => ({ runCallHandshake: mockRunCa
 vi.mock('@/lib/ai/realtime/binding-loader', () => ({ loadVoiceBinding: mockLoadVoiceBinding }));
 // A FACTORY, not a value: the binding deps take the caller's auth principal,
 // because the active-plan lookup behind them needs a principal-aware page check.
-vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}) }));
+vi.mock('@/lib/ai/realtime/voice-runtime-deps', () => ({ voiceBindingDeps: () => ({}), voiceSpendDeps: () => ({}) }));
+const { mockResolveVoiceSpend } = vi.hoisted(() => ({ mockResolveVoiceSpend: vi.fn() }));
+vi.mock('@/lib/ai/realtime/voice-spend', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/realtime/voice-spend')>()),
+  resolveVoiceSpend: mockResolveVoiceSpend,
+}));
+const { mockResolveRequestContext, mockResolveEntitlementTier } = vi.hoisted(() => ({
+  mockResolveRequestContext: vi.fn(),
+  mockResolveEntitlementTier: vi.fn(),
+}));
+vi.mock('@/lib/ai/core/resolve-request-context', () => ({ resolveRequestContext: mockResolveRequestContext }));
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({ resolveEntitlementTier: mockResolveEntitlementTier }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({ buildPageSpaceTools: () => ({}) }));
+// POL-8: the org model policy the route asks before the handshake (its own real-Postgres proof is the factory's).
+const { mockOrgModelRefusal } = vi.hoisted(() => ({ mockOrgModelRefusal: vi.fn() }));
+vi.mock('@/lib/ai/core/provider-factory', () => ({ orgModelRefusal: mockOrgModelRefusal }));
+const { mockMemberDrivesReadable } = vi.hoisted(() => ({ mockMemberDrivesReadable: vi.fn() }));
+vi.mock('@/lib/ai/core/org-model-policy', () => ({ memberDrivesReadableByModel: mockMemberDrivesReadable }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { ai: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } },
@@ -70,12 +87,18 @@ function callRequest(body: unknown) {
 describe('POST /api/voice/realtime/call', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockResolveVoiceSpend.mockResolvedValue({ kind: 'personal' });
+    mockOrgModelRefusal.mockResolvedValue(null);
+    mockMemberDrivesReadable.mockResolvedValue({ driveIds: [], allReadable: true });
     vi.unstubAllEnvs();
     mockAuth.mockResolvedValue({ userId: 'u1' });
     mockIsAuthError.mockReturnValue(false);
     mockGetManagedKey.mockReturnValue({ apiKey: 'sk-managed' });
     mockIsBillingEnabled.mockReturnValue(true);
     mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'pro' });
+    mockResolveRequestContext.mockResolvedValue(null);
+    // Unless a test says otherwise, the caller funds their own call.
+    mockResolveEntitlementTier.mockImplementation(async (_userId: string, tier: string) => tier);
     mockLoadVoiceBinding.mockResolvedValue({ seed: [], instructions: 'Speak out loud.', tools: TOOLS });
     mockSignHeaders.mockReturnValue({ 'X-Broadcast-Signature': 't=1,v1=sig' });
     mockRunCallHandshake.mockResolvedValue({
@@ -83,6 +106,7 @@ describe('POST /api/voice/realtime/call', () => {
       callId: 'rtc_abc',
       answerSdp: 'v=0 answer',
       attached: true,
+      spendFallback: null,
     });
   });
 
@@ -189,7 +213,20 @@ describe('POST /api/voice/realtime/call', () => {
       answerSdp: 'v=0 answer',
       attached: true,
       maxDurationMs: REALTIME_MAX_SESSION_SECONDS * 1000,
+      spendFallback: null,
+      historyWithheld: null,
     });
+  });
+
+  it('SPEND-4 (partial) a call whose opening gate fell back to another source says so in the answer and its headers, from and to', async () => {
+    const spendFallback = { from: 'seat_allowance', to: 'own_credits', walletId: 'w-own' } as const;
+    mockRunCallHandshake.mockResolvedValue({ ok: true, callId: 'rtc_abc', answerSdp: 'v=0 answer', attached: true, spendFallback });
+
+    const res = await POST(callRequest({ sdp: 'v=0 offer' }));
+
+    expect(res.status).toBe(200);
+    expect((await res.json()).spendFallback).toEqual(spendFallback);
+    expect(readSpendFallbackHeaders(res.headers)).toEqual(spendFallback);
   });
 
   it('should report the server-enforced duration cap so the client can chain ahead of it', async () => {
@@ -391,6 +428,146 @@ describe('POST /api/voice/realtime/call', () => {
           assistant: expect.objectContaining({ agentPageId: 'someone-elses-agent' }),
         }),
       );
+    });
+  });
+
+  describe('the source the call spends', () => {
+    it('SPEND-1 (partial) should carry the resolved drive to the handshake, which carries it to the meter', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ spendDriveId: 'drive-1' }));
+    });
+
+    it('SPEND-1 (partial) should resolve from the conversation and the named agent page, never take a drive from the body', async () => {
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1', agentPageId: 'agent1', spendDriveId: 'someone-elses-drive' }));
+
+      expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'conv1', agentPageId: 'agent1' });
+      const [, input] = mockRunCallHandshake.mock.calls[0] as unknown[];
+      expect(input).not.toHaveProperty('spendDriveId');
+    });
+
+    it('SPEND-4 (partial) a call whose drive cannot be resolved is refused by name before OpenAI is contacted — never billed personally', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'refused', reason: 'voice_spend_unresolved' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'fresh', agentPageId: 'agent1' }));
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: 'voice_spend_unresolved' });
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
+    });
+
+    it('SPEND-1 (partial) a Global Assistant call spends in the drive the caller stands in — as the server resolves it from their location behind its own view check, never the id the location claims', async () => {
+      mockResolveRequestContext.mockResolvedValue({ currentPage: null, currentDrive: { id: 'drive-verified', name: 'Product', slug: 'product' }, breadcrumbs: [] });
+      const locationContext = { currentDrive: { id: 'drive-claimed', name: 'Product', slug: 'product' } };
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1', locationContext }));
+
+      expect(mockResolveRequestContext).toHaveBeenCalledWith({ userId: 'u1' }, { routeType: 'drive', driveId: 'drive-claimed' });
+      expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'conv1', contextDriveId: 'drive-verified' });
+    });
+
+    it('SPEND-1 (partial) a location the caller cannot view places the call nowhere: no context drive reaches the resolution', async () => {
+      mockResolveRequestContext.mockResolvedValue(null);
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1', locationContext: { currentDrive: { id: 'not-mine', name: 'X', slug: 'x' } } }));
+
+      expect(mockResolveVoiceSpend).toHaveBeenCalledWith(expect.anything(), { userId: 'u1', conversationId: 'conv1' });
+    });
+
+    it('a conversation the caller cannot read is refused with 403 before OpenAI is contacted', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'refused', reason: 'voice_conversation_forbidden' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(response.status).toBe(403);
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the org model policy', () => {
+    it('POL-8 (partial) judges the realtime model and its vendor against the org of the drive the call belongs to, before OpenAI is contacted', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+      vi.stubEnv('OPENAI_REALTIME_MODEL', 'gpt-realtime-x');
+
+      await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(mockOrgModelRefusal).toHaveBeenCalledWith(['drive-1'], [{ modelId: 'gpt-realtime-x', provider: 'openai' }]);
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-realtime-x' }), expect.anything());
+    });
+
+    it('POL-8 (partial) a call in a drive whose org does not allow the realtime model is refused with the policy code; nothing is minted, no binding is loaded', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+      mockOrgModelRefusal.mockResolvedValue({ error: "This organization doesn't allow this model.", status: 403, code: 'org_policy', policy: 'providerAllowlist' });
+
+      const response = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({ error: "This organization doesn't allow this model.", code: 'org_policy', policy: 'providerAllowlist' });
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
+      expect(mockLoadVoiceBinding).not.toHaveBeenCalled();
+    });
+
+    describe('a Global Assistant call\'s replayed history', () => {
+      const SEED = [{ role: 'user', text: 'what did the Q3 board deck say?' }, { role: 'assistant', text: 'Revenue grew 40%.' }];
+
+      it('POL-8 (partial) is replayed when every org the person is in allows the voice model', async () => {
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'global1' }));
+        expect(mockMemberDrivesReadable).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), { provider: 'openai', modelId: expect.any(String) });
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: SEED }));
+        expect((await res.json()).historyWithheld).toBeNull();
+      });
+
+      it('POL-8 (partial) is left out, and the caller told why, when some org the person is in does not allow the voice model', async () => {
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        mockMemberDrivesReadable.mockResolvedValue({ driveIds: ['personal'], allReadable: false });
+        const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'global1' }));
+        expect(res.status).toBe(200);
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: [] }));
+        expect((await res.json()).historyWithheld).toMatch(/earlier messages/);
+      });
+
+      it('a drive conversation\'s history is governed by its drive (judged before the handshake), not by every org', async () => {
+        mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'drive-1' });
+        mockLoadVoiceBinding.mockResolvedValue({ seed: SEED, instructions: 'Speak.', tools: TOOLS });
+        await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+        expect(mockMemberDrivesReadable).not.toHaveBeenCalled();
+        expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ seed: SEED }));
+      });
+    });
+
+    it('a personal (Global Assistant) call is judged with no drive, which no org restricts', async () => {
+      await POST(callRequest({ sdp: 'v=0 offer' }));
+      expect(mockOrgModelRefusal).toHaveBeenCalledWith([null], [expect.objectContaining({ provider: 'openai' })]);
+      expect(mockRunCallHandshake).toHaveBeenCalled();
+    });
+  });
+
+  describe('who must be on a paid plan', () => {
+    it('WAL-8 (partial) a Free caller whose call an org drive funds may talk: the plan judged is the FUNDER\'s, resolved on the drive the call spends in', async () => {
+      mockGetUserSettings.mockResolvedValue({ subscriptionTier: 'free' });
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'org-drive' });
+      mockResolveEntitlementTier.mockResolvedValue('business');
+
+      const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(res.status).toBe(200);
+      expect(mockResolveEntitlementTier).toHaveBeenCalledWith('u1', 'free', { kind: 'drive', driveId: 'org-drive', chosen: null });
+      // The meter's consumer tier stays the caller's own.
+      expect(mockRunCallHandshake).toHaveBeenCalledWith(expect.objectContaining({ subscriptionTier: 'free' }), expect.anything());
+    });
+
+    it('WAL-8 (partial) a Pro caller on a drive whose funder is not on a paid plan is refused before OpenAI is contacted', async () => {
+      mockResolveVoiceSpend.mockResolvedValue({ kind: 'drive', driveId: 'free-drive' });
+      mockResolveEntitlementTier.mockResolvedValue('free');
+
+      const res = await POST(callRequest({ sdp: 'v=0 offer', conversationId: 'conv1' }));
+
+      expect(res.status).toBe(403);
+      await expect(res.json()).resolves.toMatchObject({ error: 'Pro plan required' });
+      expect(mockRunCallHandshake).not.toHaveBeenCalled();
     });
   });
 });

@@ -427,6 +427,11 @@ describe('broadcast emit-site registry (repo-wide source scan)', () => {
     'apps/web/src/lib/channels/agent-mention-responder.ts': ['new_message'],
     'packages/lib/src/billing/credit-emit.ts': ['credits:updated'],
     'packages/lib/src/notifications/notifications.ts': ['notification:new'],
+    // Org membership sync (D-OW-6): `user:<id>:drives`, the AFFECTED user's own
+    // drives plane only — one event per user per sync. The payload names drive
+    // ids and the operation, never a drive name, so it discloses nothing the
+    // recipient's refetched drive list will not show them anyway.
+    'packages/lib/src/services/org-membership-sync.ts': ['drive:${user.operation}'],
     'packages/lib/src/services/page-webhook-service.ts': ['new_message'],
   };
 

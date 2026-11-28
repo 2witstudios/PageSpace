@@ -27,6 +27,7 @@ import {
   type ResolveSessionSandboxHandleDenial,
 } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 
@@ -62,7 +63,7 @@ export async function GET(request: Request, context: RouteContext) {
   // ref/path handling. Not found and denied answer THE SAME (family policy,
   // review #2261/5) — both `not_started`, never a 403 that would confirm the
   // session id is real.
-  const access = await checkSessionAccess(auth.userId, workspaceId);
+  const access = await checkSessionAccess(actorFromAuth(auth), workspaceId);
   if (!access.allowed) {
     auditSessionAccessDenial(request, auth.userId, workspaceId, access.reason, ROUTE);
     return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
@@ -81,7 +82,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'repoPath escapes the sandbox root' }, { status: 400 });
   }
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
   if (!resolved.ok) {
     // Record the one denial that describes a PERSON rather than the sandbox:
     // a member the drive downgraded is the actor closest to succeeding here,

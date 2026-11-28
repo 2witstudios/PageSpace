@@ -1,4 +1,4 @@
-import { djb2 } from './djb2.js';
+import { djb2 } from './djb2.ts';
 
 /**
  * One deterministic colour per user, for the avatar ring in the presence

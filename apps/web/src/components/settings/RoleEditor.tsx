@@ -13,6 +13,9 @@ import { toast } from 'sonner';
 import { post, patch } from '@/lib/auth/auth-fetch';
 import { ROLE_COLORS } from '@/lib/utils';
 import { PermissionsGrid } from '@/components/members/PermissionsGrid';
+import { useDriveStore } from '@/hooks/useDrive';
+import { LAPSED_LOOSEN_NOTE, useOrgLapsed } from '@/hooks/useOrgLapsed';
+import { roleGrantWidens } from '@pagespace/lib/organizations/loosening-core';
 
 interface Role {
   id: string;
@@ -51,6 +54,17 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
     role?.driveWidePermissions ?? null
   );
   const [saving, setSaving] = useState(false);
+
+  // [D-OW-33] while the drive's org is unpaid a role may only be narrowed: widening an existing role or making one
+  // the default waits until it pays (a new non-default role gives nobody anything and stays allowed). The route
+  // refuses only a widening someone holds; the editor cannot see holders, so it holds back any widening.
+  const driveOrgId = useDriveStore((state) => state.drives.find((d) => d.id === driveId)?.orgId ?? null);
+  const lapsed = useOrgLapsed(driveOrgId);
+  const editedGrant = { permissions: Object.fromEntries(permissions), driveWidePermissions: driveWidePerms };
+  const widens = isEditing && role
+    ? roleGrantWidens({ permissions: role.permissions, driveWidePermissions: role.driveWidePermissions ?? null }, editedGrant) || (isDefault && !role.isDefault)
+    : isDefault;
+  const lapsedBlocksSave = lapsed && widens;
 
   const handlePermissionChange = (pageId: string, perms: { canView: boolean; canEdit: boolean; canShare: boolean }) => {
     setPermissions(prev => {
@@ -259,7 +273,12 @@ export function RoleEditor({ driveId, role, onSave, onCancel }: RoleEditorProps)
         <Button variant="outline" onClick={onCancel} disabled={saving}>
           Cancel
         </Button>
-        <Button onClick={handleSave} disabled={saving}>
+        {lapsedBlocksSave && (
+          <p className="mr-auto self-center text-xs text-muted-foreground" data-testid="lapsed-loosen-note">
+            Widening a role or making it the default is paused. {LAPSED_LOOSEN_NOTE}
+          </p>
+        )}
+        <Button onClick={handleSave} disabled={saving || lapsedBlocksSave}>
           <Save className="w-4 h-4 mr-2" />
           {saving ? 'Saving...' : isEditing ? 'Save Changes' : 'Create Role'}
         </Button>

@@ -12,7 +12,9 @@ const {
   mockSelectWhere,
   mockSelectFrom,
   mockSelect,
+  mockCreditAdmission,
 } = vi.hoisted(() => ({
+  mockCreditAdmission: vi.fn(),
   mockUpdateWhere: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdate: vi.fn(),
@@ -31,6 +33,10 @@ vi.mock('@/lib/workflows/workflow-executor', () => ({
 
 vi.mock('@/lib/workflows/cron-utils', () => ({
   getNextRunDate: vi.fn(),
+}));
+
+vi.mock('@/lib/workflows/workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
 }));
 
 const mockAudit = vi.hoisted(() => vi.fn());
@@ -55,6 +61,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
+  isNull: vi.fn(),
   lte: vi.fn(),
   sql: vi.fn(),
 }));
@@ -62,6 +69,7 @@ vi.mock('@pagespace/db/schema/workflows', () => ({
   workflows: {
     id: 'id',
     isEnabled: 'isEnabled',
+    ownerLeftAt: 'ownerLeftAt',
     nextRunAt: 'nextRunAt',
     triggerType: 'triggerType',
   },
@@ -79,6 +87,8 @@ import { POST } from '../route';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { isNull } from '@pagespace/db/operators';
+import { workflows } from '@pagespace/db/schema/workflows';
 
 // ============================================================================
 // Fixtures
@@ -101,6 +111,7 @@ const MOCK_WORKFLOW = {
   instructionPageId: null,
   nextRunAt: new Date('2025-01-01T09:00:00Z'),
   createdBy: 'user_123',
+  ownerLeftAt: null as Date | null,
   createdAt: new Date('2024-01-01'),
   updatedAt: new Date('2024-01-01'),
 };
@@ -123,6 +134,24 @@ describe('POST /api/cron/workflows', () => {
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
     mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
     mockUpdateWhere.mockResolvedValue(undefined);
+
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
+  });
+
+  it('SPEND-6 (partial) discovery leaves out owner-left workflows ([D-OW-36])', async () => {
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    await POST(request);
+    expect(vi.mocked(isNull)).toHaveBeenCalledWith(workflows.ownerLeftAt);
+  });
+
+  it('SPEND-6 (partial) a due workflow whose creator deleted their account since discovery is skipped before any gate or hold, and its schedule is not advanced ([D-OW-36])', async () => {
+    mockSelectWhere.mockResolvedValue([{ ...MOCK_WORKFLOW, createdBy: null }]);
+    const request = new Request('https://example.com/api/cron/workflows', { method: 'POST' });
+    const body = await (await POST(request)).json();
+    expect(body).toMatchObject({ executed: 0, total: 0, skipped: 1 });
+    expect(executeWorkflow).not.toHaveBeenCalled();
+    expect(mockCreditAdmission).not.toHaveBeenCalled();
+    expect(getNextRunDate).not.toHaveBeenCalled();
   });
 
   it('should return auth error when cron request is invalid', async () => {
@@ -173,8 +202,7 @@ describe('POST /api/cron/workflows', () => {
       prompt: MOCK_WORKFLOW.prompt,
       timezone: MOCK_WORKFLOW.timezone,
       source: { table: 'cron', id: null, triggerAt: MOCK_WORKFLOW.nextRunAt },
-      creditGate: { skipDailyCap: true },
-    }));
+    }), expect.objectContaining({ admit: expect.any(Function) }));
   });
 
   it('should not advance nextRunAt when the executor reports a claim conflict', async () => {
@@ -342,13 +370,18 @@ describe('POST /api/cron/workflows', () => {
       vi.mocked(executeWorkflow).mockResolvedValue({ success: true, durationMs: 1 });
     });
 
-    it('hands the executor only the run input — the executor gates the owner itself, inside its claim, as a scheduled run', async () => {
+    it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a scheduled run', async () => {
+      const admit = async () => ({ admitted: true as const, release: () => {} });
+      mockCreditAdmission.mockReturnValue(admit);
+
       await tick();
 
-      const call = vi.mocked(executeWorkflow).mock.calls[0];
-      expect(call).toHaveLength(1);
-      expect(call[0].createdBy).toBe(MOCK_WORKFLOW.createdBy);
-      expect(call[0].creditGate).toEqual({ skipDailyCap: true });
+      const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(options?.admit).toBe(admit);
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'scheduled');
+      expect(input.createdBy).toBe(MOCK_WORKFLOW.createdBy);
+      // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+      expect(input.driveId).toBe(MOCK_WORKFLOW.driveId);
     });
 
     it('a refused fire advances the schedule and counts as skipped, not as a failure', async () => {

@@ -50,7 +50,7 @@ export function createMcpHandler(deps: McpHandlerDeps): CommandHandler {
     }
 
     const registry = buildOperationRegistry();
-    const server = createMcpServer({ registry, sdk: ctx.sdk });
+    const server = createMcpServer({ registry, sdk: ctx.sdk, credentialKind: ctx.credentialKind });
 
     ctx.stderr.write(`pagespace mcp: serving ${registry.all.length} tools over stdio\n`);
 

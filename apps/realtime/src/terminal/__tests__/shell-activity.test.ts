@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 import {
   parseShellActivityRequest,
   validateShellActivityPayload,
@@ -27,7 +28,7 @@ function makeSession(): { session: TerminalSession; emitted: string[]; emittedB:
     command: {} as TerminalSession['command'],
     sandboxId: 'sbx-1',
     sessionKey: 'key-1',
-    lastViewerUserId: 'user1',
+    lastViewerActor: credentialActor('user1', null),
     releaseSlot: () => {},
     viewers: new Map([
       ['sockA conn-a', { userId: 'user1', emitOutput: (data: string) => emitted.push(data), emitClosed: () => {}, emitError: () => {} }],

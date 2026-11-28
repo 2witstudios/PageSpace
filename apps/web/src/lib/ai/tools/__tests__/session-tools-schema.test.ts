@@ -144,11 +144,16 @@ describe('session + shell + layout tools — frozen wire contract', () => {
         },
       },
       spawn_session: {
+        // DELIBERATE description + schema change (single-sandbox model):
+        // `workspace: "new"` runs on the agent's environment's machine (Home for
+        // the assistant; a page agent with no environment still gets its own),
+        // and the new `sandbox: "new"` is the explicit isolated-machine choice —
+        // the tool's twin of the palette's "New sandbox". Re-pinned with it.
         description:
-          'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. With workspace: "new", workspaceName labels it. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
-          'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
+          'Spawn a WORKER: a new labeled conversation that starts on your prompt at once, visible live in the sidebar. By default it runs in this conversation\'s workspace (same sandbox and files; started if none exists, permission permitting). workspace: "new" makes a new workspace on your environment\'s machine (Home for the assistant; a page agent with no environment gets its own); add sandbox: "new" for an isolated fresh machine. Or pass a workspaceId from list_sessions. workspaceName labels a new workspace. Returns its sessionId, the address for send_session/read_session/kill_session (names are only labels). ' +
+          'Pass agent to run it under another agent (an agentId from list_agents); omit it for this conversation\'s own agent. ' +
           'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
-          'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
+          'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -158,6 +163,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
             agent: { type: 'string', minLength: 1 },
             workspace: { type: 'string', minLength: 1 },
             workspaceName: { type: 'string', minLength: 1, maxLength: 120 },
+            sandbox: { type: 'string', const: 'new' },
             wait: { type: 'boolean' },
           },
           required: ['name', 'prompt'],

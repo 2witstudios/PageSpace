@@ -245,6 +245,8 @@ export const conversationRepository = {
     pageId: string,
     opts?: {
       isShared?: boolean;
+      /** The session wallet chooser validated this source before creating the draft. */
+      initialChosenWalletId?: string | null;
       title?: string;
       triggeredBy?: ConversationEventTriggeredBy;
       /**
@@ -259,6 +261,13 @@ export const conversationRepository = {
        * changes.
        */
       executor?: ConversationWriteExecutor;
+      /**
+       * When the insert runs inside a caller's transaction, the `created` directory event must not leave before
+       * that transaction commits: a sidebar that re-reads on it would read the listing without the new thread and
+       * stay stale. A caller that passes a transaction hands its after-commit queue here; without one the event is
+       * emitted at once (the insert was its own statement, already committed).
+       */
+      afterCommit?: (emit: () => void) => void;
     }
   ): Promise<'created' | 'exists' | 'message_owner_conflict'> {
     const executor = opts?.executor ?? db;
@@ -284,6 +293,7 @@ export const conversationRepository = {
         contextId: pageId,
         isShared: opts?.isShared ?? false,
         title: opts?.title ?? null,
+        ...(opts?.initialChosenWalletId !== undefined && { chosenWalletId: opts.initialChosenWalletId }),
         updatedAt: new Date(),
       })
       .onConflictDoNothing()
@@ -294,7 +304,9 @@ export const conversationRepository = {
     // Directory event so sidebars (including the owner's other devices, and
     // server-spawned workers' owners) see the new conversation without a
     // poll. Emitted from the repository — routes never decide (SSoT §3).
-    emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
+    const emitCreated = () => emitConversationLifecycle('created', { ...inserted, rev: Number(inserted.rev) }, opts?.triggeredBy);
+    if (opts?.afterCommit) opts.afterCommit(emitCreated);
+    else emitCreated();
     return 'created';
   },
 

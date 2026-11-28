@@ -2,7 +2,7 @@ import { describe, it } from 'vitest';
 import type { LanguageModelUsage } from 'ai';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { MARKUP_BPS } from '@pagespace/lib/billing/credit-pricing';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { agentRunBillingFields } from '../agent-run-billing';
 import type { AbortedStepEstimate, RunAgentWithRetryResult } from '../run-agent-with-retry';
 

@@ -135,7 +135,7 @@ export const DEFAULT_SUBDOMAIN_BASE = 'drive'
  * so it can always validate and the allocator always terminates.
  * Preserves a trailing alphanumeric (never ends on a hyphen).
  */
-function clampBaseForSuffix(base: string, suffix: number | null): string {
+function clampBaseForSuffix(base: string, suffix: number | string | null): string {
   // Bare base (suffix null): cap at the full label length. Suffixed: leave room
   // for '-<suffix>' so the candidate always fits 63 chars and can validate.
   const maxBase = suffix === null ? MAX_SUBDOMAIN_LENGTH : MAX_SUBDOMAIN_LENGTH - `-${suffix}`.length
@@ -177,4 +177,47 @@ export function resolveUniquePublishSubdomain(rawBase: string, taken: string[]):
     candidate = `${clampBaseForSuffix(fallback, suffix)}-${suffix}`
   }
   return candidate
+}
+
+/** Length of the suffix `randomSuffixedPublishSubdomain` draws: 36^8 ≈ 2.8e12 values. */
+export const RANDOM_SUBDOMAIN_SUFFIX_LENGTH = 8
+
+const RANDOM_SUFFIX_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789'
+
+function defaultRandomSuffix(): string {
+  const bytes = new Uint8Array(RANDOM_SUBDOMAIN_SUFFIX_LENGTH)
+  globalThis.crypto.getRandomValues(bytes)
+  // 256 is not a multiple of 36, so this is very slightly non-uniform; the
+  // suffix is a collision-avoider, not a secret.
+  return Array.from(bytes, (byte) => RANDOM_SUFFIX_ALPHABET[byte % RANDOM_SUFFIX_ALPHABET.length]).join('')
+}
+
+/**
+ * A publish subdomain outside the sequential `base`, `base-2`, … family:
+ * `base-<8 random [a-z0-9]>`, with the base clamped so the result fits 63
+ * characters (and so keeps the collision-filter prefix, see
+ * `subdomainCollisionPrefix`).
+ *
+ * For retries after a unique-constraint conflict. A conflict means rival
+ * allocations are racing for the same family, and each of them sees only
+ * committed rows, so the next sequential number is exactly the one they are
+ * most likely to take too: with N rivals in flight the sequential retry can
+ * lose N times in a row. A random suffix leaves the family; two allocations
+ * drawing the same one is a ~1 in 2.8e12 event, and the DB constraint still
+ * arbitrates. `randomSuffix` is injectable for tests.
+ */
+export function randomSuffixedPublishSubdomain(
+  rawBase: string,
+  taken: string[],
+  randomSuffix: () => string = defaultRandomSuffix,
+): string {
+  const takenSet = new Set(taken)
+  const normalized = normalizeSubdomain(rawBase)
+  const fallback = normalized.length > 0 ? normalized : DEFAULT_SUBDOMAIN_BASE
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const suffix = randomSuffix()
+    const candidate = `${clampBaseForSuffix(fallback, suffix)}-${suffix}`
+    if (!takenSet.has(candidate) && validatePublishSubdomain(candidate).valid) return candidate
+  }
 }

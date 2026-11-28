@@ -82,6 +82,8 @@ function evalPredicate(pred: Predicate, row: Record<string, unknown>): boolean {
 }
 
 interface DeviceRow {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   id: string;
   deviceCodeHash: string;
   userCodeHash: string;
@@ -612,5 +614,17 @@ describe('recordDeviceApproval', () => {
     const result = await recordDeviceApproval({ userCode: USER_CODE, action: 'approve', userId: USER_ID, now: new Date() });
 
     expect(result).toEqual({ outcome: 'invalid', decision: { status: 'expired' } });
+  });
+});
+
+describe('SEC-3 (partial) device grant ceremony provenance', () => {
+  it('carries the approving ceremony through device-code redemption', async () => {
+    seedDeviceRow({ scopes: ['account', 'offline_access'] });
+    const authentication = { authenticatedAtMs: Date.now() - 3600000, assurance: 'user_verified_passkey' as const };
+    expect(await recordDeviceApproval({ userCode: USER_CODE, action: 'approve', userId: USER_ID, now: new Date(), authentication })).toEqual({ outcome: 'approved' });
+    expect((await pollDeviceToken({ deviceCode: DEVICE_CODE, clientDbId: CLIENT_DB_ID, now: new Date() })).outcome).toBe('ok');
+    const stored = { authenticatedAt: new Date(authentication.authenticatedAtMs), authenticationAssurance: authentication.assurance };
+    expect(refreshRows[0]).toMatchObject(stored);
+    expect(accessRows[0]).toMatchObject(stored);
   });
 });

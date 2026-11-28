@@ -1,6 +1,6 @@
 import { describe, test, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { useEditingStore } from '../useEditingStore';
 import { useEditingSession } from '../useEditingSession';
 

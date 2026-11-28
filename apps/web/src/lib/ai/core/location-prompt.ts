@@ -37,7 +37,22 @@ export interface LocationPromptInput {
    * content creation, and a skill that wants Home must say so explicitly.
    */
   homeDriveId?: string | null;
+  /**
+   * Set when the AGENT cannot work in the drive in view although the user can:
+   * a drive the user keeps their Imago agent out of. Absent everywhere else,
+   * where the block is unchanged. The block then names nothing in that drive
+   * — not the page, the path or the drive's own name, which are its contents
+   * as much as its pages are — and drops the "act on this workspace" defaults,
+   * which would send the agent at a drive its tools will refuse.
+   */
+  agentAccess?: LocationAgentAccess;
 }
+
+export type LocationAgentAccess = { kind: 'excluded' };
+
+const EXCLUDED_LOCATION = `LOCATION (current, this turn):
+• The user is looking at a workspace they keep you out of — you cannot read or change anything in it, so neither its name nor its pages are shown to you. If they want you to work here, they can let you back in from its settings
+• When the user says "here" or "this", they mean that workspace: tell them it is outside your reach`;
 
 export function buildLocationTurnPrompt(input: LocationPromptInput | undefined): string {
   if (!input || (!input.currentPage && !input.currentDrive)) {
@@ -57,6 +72,8 @@ export function buildLocationTurnPrompt(input: LocationPromptInput | undefined):
 • When the user says "here" or "this", ask which workspace/page they mean, or use list_drives/list_pages to find out
 • Do NOT default to the Home drive for general work — ask which workspace, or use list_drives${homeLine}`;
   }
+
+  if (input.agentAccess?.kind === 'excluded') return EXCLUDED_LOCATION;
 
   const lines: string[] = ['LOCATION (current, this turn):'];
 

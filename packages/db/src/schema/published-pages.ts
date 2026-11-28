@@ -1,8 +1,9 @@
 import { pgTable, text, timestamp, boolean, index, unique } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { drives, pages } from './core';
+import type { SuspensionKind } from './organizations';
 
 export const publishedPages = pgTable('published_pages', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
@@ -21,6 +22,8 @@ export const publishedPages = pgTable('published_pages', {
   // so an author's intentionally single-theme design isn't fought by an
   // injected `dark` class. Defaults true (current behavior) for every page type.
   themeBridgeEnabled: boolean('theme_bridge_enabled').default(true).notNull(),
+  // Set by the org's publish-to-web policy (POL-1); the page stays published as it was and is not served while set.
+  suspendedByPolicy: text('suspended_by_policy').$type<SuspensionKind>(),
   publishedBy: text('published_by').references(() => users.id, { onDelete: 'set null' }),
   publishedAt: timestamp('published_at', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updated_at', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
@@ -28,6 +31,7 @@ export const publishedPages = pgTable('published_pages', {
   pageKey: unique('published_pages_page_id_key').on(table.pageId),
   drivePathKey: unique('published_pages_drive_id_path_key').on(table.driveId, table.path),
   driveIdx: index('published_pages_drive_id_idx').on(table.driveId),
+  suspendedIdx: index('published_pages_suspended_by_policy_idx').on(table.driveId).where(sql`${table.suspendedByPolicy} IS NOT NULL`),
   pageIdx: index('published_pages_page_id_idx').on(table.pageId),
 }));
 

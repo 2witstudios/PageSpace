@@ -30,6 +30,7 @@ vi.mock('@pagespace/lib/utils/enums', () => ({
     PageType: { DOCUMENT: 'DOCUMENT', FILE: 'FILE' },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn().mockResolvedValue(true),
     canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
@@ -68,6 +69,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
   logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
 }));
+const mockIsHashBlocked = vi.fn().mockResolvedValue(false);
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
+}));
+
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
     audit: vi.fn(),
     auditRequest: vi.fn(),
@@ -77,6 +83,7 @@ import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockUserId = 'user_123';
 const mockFileId = 'file-1';
@@ -114,6 +121,21 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
     });
   });
 
+  it('answers a neutral 410 for a file that was taken down, without asking the processor for it', async () => {
+    mockIsHashBlocked.mockResolvedValueOnce(true);
+    const request = new Request('http://localhost/api/files/file-1/convert-to-document', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Converted Document' }),
+    });
+
+    const response = await POST(request as never, { params: Promise.resolve({ id: mockFileId }) });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ error: 'This file has been removed' });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('logs write audit event with convert action', async () => {
     const request = new Request('http://localhost/api/files/file-1/convert-to-document', {
       method: 'POST',
@@ -128,4 +150,14 @@ describe('POST /api/files/[id]/convert-to-document audit', () => {
       { eventType: 'data.write', userId: mockUserId, resourceType: 'file', resourceId: mockFileId, details: { action: 'convert' } }
     );
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

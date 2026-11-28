@@ -59,8 +59,17 @@ vi.mock('@/lib/repositories/user-block-repository', () => ({
 
 // --- Audit + logger seams ------------------------------------------------------
 const mockAuditRequest = vi.fn();
+const mockFindBlockedUploads = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => new Set<string>()));
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: mockFindBlockedUploads,
+}));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
   auditRequest: (...args: unknown[]) => mockAuditRequest(...args),
+}));
+// Legacy (non-hash) file ids resolve through `files.storagePath`; no such rows here.
+vi.mock('@/lib/upload/stored-content-hash', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/stored-content-hash')>()),
+  loadFileStoragePaths: vi.fn(async () => new Map<string, string | null>()),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
@@ -287,6 +296,30 @@ describe('POST /api/messages/[conversationId]', () => {
       const payload = broadcasts[0].payload as Record<string, unknown>;
       expect(payload.fileId).toBe(FILE_ID);
       expect(payload.attachmentMeta).toEqual(imageMeta);
+    });
+
+    it('refuses a send whose attachment is on the content blocklist, with a neutral 422 and no insert', async () => {
+      const BLOCKED_FILE_ID = 'b'.repeat(64);
+      mockFindBlockedUploads.mockResolvedValueOnce(new Set([BLOCKED_FILE_ID]));
+
+      const res = await callRoute({ fileId: BLOCKED_FILE_ID, attachmentMeta: imageMeta });
+
+      expect(res.status).toBe(422);
+      expect(await res.json()).toEqual({ error: "This file can't be uploaded" });
+      expect(mockInsertDmMessageWithAttachment).not.toHaveBeenCalled();
+      expect(mockFindBlockedUploads).toHaveBeenCalledWith(
+        [BLOCKED_FILE_ID],
+        expect.objectContaining({
+          entryPoint: 'attachment.send',
+          details: { targetType: 'conversation', targetId: CONVERSATION_ID },
+        }),
+      );
+    });
+
+    it('does not consult the blocklist for a message with no attachments', async () => {
+      await callRoute({ content: 'just text' });
+
+      expect(mockFindBlockedUploads).not.toHaveBeenCalled();
     });
 
     it('persists both content and file fields when caption + attachment are provided', async () => {

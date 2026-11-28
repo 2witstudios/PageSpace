@@ -55,6 +55,7 @@ import { loadServicePrincipal } from '@/lib/auth';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { dispatchChatTurn } from '@/lib/ai/chat-pipeline/handle-chat-turn';
 import { AGENT_DISPATCH_DEPTH_HEADER } from '@/lib/ai/core/agent-dispatch-depth';
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 export const maxDuration = 300;
 
@@ -136,6 +137,8 @@ export async function POST(request: Request) {
     service: 'agent-dispatch',
     allowedDriveIds: payload.allowedDriveIds,
     originatingMcpTokenId: payload.originatingMcpTokenId,
+    // The dispatching credential's ceremony evidence, re-parsed rather than trusted as shaped (SEC-2/3).
+    authentication: parseVerifiedAuthentication(payload.authentication, Date.now()),
   });
   if (!auth) {
     loggers.ai.warn('agent dispatch: acting user could not be resolved', {

@@ -263,7 +263,7 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (set primary)', () => {
     await PATCH(makePatchReq(), ctx());
     await Promise.resolve();
 
-    expect(republishDriveCanonical).toHaveBeenCalledWith(DRIVE_ID, USER_ID);
+    expect(republishDriveCanonical).toHaveBeenCalledWith(DRIVE_ID, expect.objectContaining({ userId: USER_ID }));
     expect(regeneratePublishedSiteFiles).not.toHaveBeenCalled();
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       eventType: 'data.write',

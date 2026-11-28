@@ -45,6 +45,18 @@ export default function SystemHealthWidget({ data }: SystemHealthWidgetProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* AUD-1: org audit events waiting for (or refused by) the audit chain */}
+        <div>
+          <h4 className="text-sm font-medium mb-2">Org audit delivery</h4>
+          <div className="flex items-center gap-4 text-sm">
+            <span className="flex items-center gap-2">Queued <Badge variant="secondary">{data.orgAuditBacklog.queued}</Badge></span>
+            <span className="flex items-center gap-2">
+              Dead-lettered
+              <Badge variant={data.orgAuditBacklog.deadLettered > 0 ? 'destructive' : 'default'}>{data.orgAuditBacklog.deadLettered}</Badge>
+            </span>
+          </div>
+        </div>
+
         {/* Log Levels */}
         <div>
           <h4 className="text-sm font-medium mb-2">Log Distribution</h4>

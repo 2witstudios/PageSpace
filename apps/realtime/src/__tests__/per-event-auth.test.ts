@@ -20,6 +20,7 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
 }));
 
 import { getUserAccessLevel } from '@pagespace/lib/permissions/permissions';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 describe('Per-Event Authorization', () => {
   describe('isSensitiveEvent', () => {
@@ -123,15 +124,15 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    await reauthorizePageAccess('user-1', 'page-1', 'edit');
+    await reauthorizePageAccess(credentialActor('user-1', null), 'page-1', 'edit');
 
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1');
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-1');
   });
 
   it('given revoked user (null permissions), should return authorized: false', async () => {
     mockedGetUserAccessLevel.mockResolvedValue(null);
 
-    const result = await reauthorizePageAccess('user-revoked', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-revoked', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('No access to this page');
@@ -145,7 +146,7 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-viewer', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-viewer', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('Requires edit permission');
@@ -159,7 +160,7 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-editor', 'page-1', 'edit');
+    const result = await reauthorizePageAccess(credentialActor('user-editor', null), 'page-1', 'edit');
 
     expect(result.authorized).toBe(true);
   });
@@ -172,7 +173,7 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-viewer', 'page-1', 'view');
+    const result = await reauthorizePageAccess(credentialActor('user-viewer', null), 'page-1', 'view');
 
     expect(result.authorized).toBe(true);
   });
@@ -185,7 +186,7 @@ describe('reauthorizePageAccess', () => {
       canDelete: false,
     });
 
-    const result = await reauthorizePageAccess('user-no-access', 'page-1', 'view');
+    const result = await reauthorizePageAccess(credentialActor('user-no-access', null), 'page-1', 'view');
 
     expect(result.authorized).toBe(false);
     expect(result.reason).toBe('Requires view permission');
@@ -204,7 +205,7 @@ describe('withPerEventAuth', () => {
     const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
     return {
       socket: {
-        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
+        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined, actor: userId ? credentialActor(userId, null) : undefined },
         emit: emitFn,
         to: toFn,
       } as unknown as AuthSocket,
@@ -338,7 +339,7 @@ describe('withPerEventAuth', () => {
     await listener(payload);
 
     expect(handler).toHaveBeenCalledWith(socket, payload);
-    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith('user-1', 'page-1');
+    expect(mockedGetUserAccessLevel).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'page-1');
   });
 });
 
@@ -358,7 +359,7 @@ describe('Zero-Trust: Revoked-But-Connected Attack', () => {
     const toFn = vi.fn().mockReturnValue({ emit: vi.fn() });
     return {
       socket: {
-        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined },
+        data: { user: userId ? { id: userId, name: 'Test', avatarUrl: null } : undefined, actor: userId ? credentialActor(userId, null) : undefined },
         emit: emitFn,
         to: toFn,
       } as unknown as AuthSocket,
@@ -462,7 +463,7 @@ describe('Zero-Trust: All Sensitive Events Require Re-Auth', () => {
     const emitFn = vi.fn();
     return {
       socket: {
-        data: { user: { id: userId, name: 'Test', avatarUrl: null } },
+        data: { user: { id: userId, name: 'Test', avatarUrl: null }, actor: credentialActor(userId, null) },
         emit: emitFn,
         to: vi.fn().mockReturnValue({ emit: vi.fn() }),
       } as unknown as AuthSocket,

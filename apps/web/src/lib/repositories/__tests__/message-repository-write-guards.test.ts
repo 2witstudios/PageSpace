@@ -118,6 +118,17 @@ vi.mock('@/lib/repositories/conversation-rev', () => ({
   })),
 }));
 
+const mockUploadChatAttachment = vi.fn();
+vi.mock('@/lib/upload/chat-attachment-storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/upload/chat-attachment-storage')>()),
+  uploadChatAttachment: (...args: unknown[]) => mockUploadChatAttachment(...args),
+}));
+
+const mockFindBlockedUploads = vi.fn();
+vi.mock('@pagespace/lib/content-safety/upload-gate', () => ({
+  findBlockedUploads: (...args: unknown[]) => mockFindBlockedUploads(...args),
+}));
+
 // -------------------------------------------------------------------------
 // Import after mocks
 // -------------------------------------------------------------------------
@@ -125,6 +136,14 @@ vi.mock('@/lib/repositories/conversation-rev', () => ({
 import { messageRepository } from '../message-repository';
 import { MessageConversationConflictError } from '@/lib/ai/core/message-utils';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
+import { db } from '@pagespace/db/db';
+import type { UIMessage } from 'ai';
+
+// Echoed attachment URLs are recognised only on our own storage host: make
+// `https://bucket.example.com/...` (virtual-hosted) that host for this file.
+vi.stubEnv('AWS_ENDPOINT_URL_S3', 'https://example.com');
+vi.stubEnv('BUCKET_NAME', 'bucket');
 
 const baseArgs = {
   messageId: 'msg-1',
@@ -143,6 +162,7 @@ beforeEach(() => {
   mockReturning.mockResolvedValue([{ id: 'msg-1' }]);
   // No conversations row (legacy conversation): rev 0, content event only.
   mockBumpConversationRev.mockResolvedValue(null);
+  mockFindBlockedUploads.mockResolvedValue(new Set());
 });
 
 describe('savePageMessage — scoped upsert (messages)', () => {
@@ -372,5 +392,109 @@ describe('savePageMessage / saveGlobalMessage — the broadcast source is the PE
     });
 
     expect(await eventSource()).toBe('voice');
+  });
+});
+
+// -------------------------------------------------------------------------
+// Content blocklist: attachments are screened BEFORE the save transaction.
+// An echoed chat-attachment key is used so no bytes need uploading here.
+// -------------------------------------------------------------------------
+describe('message saves — content blocklist screen', () => {
+  const BLOCKED_HASH = 'ab'.repeat(32);
+  const withAttachment = (id: string): UIMessage =>
+    ({
+      id,
+      role: 'user',
+      parts: [
+        { type: 'text', text: 'see attached' },
+        { type: 'file', url: `https://bucket.example.com/chat-attachments/${BLOCKED_HASH}/original`, mediaType: 'image/png' },
+      ],
+    }) as unknown as UIMessage;
+
+  const persistedContent = () => {
+    const values = txMock.insert.mock.results[0].value.values.mock.calls[0][0] as { content: string };
+    return JSON.parse(values.content) as { fileParts?: unknown[]; textParts: string[] };
+  };
+
+  it('refuses a USER page message with a blocked attachment before any transaction opens', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    await expect(
+      messageRepository.savePageMessage({ ...baseArgs, userId: 'user-1', uiMessage: withAttachment('msg-1') }),
+    ).rejects.toBeInstanceOf(ContentBlockedError);
+
+    expect(db.transaction).not.toHaveBeenCalled();
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], { entryPoint: 'chat-attachment', userId: 'user-1' });
+  });
+
+  it('refuses a USER global message with a blocked attachment before any transaction opens', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    await expect(
+      messageRepository.saveGlobalMessage({
+        messageId: 'msg-1',
+        conversationId: 'conv-1',
+        userId: 'user-1',
+        role: 'user',
+        content: 'hello',
+        uiMessage: withAttachment('msg-1'),
+      }),
+    ).rejects.toBeInstanceOf(ContentBlockedError);
+
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('writes no attachment bytes when a USER message carries a blocked new upload', async () => {
+    // sha256('hello world')
+    const HELLO_WORLD_SHA256 = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+    mockFindBlockedUploads.mockResolvedValue(new Set([HELLO_WORLD_SHA256]));
+    const uiMessage = {
+      id: 'msg-1',
+      role: 'user',
+      parts: [{ type: 'file', url: 'data:image/png;base64,aGVsbG8gd29ybGQ=', mediaType: 'image/png' }],
+    } as unknown as UIMessage;
+
+    await expect(
+      messageRepository.savePageMessage({ ...baseArgs, userId: 'user-1', uiMessage }),
+    ).rejects.toBeInstanceOf(ContentBlockedError);
+
+    expect(mockUploadChatAttachment).not.toHaveBeenCalled();
+    expect(db.transaction).not.toHaveBeenCalled();
+  });
+
+  it('attributes a dropped ASSISTANT part to the user who drove the turn', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    await messageRepository.savePageMessage({
+      ...baseArgs,
+      role: 'assistant',
+      triggeredBy: { userId: 'user-7', browserSessionId: 'session-1' },
+      uiMessage: { ...withAttachment('msg-1'), role: 'assistant' } as UIMessage,
+    });
+
+    expect(mockFindBlockedUploads).toHaveBeenCalledWith([BLOCKED_HASH], { entryPoint: 'chat-attachment', userId: 'user-7' });
+  });
+
+  it('saves an ASSISTANT message without the blocked part instead of failing the terminal write', async () => {
+    mockFindBlockedUploads.mockResolvedValue(new Set([BLOCKED_HASH]));
+
+    const result = await messageRepository.savePageMessage({
+      ...baseArgs,
+      role: 'assistant',
+      uiMessage: { ...withAttachment('msg-1'), role: 'assistant' } as UIMessage,
+    });
+
+    expect(result.saved).toBe(true);
+    expect(persistedContent().fileParts).toBeUndefined();
+    expect(persistedContent().textParts).toEqual(['see attached']);
+  });
+
+  it('leaves a message with an unblocked attachment unaffected', async () => {
+    const result = await messageRepository.savePageMessage({ ...baseArgs, userId: 'user-1', uiMessage: withAttachment('msg-1') });
+
+    expect(result.saved).toBe(true);
+    expect(persistedContent().fileParts).toEqual([
+      { storageKey: `chat-attachments/${BLOCKED_HASH}/original`, mediaType: 'image/png' },
+    ]);
   });
 });

@@ -206,6 +206,23 @@ describe('markdown projection', () => {
     expect(projected).toContain('a\\|b');
   });
 
+  it('a code span ending in a backslash before a pipe still cannot forge a column', () => {
+    const projected = pmDocToMarkdown(
+      htmlToPmDoc('<table><tbody><tr><td><p><code>a\\|b</code></p></td></tr></tbody></table>'),
+    );
+    // The raw backslash already escapes the pipe; adding one more would pair with it and free the pipe.
+    expect(projected).toContain('a\\|b');
+    expect(projected).not.toContain('a\\\\|b');
+  });
+
+  it('escapes a backslash in a link target so it cannot escape the closing parenthesis', () => {
+    const schema = htmlToPmDoc('<p>x</p>').type.schema;
+    const linked = schema.node('doc', null, [
+      schema.node('paragraph', null, [schema.text('x', [schema.mark('link', { href: 'https://x.test/a\\' })])]),
+    ]);
+    expect(pmDocToMarkdown(linked).trim()).toBe('[x](https://x.test/a\\\\)');
+  });
+
   it.each(['toString', 'constructor', '__proto__', 'valueOf', 'hasOwnProperty'])(
     'does not resolve the align attribute %j through Object.prototype',
     (align) => {

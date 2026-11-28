@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import request from 'supertest';
@@ -9,8 +9,10 @@ const {
   mockNormalizeIdentifier,
   mockSanitizeExtension,
   mockHasAuthScope,
+  mockIsHashBlocked,
 } = vi.hoisted(() => ({
   mockS3Send: vi.fn(),
+  mockIsHashBlocked: vi.fn(),
   mockNormalizeIdentifier: vi.fn().mockImplementation((value: unknown) => {
     if (typeof value !== 'string' || !value) return null;
     return value;
@@ -33,6 +35,10 @@ vi.mock('../../utils/security', () => ({
   IDENTIFIER_PATTERN: /^[A-Za-z0-9_-]{3,64}$/,
   normalizeIdentifier: (...args: unknown[]) => mockNormalizeIdentifier(...args),
   sanitizeExtension: (...args: unknown[]) => mockSanitizeExtension(...args),
+}));
+
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  isHashBlocked: (...args: unknown[]) => mockIsHashBlocked(...args),
 }));
 
 vi.mock('../../logger', () => ({
@@ -74,6 +80,17 @@ vi.mock('multer', () => {
 
 import avatarRouter from '../avatar';
 
+// The processor suite runs every file in one fork: a stubbed global `fetch` (the web gate) or env left behind by
+// the last test here would answer the next file's real requests (the SIEM e2e's webhook delivery).
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
+
+/** A real JPEG header: the upload gate checks magic bytes, not the declared type. */
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01]);
+const PNG_BYTES = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+
 type MockAuth = {
   userId?: string;
   resourceBinding?: { type: string; id: string };
@@ -102,7 +119,7 @@ function createMockFile(overrides: Partial<Express.Multer.File> = {}): Express.M
     filename: 'avatar.jpg',
     path: '',
     size: 1024,
-    buffer: Buffer.from('fake-image-data'),
+    buffer: JPEG_BYTES,
     stream: null!,
     ...overrides,
   };
@@ -133,6 +150,13 @@ describe('POST /avatar/upload', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockResolvedValue(false);
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    // The generic upload tests run as on-prem: the gate is the local blocklist only.
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
   });
 
   it('returns 401 when no auth', async () => {
@@ -172,6 +196,71 @@ describe('POST /avatar/upload', () => {
     expect(response.body.success).toBe(true);
   });
 
+  it('refuses before touching the current avatar when the hash was blocked after the gate answered', async () => {
+    // Clear when the gate read the blocklist; blocked by the final read before anything is written.
+    mockIsHashBlocked.mockResolvedValueOnce(false).mockResolvedValue(true);
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(422);
+    // The current avatar is neither listed for deletion nor replaced: nothing in storage changed.
+    expect(mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag)).toEqual([]);
+  });
+
+  it('a final blocklist read that fails refuses, and changes nothing in storage', async () => {
+    mockIsHashBlocked.mockResolvedValueOnce(false).mockRejectedValue(new Error('db down'));
+    const response = await request(createApp({ userId: 'user-1' }, createMockFile())).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(response.status).toBe(422);
+    expect(mockS3Send).not.toHaveBeenCalled();
+  });
+
+  it('an upload refused at its final read while another upload of the same user completes leaves that avatar intact', async () => {
+    let releaseA: (blocked: boolean) => void = () => undefined;
+    const calls: number[] = [];
+    // No once-values left over from another test: the call count below must be this test's alone.
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockImplementation(() => {
+      calls.push(calls.length + 1);
+      // Call 2 is upload A's final read: held until B has finished.
+      if (calls.length === 2) return new Promise<boolean>((resolve) => { releaseA = resolve; });
+      return Promise.resolve(false);
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    const a = request(app).post('/avatar/upload').send({ userId: 'user-1' }).then((r) => r);
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+
+    const b = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
+    expect(b.status).toBe(200);
+    const afterB = mockS3Send.mock.calls.length;
+
+    releaseA(true);
+    expect((await a).status).toBe(422);
+    // A's refusal wrote and deleted nothing: B's stored avatar is untouched.
+    expect(mockS3Send.mock.calls.length).toBe(afterB);
+  });
+
+  it('an avatar stored as its hash is blocked (after the final read, during the PUT) is stored but never served', async () => {
+    let blocked = false;
+    let stored: Uint8Array | null = null;
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockImplementation(async () => blocked);
+    mockS3Send.mockImplementation(async (command: { _tag: string; input: { Body?: Uint8Array } }) => {
+      if (command._tag === 'PutObject') {
+        stored = new Uint8Array(command.input.Body as Uint8Array);
+        // The takedown's block lands while the object is being written: past every check the upload makes.
+        blocked = true;
+        return {};
+      }
+      if (command._tag === 'GetObject') return { Body: { transformToByteArray: async () => stored } };
+      return { Contents: [] };
+    });
+    const app = createApp({ userId: 'user-1' }, createMockFile());
+    expect((await request(app).post('/avatar/upload').send({ userId: 'user-1' })).status).toBe(200);
+
+    const served = await request(app).get('/avatar/user-1/avatar.jpg');
+    expect(served.status).toBe(404);
+    expect(served.headers['cache-control']).toBe('no-store');
+  });
+
   it('saves avatar successfully via S3 PutObjectCommand', async () => {
     const app = createApp({ userId: 'user-1' }, createMockFile());
     const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
@@ -185,7 +274,7 @@ describe('POST /avatar/upload', () => {
     expect(putCall).toBeDefined();
     const putInput = (putCall![0] as { input: { Key: string; Body: Buffer } }).input;
     expect(putInput.Key).toContain('avatars/user-1/avatar');
-    expect(putInput.Body).toEqual(Buffer.from('fake-image-data'));
+    expect(putInput.Body).toEqual(JPEG_BYTES);
   });
 
   it('lists and deletes old avatars before saving new one', async () => {
@@ -248,6 +337,130 @@ describe('POST /avatar/upload', () => {
     const response = await request(app).post('/avatar/upload').send({ userId: 'user-1' });
     expect(response.status).toBe(500);
     expect(response.body.error).toContain('Failed to upload avatar');
+  });
+});
+
+describe('POST /avatar/upload content safety', () => {
+  const s3Tags = () => mockS3Send.mock.calls.map((call: unknown[]) => (call[0] as { _tag: string })._tag);
+  const webGate = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    defaultS3Behavior();
+    mockNormalizeIdentifier.mockImplementation((value: unknown) => (typeof value === 'string' && value ? value : null));
+    mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockResolvedValue(false);
+    vi.unstubAllEnvs();
+    vi.stubEnv('CONTENT_SCAN_MODE', 'enforce');
+    vi.stubEnv('WEB_APP_INTERNAL_URL', 'http://web:3000');
+    vi.stubEnv('SERVICE_API_SECRET', 'secret');
+    webGate.mockReset();
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: true }), { status: 200 }));
+    vi.stubGlobal('fetch', webGate);
+  });
+
+  const upload = (file: Express.Multer.File) => request(createApp({ userId: 'user-1' }, file)).post('/avatar/upload').send({ userId: 'user-1' });
+
+  it('a refused upload leaves the old avatar in place: nothing is listed, deleted or written', async () => {
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: false }), { status: 200 }));
+    const response = await upload(createMockFile());
+    expect(response.status).toBe(422);
+    expect(response.body.error).toBe("This image can't be used as a profile picture. Please try a different image.");
+    expect(JSON.stringify(response.body)).not.toMatch(/scan|flag|block|csam|hash/i);
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('a magic-byte mismatch is refused before the gate or any storage call, whatever was declared', async () => {
+    const html = Buffer.from('<html><script>alert(1)</script></html>');
+    const response = await upload(createMockFile({ buffer: html, mimetype: 'image/png', originalname: 'avatar.png' }));
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe('Please upload a JPEG, PNG, GIF or WebP image.');
+    expect(webGate).not.toHaveBeenCalled();
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('sends the bytes to the web gate with service auth, then replaces the avatar', async () => {
+    const response = await upload(createMockFile());
+    expect(response.status).toBe(200);
+    const [url, init] = webGate.mock.calls[0] as [string, RequestInit & { headers: Record<string, string> }];
+    expect(url).toBe('http://web:3000/api/internal/content-safety/avatar-gate');
+    expect(init.headers['x-service-secret']).toBe('secret');
+    expect(init.headers['x-service-user-id']).toBe('user-1');
+    expect(Buffer.from(init.body as Buffer)).toEqual(JPEG_BYTES);
+    expect(s3Tags()).toEqual(['ListObjectsV2', 'PutObject']);
+  });
+
+  it('the stored extension and type come from the bytes, not the file name or declared type', async () => {
+    const response = await upload(createMockFile({ buffer: PNG_BYTES, mimetype: 'image/jpeg', originalname: 'me.jpg' }));
+    expect(response.status).toBe(200);
+    expect(response.body.filename).toBe('avatar.png');
+    const put = mockS3Send.mock.calls.find((call: unknown[]) => (call[0] as { _tag: string })._tag === 'PutObject');
+    expect((put![0] as { input: { Key: string; ContentType: string } }).input).toMatchObject({ Key: 'avatars/user-1/avatar.png', ContentType: 'image/png' });
+  });
+
+  it('enforce refuses when the web gate cannot be reached, and touches nothing', async () => {
+    webGate.mockRejectedValue(new TypeError('fetch failed'));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('enforce refuses when the gate is not configured', async () => {
+    vi.stubEnv('SERVICE_API_SECRET', '');
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).not.toHaveBeenCalled();
+  });
+
+  it('shadow accepts when the web gate cannot be reached, after a local blocklist check', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    webGate.mockResolvedValue(new Response('nope', { status: 503 }));
+    expect((await upload(createMockFile())).status).toBe(200);
+    expect(mockIsHashBlocked).toHaveBeenCalled();
+  });
+
+  it('with no answer, a hash blocked meanwhile (a takedown in flight) is refused in every mode', async () => {
+    for (const mode of ['off', 'shadow', 'enforce']) {
+      vi.stubEnv('CONTENT_SCAN_MODE', mode);
+      webGate.mockRejectedValueOnce(Object.assign(new Error('timeout'), { name: 'TimeoutError' }));
+      mockIsHashBlocked.mockResolvedValueOnce(true);
+      expect((await upload(createMockFile())).status).toBe(422);
+    }
+    webGate.mockRejectedValueOnce(new TypeError('fetch failed'));
+    mockIsHashBlocked.mockRejectedValueOnce(new Error('db down'));
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(s3Tags()).toEqual([]);
+  });
+
+  it('shadow: whatever the web gate accepts (it records and opens cases) is stored', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', 'shadow');
+    expect((await upload(createMockFile())).status).toBe(200);
+    expect(webGate).toHaveBeenCalledTimes(1);
+    expect(s3Tags()).toContain('PutObject');
+  });
+
+  it('the web app decides even when the processor has no CONTENT_SCAN_MODE (it cannot skip the scan)', async () => {
+    vi.stubEnv('CONTENT_SCAN_MODE', '');
+    webGate.mockResolvedValue(new Response(JSON.stringify({ accept: false }), { status: 200 }));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('on-prem: no gate call; a blocked hash is refused, and a blocklist failure refuses', async () => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+    mockIsHashBlocked.mockResolvedValueOnce(true);
+    expect((await upload(createMockFile())).status).toBe(422);
+    mockIsHashBlocked.mockRejectedValueOnce(new Error('db down'));
+    expect((await upload(createMockFile())).status).toBe(422);
+    expect(webGate).not.toHaveBeenCalled();
+    expect(s3Tags()).toEqual([]);
+    expect((await upload(createMockFile())).status).toBe(200);
+  });
+
+  it('a non-image answers 400 with a code the web app can tell apart from other 400s', async () => {
+    const response = await upload(createMockFile({ buffer: Buffer.from('not an image at all') }));
+    expect(response.body).toMatchObject({ code: 'not_an_image' });
   });
 });
 
@@ -338,6 +551,24 @@ describe('GET /avatar/:userId/:filename', () => {
       return value;
     });
     mockSanitizeExtension.mockReturnValue('.jpg');
+    // Reset, not just cleared: a once-value queued by an earlier test must not answer this one.
+    mockIsHashBlocked.mockReset();
+    mockIsHashBlocked.mockResolvedValue(false);
+  });
+
+  it('never serves an avatar whose bytes are blocked (one stored as its hash was being blocked)', async () => {
+    mockIsHashBlocked.mockResolvedValue(true);
+    const response = await request(createApp()).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(404);
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(mockIsHashBlocked).toHaveBeenCalledWith(expect.stringMatching(/^[0-9a-f]{64}$/));
+  });
+
+  it('serves nothing when the blocklist cannot be read, and says not to cache that', async () => {
+    mockIsHashBlocked.mockRejectedValue(new Error('db down'));
+    const response = await request(createApp()).get('/avatar/user-1/avatar.jpg');
+    expect(response.status).toBe(503);
+    expect(response.headers['cache-control']).toBe('no-store');
   });
 
   it('returns 400 when userId is invalid', async () => {
@@ -352,7 +583,7 @@ describe('GET /avatar/:userId/:filename', () => {
     const response = await request(app).get('/avatar/user-1/avatar.jpg');
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('image/jpeg');
-    expect(response.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(response.headers['cache-control']).toBe('public, max-age=3600');
   });
 
   it('returns 404 when avatar not found in S3', async () => {

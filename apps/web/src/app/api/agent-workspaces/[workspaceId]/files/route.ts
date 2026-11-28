@@ -51,6 +51,8 @@ import {
   resolveSessionSandboxHandle,
   type ResolveSessionSandboxHandleDenial,
 } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -215,10 +217,11 @@ const ROUTE = 'agent-workspaces/[workspaceId]/files';
  */
 async function authorize(
   request: Request,
-  userId: string,
+  actor: AccessActor,
   workspaceId: string,
 ): Promise<NextResponse | null> {
-  const access = await checkSessionAccess(userId, workspaceId);
+  const userId = actor.userId;
+  const access = await checkSessionAccess(actor, workspaceId);
   if (access.allowed) return null;
   auditSessionAccessDenial(request, userId, workspaceId, access.reason, ROUTE);
   return NextResponse.json({ error: 'This session has no sandbox yet', reason: 'not_started' }, { status: 404 });
@@ -281,7 +284,7 @@ export async function GET(request: Request, context: RouteContext) {
 
   // Authorize BEFORE parsing optional params, so a user without access gets a
   // uniform answer and can never probe path/mode handling.
-  const deniedResponse = await authorize(request, auth.userId, workspaceId);
+  const deniedResponse = await authorize(request, actorFromAuth(auth), workspaceId);
   if (deniedResponse) return deniedResponse;
 
   const url = new URL(request.url);
@@ -303,7 +306,7 @@ export async function GET(request: Request, context: RouteContext) {
   if (!confined.ok) return confined.error;
   const path = confined.value;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
   if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
@@ -365,7 +368,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const deniedResponse = await authorize(request, auth.userId, workspaceId);
+  const deniedResponse = await authorize(request, actorFromAuth(auth), workspaceId);
   if (deniedResponse) return deniedResponse;
 
   const oversized = rejectOversizedBody(request);
@@ -388,7 +391,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!kind.ok) return kind.error;
 
   if (kind.value === 'directory') {
-    const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+    const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
     if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
     const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
     if (escape) return escape;
@@ -408,7 +411,7 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'overwrite must be a boolean' }, { status: 400 });
   }
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
   if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;
@@ -428,7 +431,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const deniedResponse = await authorize(request, auth.userId, workspaceId);
+  const deniedResponse = await authorize(request, actorFromAuth(auth), workspaceId);
   if (deniedResponse) return deniedResponse;
 
   const oversized = rejectOversizedBody(request);
@@ -454,7 +457,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   const toPath = confineScopedPath(scope.value, rawToPath.value, 'toPath', { forbidRoot: true });
   if (!toPath.ok) return toPath.error;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
   if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [
@@ -479,7 +482,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (isAuthError(auth)) return auth.error;
   const { workspaceId } = await context.params;
 
-  const deniedResponse = await authorize(request, auth.userId, workspaceId);
+  const deniedResponse = await authorize(request, actorFromAuth(auth), workspaceId);
   if (deniedResponse) return deniedResponse;
 
   const oversized = rejectOversizedBody(request);
@@ -498,7 +501,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!confinedPath.ok) return confinedPath.error;
   const path = confinedPath.value;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, actorFromAuth(auth));
   if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);

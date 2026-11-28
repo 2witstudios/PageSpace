@@ -36,6 +36,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: vi.fn(),
 }));
 
@@ -69,6 +70,7 @@ import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -162,7 +164,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
     it('checks edit permission for the caller and page', async () => {
       await POST(createRequest(), mockContext);
 
-      expect(canUserEditPage).toHaveBeenCalledWith(mockUserId, mockPageId);
+      expect(canUserEditPage).toHaveBeenCalledWith(expect.objectContaining({ userId: mockUserId }), mockPageId);
     });
   });
 
@@ -203,7 +205,7 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
       await POST(createRequest(), mockContext);
 
       expect(createPageServiceToken).toHaveBeenCalledWith(
-        mockUserId,
+        expect.objectContaining({ userId: mockUserId }),
         mockPageId,
         ['files:ingest'],
         '2m'
@@ -284,4 +286,13 @@ describe('POST /api/pages/[pageId]/reprocess', () => {
       expect(body.error).toMatch(/failed/i);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

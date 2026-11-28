@@ -42,6 +42,7 @@ vi.mock('@pagespace/lib/permissions/conversation-access', () => ({
 }));
 
 import { canSubscribeToStream, filterSubscribableStreams } from '../stream-subscription-authz';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // A page channel carries EVERY conversation on that page, and conversations are private
 // by default. Authorizing a stream subscription on page access alone therefore hands one
@@ -56,7 +57,7 @@ describe('canSubscribeToStream', () => {
 
   it('given the caller started the stream, should allow without even looking up the conversation', async () => {
     const allowed = await canSubscribeToStream({
-      userId: 'user-1',
+      actor: credentialActor('user-1', null),
       streamOwnerId: 'user-1',
       conversationId: 'conv-1',
     });
@@ -71,13 +72,13 @@ describe('canSubscribeToStream', () => {
     mockCanAccessConversation.mockResolvedValue(false);
 
     const allowed = await canSubscribeToStream({
-      userId: 'user-b',
+      actor: credentialActor('user-b', null),
       streamOwnerId: 'user-a',
       conversationId: 'their-private-conv',
     });
 
     expect(allowed).toBe(false);
-    expect(mockCanAccessConversation).toHaveBeenCalledWith('user-b', row);
+    expect(mockCanAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-b' }), row);
   });
 
   it("given another user's stream in an explicitly SHARED conversation the caller can access, should allow", async () => {
@@ -86,13 +87,13 @@ describe('canSubscribeToStream', () => {
     mockCanAccessConversation.mockResolvedValue(true);
 
     const allowed = await canSubscribeToStream({
-      userId: 'user-b',
+      actor: credentialActor('user-b', null),
       streamOwnerId: 'user-a',
       conversationId: 'shared-conv',
     });
 
     expect(allowed).toBe(true);
-    expect(mockCanAccessConversation).toHaveBeenCalledWith('user-b', row);
+    expect(mockCanAccessConversation).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-b' }), row);
   });
 
   // Fail closed: an unknown conversation is not a shared one.
@@ -100,7 +101,7 @@ describe('canSubscribeToStream', () => {
     mockLimit.mockResolvedValue([]);
 
     const allowed = await canSubscribeToStream({
-      userId: 'user-b',
+      actor: credentialActor('user-b', null),
       streamOwnerId: 'user-a',
       conversationId: 'missing',
     });

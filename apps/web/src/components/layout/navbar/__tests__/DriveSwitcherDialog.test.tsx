@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Drive } from '@pagespace/lib/types';
@@ -137,6 +137,45 @@ describe('DriveSwitcherDialog', () => {
       const all = screen.getByRole('option', { name: 'All drives, current' });
       expect(all.getAttribute('data-current')).toBe('true');
       expect(all).toHaveAttribute('aria-current', 'true');
+    });
+  });
+
+  describe('initial focus', () => {
+    it('given a touch device, should open without focusing search and allow tapping it', async () => {
+      const media = vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+        matches: query === '(pointer: coarse)', media: query, onchange: null,
+        addEventListener: vi.fn(), removeEventListener: vi.fn(),
+        addListener: vi.fn(), removeListener: vi.fn(), dispatchEvent: () => false,
+      }));
+      try {
+        renderPicker();
+        const search = screen.getByPlaceholderText('Search drives…');
+        expect(search).not.toHaveFocus();
+        expect(screen.getByRole('dialog')).toHaveFocus();
+        await userEvent.click(search);
+        expect(search).toHaveFocus();
+      } finally {
+        media.mockRestore();
+      }
+    });
+
+    it('given focused search, should dismiss it when touching the list without closing or clearing the query', async () => {
+      const { onOpenChange } = renderPicker();
+      const search = screen.getByPlaceholderText('Search drives…');
+      await userEvent.type(search, 'engineering');
+      fireEvent.touchStart(screen.getByRole('listbox'), {
+        touches: [{ clientX: 100, clientY: 200 }],
+        changedTouches: [{ clientX: 100, clientY: 200 }],
+      });
+      expect(search).not.toHaveFocus();
+      expect(search).toHaveValue('engineering');
+      expect(screen.getByRole('dialog')).toHaveFocus();
+      expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    });
+
+    it('given a desktop keyboard, should focus search on opening', () => {
+      renderPicker();
+      expect(screen.getByPlaceholderText('Search drives…')).toHaveFocus();
     });
   });
 

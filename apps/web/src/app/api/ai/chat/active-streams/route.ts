@@ -1,6 +1,7 @@
+import { canPrincipalViewPage } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
+
 import { db } from '@pagespace/db/db';
 import { and, asc, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
@@ -10,6 +11,7 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { isStreamRowLive, isProvablyDead } from '@/lib/ai/core/stream-liveness';
 import { filterSubscribableStreams } from '@/lib/ai/core/stream-subscription-authz';
 import { materializeInterruptedStream } from '@/lib/ai/core/materialize-interrupted-stream';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -26,6 +28,7 @@ export async function GET(request: Request) {
       });
       return auth.error;
     }
+    const actor = actorFromAuth(auth);
     const userId = auth.userId;
 
     const { searchParams } = new URL(request.url);
@@ -92,7 +95,7 @@ export async function GET(request: Request) {
         return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
       }
     } else {
-      const allowed = await canUserViewPage(userId, channelId);
+      const allowed = await canPrincipalViewPage(auth, channelId);
       if (!allowed) {
         auditRequest(request, {
           eventType: 'authz.access.denied',
@@ -102,7 +105,7 @@ export async function GET(request: Request) {
           details: { reason: 'page_view_denied', method: 'GET' },
           riskScore: 0.5,
         });
-        return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+        return deniedResponse(actor, channelId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
       }
     }
 

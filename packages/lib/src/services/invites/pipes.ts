@@ -1,4 +1,5 @@
 import { MAGIC_LINK_EXPIRY_MINUTES } from '../../auth/magic-link-constants';
+import { isGuestRole } from '../../permissions/guest-role';
 import type {
   AcceptancePorts,
   ConnectionAcceptancePorts,
@@ -90,7 +91,9 @@ export const acceptInviteForExistingUser =
       driveId: invite.driveId,
       userId: input.userId,
     });
-    if (existing && existing.acceptedAt !== null) {
+    // A GUEST row (redeemed page share link) is not a membership: the invite
+    // upgrades it to the invited role rather than bouncing as ALREADY_MEMBER.
+    if (existing && existing.acceptedAt !== null && !isGuestRole(existing.role)) {
       return { ok: false, error: 'ALREADY_MEMBER' };
     }
 
@@ -121,12 +124,12 @@ export const acceptInviteForExistingUser =
 export const revokePendingInvite =
   (ports: RevokePorts) =>
   async (input: RevokePendingInviteInput): Promise<RevokePendingInviteResult> => {
-    const [invite, actorMembership] = await Promise.all([
+    const [invite, actorRole] = await Promise.all([
       ports.loadPendingInviteForDrive({
         inviteId: input.inviteId,
         driveId: input.driveId,
       }),
-      ports.findActorMembership({
+      ports.findActorDriveRole({
         driveId: input.driveId,
         actorId: input.actorId,
       }),
@@ -135,7 +138,7 @@ export const revokePendingInvite =
     const validated = validateRevokeRequest({
       invite,
       requestedDriveId: input.driveId,
-      actorMembership,
+      actorRole,
     });
     if (!validated.ok) return validated;
 

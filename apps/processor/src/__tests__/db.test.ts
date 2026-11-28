@@ -36,6 +36,7 @@ import {
   setPageProcessing,
   setPageCompleted,
   setPageVisual,
+  setPageVisualWithContent,
   setPageFailed,
   getPageForIngestion,
 } from '../db';
@@ -189,6 +190,37 @@ describe('db module', () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageVisual('page-1')).rejects.toThrow('DB error');
       expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('setPageVisualWithContent', () => {
+    beforeEach(() => {
+      respondWithPageType('FILE');
+    });
+
+    it('marks the page visual while keeping its text and metadata, through the same FILE-fenced statement', async () => {
+      await setPageVisualWithContent('page-1', 'p. 1', { pageCount: 3, rasterizedPages: 3 });
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(SET_PAGE_COMPLETED_SQL, [
+        'FILE',
+        'p. 1',
+        'visual',
+        'visual',
+        '{"pageCount":3,"rasterizedPages":3}',
+        'page-1',
+      ]);
+      expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it('warns that the body was left alone when the page is no longer a FILE', async () => {
+      respondWithPageType('DOCUMENT');
+      const warn = vi.spyOn(loggers.processor, 'warn').mockImplementation(() => {});
+
+      await setPageVisualWithContent('page-1', 'p. 1', null);
+
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('page-1 is a DOCUMENT, not a FILE'));
+      warn.mockRestore();
     });
   });
 

@@ -1,0 +1,60 @@
+import { NextResponse } from 'next/server';
+import { announceOrgChange } from '@pagespace/lib/organizations/org-change-events';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { transferOwnership } from '@pagespace/lib/organizations/membership';
+import { authorizeOrgRequest, ORG_MONEY_WRITE_AUTH } from '@/lib/orgs/org-route-auth';
+import { transferOwnershipSchema } from '@/lib/orgs/org-schemas';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+
+/**
+ * POST /api/orgs/[orgId]/transfer-ownership — the Owner hands the org to another
+ * member (ORG-1). organizations.ownerId and the OWNER row move in one transaction;
+ * the previous Owner stays as an Admin.
+ *
+ * Session only: the Owner holds the org's money authority (billing, the pool, seat caps), so handing it
+ * over is a [D-OW-26] money move a delegated key never makes, and the actor cannot take it back.
+ */
+export async function POST(request: Request, context: { params: Promise<{ orgId: string }> }) {
+  const { orgId } = await context.params;
+  const gate = await authorizeOrgRequest(request, orgId, 'OWNER', ORG_MONEY_WRITE_AUTH);
+  if (!gate.ok) return gate.response;
+  try {
+    const parsed = transferOwnershipSchema.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid request body', issues: parsed.error.issues, code: 'invalid_request' }, { status: 400 });
+    }
+    const result = await transferOwnership({ orgId, actorId: gate.userId, targetId: parsed.data.toUserId });
+    if (!result.ok) {
+      if (result.reason === 'owner_erasure_in_progress') {
+        return NextResponse.json({ error: 'An account undergoing erasure cannot own an organization', code: result.reason }, { status: result.status });
+      }
+      const error =
+        result.reason === 'target_not_member'
+          ? 'Ownership can only move to a member of this organization'
+          : result.reason === 'already_owner'
+            ? 'You already own this organization'
+            : result.reason === 'owner_not_human'
+              ? 'Only a person can own an organization'
+              : result.reason === 'not_found'
+                ? 'Organization not found'
+                : result.reason === 'org_lapsed'
+                  ? ORG_LAPSED_MESSAGE
+                  : 'Only the Owner can transfer ownership';
+      return NextResponse.json({ error, code: result.reason }, { status: result.status });
+    }
+    auditRequest(request, {
+      eventType: 'authz.role.assigned',
+      userId: gate.userId,
+      resourceType: 'organization',
+      resourceId: orgId,
+      details: { operation: 'transfer_org_ownership', fromUserId: gate.userId, toUserId: parsed.data.toUserId },
+    });
+    // X-4: members see the change without a refresh (org:changed, no content).
+    void announceOrgChange(orgId, 'membership');
+    return NextResponse.json({ ownerId: parsed.data.toUserId });
+  } catch (error) {
+    loggers.api.error('Error transferring organization ownership:', error as Error);
+    return NextResponse.json({ error: 'Failed to transfer ownership', code: 'internal_error' }, { status: 500 });
+  }
+}

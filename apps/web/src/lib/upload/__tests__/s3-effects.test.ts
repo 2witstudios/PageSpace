@@ -18,6 +18,27 @@ vi.mock('@aws-sdk/client-s3', () => ({
       this.input = input;
     }
   },
+  GetObjectCommand: class {
+    kind = 'get';
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+  CopyObjectCommand: class {
+    kind = 'copy';
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
+  DeleteObjectCommand: class {
+    kind = 'delete';
+    input: unknown;
+    constructor(input: unknown) {
+      this.input = input;
+    }
+  },
 }));
 
 const mockGetSignedUrl = vi.fn();
@@ -31,7 +52,8 @@ vi.mock('@/lib/presigned-url', () => ({
   getS3Bucket: () => 'test-bucket',
 }));
 
-import { issuePresignedPutUrl, checkObjectExists, putObject } from '../s3-effects';
+import { createHash } from 'crypto';
+import { issuePresignedPutUrl, checkObjectExists, putObject, digestStoredObject, deleteStoredObject, copyStoredObject } from '../s3-effects';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -99,5 +121,79 @@ describe('checkObjectExists', () => {
   it('rethrows unexpected errors instead of treating them as missing', async () => {
     mockSend.mockRejectedValue(Object.assign(new Error('boom'), { name: 'AccessDenied' }));
     await expect(checkObjectExists('files/abc/original')).rejects.toThrow('boom');
+  });
+});
+
+describe('digestStoredObject', () => {
+  const chunks = [Buffer.from('hello '), Buffer.from('world')];
+  const sha256 = createHash('sha256').update('hello world').digest('hex');
+  async function* stream(parts: Buffer[], onEnd?: () => void) {
+    try {
+      for (const part of parts) yield new Uint8Array(part);
+    } finally {
+      onEnd?.();
+    }
+  }
+
+  it('given a stored object, should stream it and return its sha256 and size, reading the key it was given', async () => {
+    mockSend.mockResolvedValue({ Body: stream(chunks) });
+
+    const result = await digestStoredObject('files/k/original', 1024);
+
+    expect(result).toEqual({ status: 'ok', sha256, size: 11 });
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ kind: 'get', input: { Bucket: 'test-bucket', Key: 'files/k/original' } });
+  });
+
+  it('given an object larger than the bound, should stop reading and report oversize', async () => {
+    let closed = false;
+    mockSend.mockResolvedValue({ Body: stream([Buffer.alloc(8), Buffer.alloc(8), Buffer.alloc(8)], () => { closed = true; }) });
+
+    expect(await digestStoredObject('k', 10)).toEqual({ status: 'oversize' });
+    expect(closed).toBe(true);
+  });
+
+  it('given exactly the bound, should accept it', async () => {
+    mockSend.mockResolvedValue({ Body: stream(chunks) });
+    expect(await digestStoredObject('k', 11)).toMatchObject({ status: 'ok', size: 11 });
+  });
+
+  it('given a missing object, should report missing', async () => {
+    mockSend.mockRejectedValue(Object.assign(new Error('nope'), { name: 'NoSuchKey' }));
+    expect(await digestStoredObject('k', 10)).toEqual({ status: 'missing' });
+  });
+
+  it('given any other storage error, should throw', async () => {
+    mockSend.mockRejectedValue(new Error('timeout'));
+    await expect(digestStoredObject('k', 10)).rejects.toThrow('timeout');
+  });
+});
+
+describe('deleteStoredObject', () => {
+  it('should delete exactly the given key', async () => {
+    mockSend.mockResolvedValue({});
+    await deleteStoredObject('files/k/original');
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ kind: 'delete', input: { Bucket: 'test-bucket', Key: 'files/k/original' } });
+  });
+});
+
+describe('copyStoredObject', () => {
+  it('should copy the source key to the destination key server-side', async () => {
+    mockSend.mockResolvedValue({});
+
+    expect(await copyStoredObject('uploads/staging/j1', 'uploads/verifying/j1')).toBe('copied');
+    expect(mockSend.mock.calls[0][0]).toMatchObject({
+      kind: 'copy',
+      input: { Bucket: 'test-bucket', Key: 'uploads/verifying/j1', CopySource: 'test-bucket/uploads/staging/j1' },
+    });
+  });
+
+  it('given no source object, should report missing', async () => {
+    mockSend.mockRejectedValue(Object.assign(new Error('nope'), { name: 'NoSuchKey' }));
+    expect(await copyStoredObject('a', 'b')).toBe('missing');
+  });
+
+  it('given any other storage error, should throw', async () => {
+    mockSend.mockRejectedValue(new Error('timeout'));
+    await expect(copyStoredObject('a', 'b')).rejects.toThrow('timeout');
   });
 });

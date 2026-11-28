@@ -12,6 +12,7 @@ const {
   mockSweepAuthHandoff,
   mockSweepPendingAbortIntents,
   mockSweepPendingUploads,
+  mockSweepUploadStaging,
   mockAudit,
 } = vi.hoisted(() => ({
   mockSweepJTI: vi.fn(),
@@ -19,6 +20,7 @@ const {
   mockSweepAuthHandoff: vi.fn(),
   mockSweepPendingAbortIntents: vi.fn(),
   mockSweepPendingUploads: vi.fn(),
+  mockSweepUploadStaging: vi.fn(),
   mockAudit: vi.fn(),
 }));
 
@@ -40,6 +42,10 @@ vi.mock('@/lib/ai/core/pending-abort-intents', () => ({
 }));
 vi.mock('@pagespace/lib/services/pending-uploads', () => ({
   sweepExpiredPendingUploads: mockSweepPendingUploads,
+}));
+
+vi.mock('@/lib/upload/upload-staging-sweep', () => ({
+  sweepStaleUploadStaging: mockSweepUploadStaging,
 }));
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -72,6 +78,7 @@ describe('/api/cron/sweep-expired', () => {
     mockSweepAuthHandoff.mockResolvedValue(0);
     mockSweepPendingAbortIntents.mockResolvedValue(0);
     mockSweepPendingUploads.mockResolvedValue(0);
+    mockSweepUploadStaging.mockResolvedValue(0);
   });
 
   describe('auth', () => {
@@ -139,9 +146,33 @@ describe('/api/cron/sweep-expired', () => {
             authHandoffTokens: 5,
             pendingAbortIntents: 1,
             pendingUploads: 9,
+            uploadStaging: 0,
           },
         }),
       );
+    });
+  });
+
+  describe('upload staging objects', () => {
+    it('reclaims stale per-job upload objects and reports the count', async () => {
+      mockSweepUploadStaging.mockResolvedValue(6);
+
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as { results: Record<string, unknown> };
+
+      expect(body.results.uploadStaging).toBe(6);
+    });
+
+    it('a storage failure is reported as a partial failure without blocking the table sweeps', async () => {
+      mockSweepUploadStaging.mockRejectedValue(new Error('s3 down'));
+      mockSweepPendingUploads.mockResolvedValue(2);
+
+      const res = await GET(makeRequest());
+      const body = (await res.json()) as { results: Record<string, unknown> };
+
+      expect(res.status).toBe(500);
+      expect(body.results.uploadStaging).toEqual({ error: 's3 down' });
+      expect(body.results.pendingUploads).toBe(2);
     });
   });
 

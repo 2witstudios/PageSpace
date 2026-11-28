@@ -12,6 +12,7 @@ import { createTaskTriggerWorkflow } from '@/lib/workflows/task-trigger-helpers'
 import { broadcastTaskEvent } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const logger = loggers.api.child({ module: 'task-triggers-api' });
 
@@ -82,7 +83,7 @@ export async function GET(request: Request, context: { params: Promise<{ taskId:
   // — same gate as PUT/DELETE. View-only users cannot inspect trigger configuration.
   const canEdit = await canPrincipalEditPage(auth, ctx.taskListPageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), ctx.taskListPageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   const rows = await db
@@ -147,7 +148,7 @@ export async function PUT(request: Request, context: { params: Promise<{ taskId:
 
   const canEdit = await canPrincipalEditPage(auth, ctx.taskListPageId);
   if (!canEdit) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), ctx.taskListPageId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   if (parsed.data.triggerType === 'due_date' && !ctx.task.dueDate) {

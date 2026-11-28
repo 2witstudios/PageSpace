@@ -28,6 +28,8 @@
  */
 
 import { getUserAccessLevel } from './permissions';
+import type { AccessActor } from './access-actor';
+import { checkActorResourceAuthentication } from './actor-authentication';
 
 /** The conversation facts the access decision needs — a subset of a `conversations` row. */
 export interface ConversationAccessRow {
@@ -56,28 +58,39 @@ export const decideConversationAccess = ({
 }): boolean => isOwner || (isShared && hasPageAccess);
 
 /**
- * May `userId` access (subscribe to / observe) `conversation`?
+ * May the actor access (subscribe to / observe) `conversation`?
  *
- * Owner short-circuits with no IO. A shared page conversation costs one
- * `getUserAccessLevel` check; everything else denies without IO.
+ * A shared page conversation costs one `getUserAccessLevel` check; a non-owner
+ * of anything else is denied without IO. The owner of a global conversation is
+ * admitted without IO; the owner of a page or drive conversation still needs a
+ * credential that page's org admits (SEC-2/3), because the conversation carries
+ * that org's content.
  */
 export const canAccessConversation = async (
-  userId: string,
+  actor: AccessActor,
   conversation: ConversationAccessRow,
   deps: {
     /** Injectable for tests; defaults to the centralized permission check. */
-    getPageAccess?: (userId: string, pageId: string) => Promise<boolean>;
+    getPageAccess?: (actor: AccessActor, pageId: string) => Promise<boolean>;
+    /** Injectable for tests; defaults to the org sign-in policy check. */
+    passesSignInPolicy?: (actor: AccessActor, resourceId: string) => Promise<boolean>;
   } = {},
 ): Promise<boolean> => {
-  if (conversation.userId === userId) return true;
+  if (conversation.userId === actor.userId) {
+    if (conversation.type === 'global' || !conversation.contextId) return true;
+    const passesSignInPolicy =
+      deps.passesSignInPolicy ??
+      (async (a: AccessActor, resourceId: string) => (await checkActorResourceAuthentication(a, resourceId)).allowed);
+    return passesSignInPolicy(actor, conversation.contextId);
+  }
   if (conversation.isShared !== true) return false;
   // Only a page conversation has a page to share through.
   if (conversation.type !== 'page' || !conversation.contextId) return false;
 
   const getPageAccess =
     deps.getPageAccess ??
-    (async (uid: string, pageId: string) => (await getUserAccessLevel(uid, pageId)) !== null);
+    (async (a: AccessActor, pageId: string) => (await getUserAccessLevel(a, pageId)) !== null);
 
-  const hasPageAccess = await getPageAccess(userId, conversation.contextId);
+  const hasPageAccess = await getPageAccess(actor, conversation.contextId);
   return decideConversationAccess({ isOwner: false, isShared: true, hasPageAccess });
 };

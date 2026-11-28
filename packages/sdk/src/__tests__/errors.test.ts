@@ -18,6 +18,7 @@ import {
   isTimeoutError,
   isValidationError,
   NetworkError,
+  orgSignInRequirementOf,
   NotFoundError,
   PageSpaceError,
   PermissionDeniedError,
@@ -398,5 +399,22 @@ describe('PageSpaceError base class', () => {
       expect(err.code.length).toBeGreaterThan(0);
       expect(typeof err.message).toBe('string');
     }
+  });
+});
+
+describe('org sign-in denials (D-OW-45)', () => {
+  it.each([403, 401])('SEC-2 (partial) a %d carrying an org sign-in code says which ceremony unlocks it', (status) => {
+    for (const code of ['org_strong_sign_in_required', 'org_reauthentication_required'] as const) {
+      const err = classifyHttpError(status, {}, { error: 'refused', code, orgId: 'org_nw' });
+      expect(orgSignInRequirementOf(err)).toBe(code);
+    }
+  });
+
+  it('any other code, status or shape carries none (allowlist, never copied blindly)', () => {
+    expect(orgSignInRequirementOf(classifyHttpError(403, {}, { code: 'insufficient_role' }))).toBeNull();
+    expect(orgSignInRequirementOf(classifyHttpError(404, {}, { code: 'org_strong_sign_in_required' }))).toBeNull();
+    expect(orgSignInRequirementOf(classifyHttpError(403, {}, 'org_strong_sign_in_required'))).toBeNull();
+    expect(orgSignInRequirementOf(new Error('org_strong_sign_in_required'))).toBeNull();
+    expect(orgSignInRequirementOf({ code: 'PERMISSION_DENIED', message: 'x', orgSignInRequirement: 'something_else' })).toBeNull();
   });
 });

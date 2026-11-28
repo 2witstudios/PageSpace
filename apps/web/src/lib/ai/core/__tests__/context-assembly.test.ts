@@ -88,6 +88,7 @@ const baseParams = {
   model: 'm',
   provider: 'openrouter',
   user: { id: 'u1', role: 'admin' as string | null },
+  spend: { kind: 'personal' as const },
 };
 
 beforeEach(() => {

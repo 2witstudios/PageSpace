@@ -186,6 +186,8 @@ const mockLocalStorage = (() => {
     setItem: vi.fn((key: string, value: string) => { store[key] = value; }),
     removeItem: vi.fn((key: string) => { delete store[key]; }),
     clear: vi.fn(() => { store = {}; }),
+    key: vi.fn((index: number) => Object.keys(store)[index] ?? null),
+    get length() { return Object.keys(store).length; },
   };
 })();
 Object.defineProperty(global, 'localStorage', {
@@ -349,6 +351,23 @@ describe('useAuth', () => {
 
       // Observable: localStorage cleared
       expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('deviceToken');
+    });
+
+    it('should purge every saved create-organization setup plan, and nothing else', async () => {
+      mockPost.mockResolvedValue({ ok: true });
+      mockLocalStorage.setItem('pagespace.orgSetup.u_a.org_1', '{"driveIds":["d1"],"invites":[],"selfEmail":"a@x.io","driveNames":{}}');
+      mockLocalStorage.setItem('pagespace.orgSetup.u_b.org_2', '{"driveIds":["d2"],"invites":[],"selfEmail":"b@x.io","driveNames":{}}');
+      mockLocalStorage.setItem('unrelated', 'kept');
+
+      const { result } = renderHook(() => useAuth());
+
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockLocalStorage.getItem('pagespace.orgSetup.u_a.org_1')).toBeNull();
+      expect(mockLocalStorage.getItem('pagespace.orgSetup.u_b.org_2')).toBeNull();
+      expect(mockLocalStorage.getItem('unrelated')).toBe('kept');
     });
   });
 

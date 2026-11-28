@@ -12,6 +12,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { searchEntries, type SearchEntry } from "@/lib/search-data";
+import { isEmbeddedSearch } from "@/lib/legal-embed";
 
 const categoryIcons: Record<SearchEntry["category"], React.ReactNode> = {
   Docs: <BookOpen className="h-4 w-4 text-primary" />,
@@ -26,10 +27,13 @@ export function SearchDialog() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
 
+  // Legal pages opened from the iOS app (`?embed=1`) get no search: its entries include
+  // /pricing (App Store Guideline 3.1.1). Checked per event so client navigations count.
   // Cmd+K / Ctrl+K
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        if (isEmbeddedSearch(window.location.search)) return;
         e.preventDefault();
         setOpen((prev) => !prev);
       }
@@ -41,6 +45,7 @@ export function SearchDialog() {
   // Custom event so other components can open the dialog
   useEffect(() => {
     function onOpenSearch() {
+      if (isEmbeddedSearch(window.location.search)) return;
       setOpen(true);
     }
     document.addEventListener("open-search", onOpenSearch);

@@ -26,7 +26,7 @@ export const activityHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.activity.get({ context: 'drive', driveId }));
+  const result = await callSdk(ctx, () => ctx.sdk.activity.get({ context: 'drive', driveId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

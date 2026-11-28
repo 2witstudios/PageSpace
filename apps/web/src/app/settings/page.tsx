@@ -11,6 +11,7 @@ import { User, Plug2, Key, ArrowLeft, CreditCard, Bell, Shield, Keyboard, Sparkl
 import { SettingsRow, type SettingsItem } from "./SettingsRow";
 import { MarketingLink } from "@/components/ui/MarketingLink";
 import { filterSettingsItems } from "./settings-visibility";
+import { AccountOrganizationsSection } from "@/components/orgs/AccountOrganizationsSection";
 
 const ADMIN_APP_URL = process.env.NEXT_PUBLIC_ADMIN_APP_URL || 'http://localhost:3005';
 
@@ -23,14 +24,14 @@ export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
-  const { showBilling } = useBillingVisibility();
+  const { showBilling, channel: billingChannel } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
 
   const { isNative } = useCapacitor();
 
   const filterItems = (items: SettingsItem[]) =>
-    filterSettingsItems(items, { isDesktop, showBilling, isNative });
+    filterSettingsItems(items, { isDesktop, showBilling, isNative, billingChannel });
 
   const settingsSections: SettingsSection[] = [
     {
@@ -85,6 +86,15 @@ export default function SettingsPage() {
           href: "/settings/billing",
           available: true,
           mobileHidden: true,
+        },
+        {
+          // The iOS app has no Billing entry (Stripe); its plan sells through In-App Purchase.
+          title: "Plan",
+          description: "Your subscription",
+          icon: CreditCard,
+          href: "/settings/plan",
+          available: true,
+          appleChannelOnly: true,
         },
       ]),
     },
@@ -223,8 +233,9 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-8">
-        {settingsSections.map((section) => (
-          <div key={section.title}>
+        {settingsSections.map((section, sectionIndex) => (
+          <div key={section.title} className="space-y-8">
+            <div>
             <h2 className="text-sm font-medium text-muted-foreground mb-2 px-1">
               {section.title}
             </h2>
@@ -255,6 +266,8 @@ export default function SettingsPage() {
                 )
               )}
             </div>
+            </div>
+            {sectionIndex === 0 ? <AccountOrganizationsSection /> : null}
           </div>
         ))}
       </div>

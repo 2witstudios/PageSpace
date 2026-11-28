@@ -42,7 +42,10 @@ describe('billing merge guards', () => {
 
   it('the daily-cap sum counts the full intended charge (chargeMillicents, not appliedCents)', () => {
     const gate = read('../credit-gate.ts');
-    const capBlock = gate.slice(gate.indexOf('dailyCap !== null'));
+    // The cap query lives in dailyCapDenial, which every wallet path of the gate calls.
+    const start = gate.indexOf('async function dailyCapDenial(');
+    expect(start).toBeGreaterThan(-1);
+    const capBlock = gate.slice(start);
     // chargeMillicents is the full charge even when a call went to debt; appliedCents would
     // let an in-debt runaway keep spending real money under the cap.
     expect(capBlock).toMatch(/chargeMillicents/);

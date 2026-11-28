@@ -1,5 +1,5 @@
 import { describe, it } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import type { ActivityLogForRollback } from '../../rollback-service';
 import {
   planPageRedo,

@@ -16,6 +16,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 vi.mock('@pagespace/db/db', () => ({
@@ -43,6 +44,7 @@ import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockAuth = (userId: string): SessionAuthResult => ({
   userId,
@@ -143,6 +145,15 @@ describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
     expect(db.transaction).not.toHaveBeenCalled();
   });
 
+  it('SEAT-9 (partial) [D-OW-33] a restore that would give anyone more while the drive\'s org is lapsed answers 402 org_lapsed and audits nothing (the transaction rolled back)', async () => {
+    const { OrgLapsedError } = await import('@pagespace/lib/permissions/org-lapse-guard');
+    vi.mocked(db.transaction).mockRejectedValueOnce(new OrgLapsedError());
+    const res = await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toMatchObject({ code: 'org_lapsed' });
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+
   it('returns 200 with correct shape on success', async () => {
     const res = await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(res.status).toBe(200);
@@ -193,4 +204,13 @@ describe('POST /api/drives/[driveId]/backups/[backupId]/restore', () => {
     await POST(makeRequest(driveId, backupId), makeParams(driveId, backupId));
     expect(snapshotCalledAt).toBeLessThan(txCalledAt);
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

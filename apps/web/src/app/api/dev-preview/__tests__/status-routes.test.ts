@@ -88,7 +88,7 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview', () => {
     expect(body.preview.state.status).toBe('live');
     expect(body.preview.detectedAt).toBe('2026-09-06T11:00:00.000Z');
     expect(body.preview.canManage).toBe(true);
-    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
+    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'workspace', id: 'ws1' }, actor: expect.objectContaining({ userId: 'u1' }) });
     // The drive role is never consulted for a session-holder preview.
     expect(isPrincipalDriveOwnerOrAdmin).not.toHaveBeenCalled();
 
@@ -100,7 +100,7 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview', () => {
     vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: 'env1', ownerId: 'u1', driveId: 'd1' } as never);
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(false);
     const denied = await (await sessionStatus(get(), wsCtx)).json();
-    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'env', id: 'env1' }, actor: expect.objectContaining({ userId: 'u1' }) });
     expect(denied.preview.canManage).toBe(false);
     expect(isPrincipalDriveOwnerOrAdmin).toHaveBeenCalledWith({ userId: 'u1' }, 'd1');
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(true);
@@ -136,8 +136,8 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
     const res = await sessionAction(post({ action: 'stop' }), wsCtx);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, applied: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
-    expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'stop' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
+    expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, actor: expect.objectContaining({ userId: 'u1' }) });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'stop' }, actor: expect.objectContaining({ userId: 'u1' }), wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceType: 'dev_preview', details: expect.objectContaining({ action: 'stop', applied: 'stop-relay' }) }));
   });
 
@@ -160,7 +160,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
 
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(true);
     expect((await sessionAction(post({ action: 'resume' }), wsCtx)).status).toBe(200);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, actor: expect.objectContaining({ userId: 'u1' }), wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
   });
 
   it('a DEFERRED relay is a success, not a toast: the intent landed and only the start waits', async () => {
@@ -181,7 +181,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
   it('APPROVE carries the port through, and a port that moved answers 409 rather than sharing the wrong thing', async () => {
     const res = await sessionAction(post({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' }), wsCtx);
     expect(res.status).toBe(200);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' }, actor: expect.objectContaining({ userId: 'u1' }), wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ action: 'approve', port: 9000 }) }));
 
     // A body with no port is not an approve at all — 400 before anything runs.
@@ -240,7 +240,7 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview', () => {
     const body = await res.json();
     expect(body.preview.holder).toEqual({ kind: 'env', id: 'env1' });
     expect(body.preview.canManage).toBe(true);
-    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, actor: expect.objectContaining({ userId: 'u1' }) });
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(false);
     expect((await (await envStatus(get(), envCtx)).json()).preview.canManage).toBe(false);
   });
@@ -270,8 +270,8 @@ describe('POST /api/drives/[driveId]/envs/[envId]/preview/actions', () => {
   it('applies the action for a drive owner/admin with the payer as wake subject, and audits it', async () => {
     const res = await envAction(post({ action: 'resume' }), envCtx);
     expect(res.status).toBe(200);
-    expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, userId: 'u1' });
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
+    expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, actor: expect.objectContaining({ userId: 'u1' }) });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, actor: expect.objectContaining({ userId: 'u1' }), wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceId: 'env:env1', details: expect.objectContaining({ action: 'resume' }) }));
   });
 

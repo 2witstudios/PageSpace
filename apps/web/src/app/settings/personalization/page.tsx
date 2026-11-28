@@ -20,6 +20,8 @@ import {
   FolderOpen,
 } from 'lucide-react';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import type { OrgContentSignInRequired } from '@/lib/auth/org-sign-in-denial';
+import { OrgContentWithheldNotice } from '@/components/auth/OrgContentWithheldNotice';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -65,7 +67,11 @@ export default function PersonalizationSettingsPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
 
-  const { data, mutate, isLoading } = useSWR<{ personalization: PersonalizationData }>(
+  const { data, mutate, isLoading } = useSWR<{
+    personalization: PersonalizationData;
+    /** Set when an org's sign-in policy withholds the memory from this sign-in (D-OW-62). */
+    signInRequired?: OrgContentSignInRequired | null;
+  }>(
     user ? '/api/settings/personalization' : null,
     fetcher
   );
@@ -123,6 +129,7 @@ export default function PersonalizationSettingsPage() {
 
   const personalization = data?.personalization;
   const pages = personalization?.pages ?? [];
+  const signInRequired = data?.signInRequired ?? null;
 
   return (
     <div className="container max-w-4xl mx-auto py-10 px-10 space-y-8">
@@ -168,6 +175,8 @@ export default function PersonalizationSettingsPage() {
         </CardHeader>
       </Card>
 
+      {signInRequired && <OrgContentWithheldNotice subject="Your AI memory" signInRequired={signInRequired} />}
+
       {personalization?.memoryFolderHref && (
         <Button
           variant="outline"
@@ -207,7 +216,11 @@ export default function PersonalizationSettingsPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                {page.isEmpty ? (
+                {signInRequired ? (
+                  <p className="text-sm text-muted-foreground italic">
+                    Hidden until you sign in as your organization asks.
+                  </p>
+                ) : page.isEmpty ? (
                   <p className="text-sm text-muted-foreground italic">
                     {page.href
                       ? 'Nothing here yet. Open the page to write something, or let the AI fill it in as it learns.'

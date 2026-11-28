@@ -6,6 +6,7 @@ import {
   rewriteInterPageLinksForDrive,
   resolveUploadedImageAssetUrl,
 } from '../asset-pipeline';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 vi.mock('server-only', () => ({}));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -23,6 +24,7 @@ vi.mock('@pagespace/db/operators', () => ({
 
 const canUserViewPage = vi.fn();
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: (...args: unknown[]) => canUserViewPage(...args),
 }));
 
@@ -111,6 +113,11 @@ const mockDb = {
   },
 };
 
+const gateAssetForPublish = vi.fn();
+vi.mock('@/lib/content-safety/publish-gate-service', () => ({
+  gateAssetForPublish: (...args: unknown[]) => gateAssetForPublish(...args),
+}));
+
 vi.mock('../published-storage', () => ({
   buildAssetKey: vi.fn((hash: string) => `assets/${hash}`),
   buildAssetUrlFromKey: vi.fn((key: string) => `https://cdn.example.com/${key}`),
@@ -123,18 +130,19 @@ describe('rewriteCanvasAssets', () => {
     vi.clearAllMocks();
     mockDb.query.pages.findMany.mockResolvedValue([]);
     canUserViewPage.mockResolvedValue(true);
+    gateAssetForPublish.mockResolvedValue({ promote: true });
   });
 
   it('given no file IDs in the HTML, should return the HTML unchanged', async () => {
     const html = '<p>No files here</p>';
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
     expect(result.html).toBe(html);
     expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
   });
 
   it('given a longer endpoint that starts with /view, should leave it unchanged without querying files', async () => {
     const html = '<img src="/api/files/notARealFile/viewer">';
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toBe(html);
     expect(mockDb.query.pages.findMany).not.toHaveBeenCalled();
@@ -146,7 +154,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/api/files/fileId1/view');
@@ -166,7 +174,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/dashboard/drive-1/fileId1/view');
@@ -178,7 +186,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
@@ -194,7 +202,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'fileId1', driveId: 'real-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
     expect(result.html).not.toContain('/api/files/fileId1/view');
@@ -205,7 +213,7 @@ describe('rewriteCanvasAssets', () => {
     const html = '<img src="/api/files/missingId/view">';
     mockDb.query.pages.findMany.mockResolvedValue([]); // not found
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/missingId/view');
   });
@@ -216,7 +224,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'noHashId', contentHash: null, mimeType: 'image/jpeg', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/noHashId/view');
   });
@@ -227,7 +235,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'hostileHash', contentHash: '../private-object', mimeType: 'image/png', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
@@ -242,7 +250,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'f2', contentHash: HASH_B, mimeType: 'image/jpeg', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(mockDb.query.pages.findMany).toHaveBeenCalledTimes(1);
     expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_A}`);
@@ -256,10 +264,10 @@ describe('rewriteCanvasAssets', () => {
     ]);
     canUserViewPage.mockResolvedValue(false);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
-    expect(canUserViewPage).toHaveBeenCalledWith('user-1', 'privateFile');
+    expect(canUserViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), 'privateFile');
     expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
     expect(result.html).toContain('/api/files/privateFile/view');
   });
@@ -271,21 +279,31 @@ describe('rewriteCanvasAssets', () => {
         id: 'videoId',
         contentHash: HASH_C,
         mimeType: 'video/mp4',
-        extractionMetadata: { thumbnailKey: 'cache/abcd1234/thumbnail.webp' },
+        extractionMetadata: { thumbnailKey: `cache/${HASH_C}/thumbnail.webp` },
       },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     const { copyObjectToPublishBucket } = await import('../published-storage');
     expect(copyObjectToPublishBucket).toHaveBeenCalledWith({
       id: 'videoId',
       kind: 'thumbnail',
-      sourceKey: 'cache/abcd1234/thumbnail.webp',
-      assetKey: 'assets/cache/abcd1234/thumbnail.webp',
+      sourceKey: `cache/${HASH_C}/thumbnail.webp`,
+      assetKey: `assets/cache/${HASH_C}/thumbnail.webp`,
       contentType: 'image/webp',
     });
-    expect(result.html).toContain('https://cdn.example.com/assets/cache/abcd1234/thumbnail.webp');
+    expect(result.html).toContain(`https://cdn.example.com/assets/cache/${HASH_C}/thumbnail.webp`);
+    // The thumbnail is gated as its ORIGINAL: the hash in the key, the original's key and type.
+    expect(gateAssetForPublish).toHaveBeenCalledWith({
+      contentHash: HASH_C,
+      originalKey: `files/${HASH_C}/original`,
+      declaredContentType: 'video/mp4',
+      fileId: 'videoId',
+      userId: 'user-1',
+      entryPoint: 'canvas_thumbnail',
+    });
+    expect(result.heldAssets).toEqual([]);
     expect(result.html).not.toContain('/api/files/videoId/thumbnail');
   });
 
@@ -295,7 +313,7 @@ describe('rewriteCanvasAssets', () => {
       { id: 'videoId', contentHash: HASH_C, mimeType: 'video/mp4', extractionMetadata: null },
     ]);
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/videoId/thumbnail');
   });
@@ -308,9 +326,95 @@ describe('rewriteCanvasAssets', () => {
     const { copyObjectToPublishBucket } = await import('../published-storage');
     vi.mocked(copyObjectToPublishBucket).mockRejectedValueOnce(new Error('copy failed'));
 
-    const result = await rewriteCanvasAssets({ html, userId: 'user-1', db: mockDb as never });
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(result.html).toContain('/api/files/fileId1/view');
+    expect(result.heldAssets).toEqual(['fileId1']);
+  });
+
+  it('runs the gate before the copy, and a held asset is never copied, stays private and is listed by file ID', async () => {
+    const html = '<img src="/api/files/fileId1/view"><img src="/api/files/fileId2/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+      { id: 'fileId2', contentHash: HASH_B, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+    gateAssetForPublish.mockImplementation(async ({ contentHash }: { contentHash: string }) =>
+      contentHash === HASH_A ? { promote: false, reason: 'held' } : { promote: true },
+    );
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(result.html).toContain('/api/files/fileId1/view');
+    expect(result.html).toContain(`https://cdn.example.com/assets/${HASH_B}`);
+    expect(result.heldAssets).toEqual(['fileId1']);
+    expect(copyObjectToPublishBucket).toHaveBeenCalledTimes(1);
+    expect(copyObjectToPublishBucket).toHaveBeenCalledWith(expect.objectContaining({ assetKey: `assets/${HASH_B}` }));
+    expect(gateAssetForPublish).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH_A, originalKey: `files/${HASH_A}/original`, entryPoint: 'canvas_asset' }));
+  });
+
+  it('lists every file that shares a held hash, though the hash is gated once', async () => {
+    const html = '<img src="/api/files/fileId1/view"><img src="/api/files/fileId2/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+      { id: 'fileId2', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+    gateAssetForPublish.mockResolvedValue({ promote: false, reason: 'held' });
+
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(gateAssetForPublish).toHaveBeenCalledTimes(1);
+    expect(result.heldAssets.sort()).toEqual(['fileId1', 'fileId2']);
+    expect(result.html).toContain('/api/files/fileId1/view');
+    expect(result.html).toContain('/api/files/fileId2/view');
+  });
+
+  it('files sharing one hash under different declared types: one held under its type keeps the shared bytes private, in either order', async () => {
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    // The gate holds these bytes declared as an image (text claiming to be a picture), and allows them as text.
+    gateAssetForPublish.mockImplementation(async ({ declaredContentType }: { declaredContentType: string | null }) =>
+      declaredContentType === 'image/png' ? { promote: false, reason: 'held' } : { promote: true },
+    );
+    const asText = { id: 'textFile', contentHash: HASH_A, mimeType: 'text/plain', extractionMetadata: null };
+    const asImage = { id: 'imageFile', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null };
+    for (const rows of [[asText, asImage], [asImage, asText]]) {
+      vi.mocked(copyObjectToPublishBucket).mockClear();
+      const html = rows.map((row) => `<img src="/api/files/${row.id}/view">`).join('');
+      mockDb.query.pages.findMany.mockResolvedValue(rows);
+
+      const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+      expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+      expect(result.html).not.toContain('cdn.example.com');
+      expect(result.heldAssets.sort()).toEqual(['imageFile', 'textFile']);
+    }
+  });
+
+  it('a blocked hash is refused even when its asset is already public (the copy, with its HEAD shortcut, never runs)', async () => {
+    const html = '<img src="/api/files/fileId1/view">';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'fileId1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null },
+    ]);
+    gateAssetForPublish.mockResolvedValue({ promote: false, reason: 'blocked' });
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+    expect(result.html).not.toContain('cdn.example.com');
+    expect(result.heldAssets).toEqual(['fileId1']);
+  });
+
+  it('holds a thumbnail whose key carries no valid content hash', async () => {
+    const html = '<video poster="/api/files/videoId/thumbnail"></video>';
+    mockDb.query.pages.findMany.mockResolvedValue([
+      { id: 'videoId', contentHash: HASH_C, mimeType: 'video/mp4', extractionMetadata: { thumbnailKey: 'cache/abcd1234/thumbnail.webp' } },
+    ]);
+
+    const result = await rewriteCanvasAssets({ html, actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(result.heldAssets).toEqual(['videoId']);
+    expect(gateAssetForPublish).not.toHaveBeenCalled();
   });
 });
 
@@ -635,6 +739,33 @@ describe('resolveUploadedImageAssetUrl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     canUserViewPage.mockResolvedValue(true);
+    gateAssetForPublish.mockResolvedValue({ promote: true });
+  });
+
+  it('returns null and copies nothing when the publish gate holds the file', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    gateAssetForPublish.mockResolvedValue({ promote: false, reason: 'held' });
+
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
+
+    expect(url).toBeNull();
+    expect(gateAssetForPublish).toHaveBeenCalledWith(expect.objectContaining({ contentHash: HASH_A, fileId: 'file-1', entryPoint: 'uploaded_image' }));
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    expect(copyObjectToPublishBucket).not.toHaveBeenCalled();
+  });
+
+  it('returns null rather than throwing when the copy fails', async () => {
+    mockDb.query.pages.findFirst.mockResolvedValue({
+      id: 'file-1', driveId: 'drive-1', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
+    });
+    const { copyObjectToPublishBucket } = await import('../published-storage');
+    vi.mocked(copyObjectToPublishBucket).mockRejectedValueOnce(new Error('This file is not available for publishing'));
+
+    await expect(
+      resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never }),
+    ).resolves.toBeNull();
   });
 
   it('given a viewable image page with a contentHash, resolves and copies it to a durable CDN URL', async () => {
@@ -646,7 +777,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBe(`https://cdn.example.com/assets/${HASH_A}`);
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -662,7 +793,7 @@ describe('resolveUploadedImageAssetUrl', () => {
   it('returns null when the page does not exist', async () => {
     mockDb.query.pages.findFirst.mockResolvedValue(undefined);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'missing', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -673,7 +804,7 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockResolvedValue(false);
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -685,7 +816,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       id: 'file-1', driveId: 'drive-1', contentHash: null, mimeType: 'image/png', extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -696,7 +827,7 @@ describe('resolveUploadedImageAssetUrl', () => {
     });
     canUserViewPage.mockRejectedValue(new Error('permission service down'));
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
   });
@@ -709,7 +840,7 @@ describe('resolveUploadedImageAssetUrl', () => {
       id: 'file-1', driveId: 'other-drive', contentHash: HASH_A, mimeType: 'image/png', extractionMetadata: null,
     });
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     const { copyObjectToPublishBucket } = await import('../published-storage');
@@ -719,7 +850,7 @@ describe('resolveUploadedImageAssetUrl', () => {
   it('excludes trashed pages from the lookup', async () => {
     mockDb.query.pages.findFirst.mockResolvedValue(undefined); // simulates the isTrashed filter excluding the row
 
-    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', userId: 'user-1', db: mockDb as never });
+    const url = await resolveUploadedImageAssetUrl({ fileId: 'file-1', driveId: 'drive-1', actor: credentialActor('user-1', null), db: mockDb as never });
 
     expect(url).toBeNull();
     expect(mockDb.query.pages.findFirst).toHaveBeenCalledWith(

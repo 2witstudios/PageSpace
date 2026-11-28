@@ -13,6 +13,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { createId } from '@paralleldrive/cuid2'
+import { credentialActor } from '../permissions/access-actor';
 
 describe('permissions system', () => {
   let testUser: Awaited<ReturnType<typeof factories.createUser>>
@@ -36,7 +37,7 @@ describe('permissions system', () => {
 
   describe('getUserAccessLevel', () => {
     it('grants full access to drive owner', async () => {
-      const access = await getUserAccessLevel(testUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(testUser.id, null), testPage.id)
 
       expect(access).toEqual({
         canView: true,
@@ -47,7 +48,7 @@ describe('permissions system', () => {
     })
 
     it('returns null for user with no permissions', async () => {
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
       expect(access).toBeNull()
     })
 
@@ -58,7 +59,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
 
       expect(access).toEqual({
         canView: true,
@@ -71,50 +72,48 @@ describe('permissions system', () => {
     it('returns null for non-existent page (valid CUID2)', async () => {
       // Use a valid CUID2 that doesn't exist in DB
       const nonExistentPageId = createId()
-      const access = await getUserAccessLevel(testUser.id, nonExistentPageId)
+      const access = await getUserAccessLevel(credentialActor(testUser.id, null), nonExistentPageId)
       expect(access).toBeNull()
     })
 
     describe('ID validation', () => {
-      it('returns null for empty userId', async () => {
-        const access = await getUserAccessLevel('', testPage.id)
-        expect(access).toBeNull()
+      it('an empty userId cannot even become an actor, so it never reaches the resolver', () => {
+        expect(() => credentialActor('', null)).toThrow()
       })
 
       it('returns null for empty pageId', async () => {
-        const access = await getUserAccessLevel(testUser.id, '')
+        const access = await getUserAccessLevel(credentialActor(testUser.id, null), '')
         expect(access).toBeNull()
       })
 
       it('returns null for non-UUID userId', async () => {
-        const access = await getUserAccessLevel('not-a-uuid', testPage.id)
+        const access = await getUserAccessLevel(credentialActor('not-a-uuid', null), testPage.id)
         expect(access).toBeNull()
       })
 
       it('returns null for non-UUID pageId', async () => {
-        const access = await getUserAccessLevel(testUser.id, 'not-a-uuid')
+        const access = await getUserAccessLevel(credentialActor(testUser.id, null), 'not-a-uuid')
         expect(access).toBeNull()
       })
 
       it('returns null for excessively long userId', async () => {
         const longId = 'a'.repeat(1000)
-        const access = await getUserAccessLevel(longId, testPage.id)
+        const access = await getUserAccessLevel(credentialActor(longId, null), testPage.id)
         expect(access).toBeNull()
       })
 
       it('returns null for excessively long pageId', async () => {
         const longId = 'a'.repeat(1000)
-        const access = await getUserAccessLevel(testUser.id, longId)
+        const access = await getUserAccessLevel(credentialActor(testUser.id, null), longId)
         expect(access).toBeNull()
       })
 
-      it('returns null for null userId', async () => {
-        const access = await getUserAccessLevel(null as unknown as string, testPage.id)
-        expect(access).toBeNull()
+      it('a null userId cannot even become an actor, so it never reaches the resolver', () => {
+        expect(() => credentialActor(null as unknown as string, null)).toThrow()
       })
 
       it('returns null for undefined pageId', async () => {
-        const access = await getUserAccessLevel(testUser.id, undefined as unknown as string)
+        const access = await getUserAccessLevel(credentialActor(testUser.id, null), undefined as unknown as string)
         expect(access).toBeNull()
       })
     })
@@ -128,7 +127,7 @@ describe('permissions system', () => {
       )
 
       // Drive owner should still have full access
-      const access = await getUserAccessLevel(testUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(testUser.id, null), testPage.id)
 
       expect(access).toEqual({
         canView: true,
@@ -142,7 +141,7 @@ describe('permissions system', () => {
       // Add otherUser as admin to the drive
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'ADMIN' })
 
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
 
       expect(access).toEqual({
         canView: true,
@@ -164,7 +163,7 @@ describe('permissions system', () => {
       )
 
       // Drive admin should still have full access (admin overrides explicit permissions)
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
 
       expect(access).toEqual({
         canView: true,
@@ -179,7 +178,7 @@ describe('permissions system', () => {
       await factories.createDriveMember(testDrive.id, otherUser.id, { role: 'MEMBER' })
 
       // Regular member gets default read-only access on non-private pages (Discord @everyone model)
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
       expect(access).toEqual({
         canView: true,
         canEdit: false,
@@ -196,19 +195,19 @@ describe('permissions system', () => {
       const privatePage = await factories.createPage(testDrive.id, { isPrivate: true })
 
       // Regular member cannot access private pages without explicit grant
-      const access = await getUserAccessLevel(otherUser.id, privatePage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), privatePage.id)
       expect(access).toBeNull()
     })
   })
 
   describe('canUserViewPage', () => {
     it('returns true for drive owner', async () => {
-      const canView = await canUserViewPage(testUser.id, testPage.id)
+      const canView = await canUserViewPage(credentialActor(testUser.id, null), testPage.id)
       expect(canView).toBe(true)
     })
 
     it('returns false for user without permissions', async () => {
-      const canView = await canUserViewPage(otherUser.id, testPage.id)
+      const canView = await canUserViewPage(credentialActor(otherUser.id, null), testPage.id)
       expect(canView).toBe(false)
     })
 
@@ -219,30 +218,30 @@ describe('permissions system', () => {
         { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canView = await canUserViewPage(otherUser.id, testPage.id)
+      const canView = await canUserViewPage(credentialActor(otherUser.id, null), testPage.id)
       expect(canView).toBe(true)
     })
 
     it('returns false for non-existent page (valid CUID2)', async () => {
       const nonExistentPageId = createId()
-      const canView = await canUserViewPage(testUser.id, nonExistentPageId)
+      const canView = await canUserViewPage(credentialActor(testUser.id, null), nonExistentPageId)
       expect(canView).toBe(false)
     })
 
     it('returns false for invalid pageId', async () => {
-      const canView = await canUserViewPage(testUser.id, 'invalid')
+      const canView = await canUserViewPage(credentialActor(testUser.id, null), 'invalid')
       expect(canView).toBe(false)
     })
   })
 
   describe('canUserEditPage', () => {
     it('returns true for drive owner', async () => {
-      const canEdit = await canUserEditPage(testUser.id, testPage.id)
+      const canEdit = await canUserEditPage(credentialActor(testUser.id, null), testPage.id)
       expect(canEdit).toBe(true)
     })
 
     it('returns false for user without permissions', async () => {
-      const canEdit = await canUserEditPage(otherUser.id, testPage.id)
+      const canEdit = await canUserEditPage(credentialActor(otherUser.id, null), testPage.id)
       expect(canEdit).toBe(false)
     })
 
@@ -253,7 +252,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canEdit = await canUserEditPage(otherUser.id, testPage.id)
+      const canEdit = await canUserEditPage(credentialActor(otherUser.id, null), testPage.id)
       expect(canEdit).toBe(true)
     })
 
@@ -264,19 +263,19 @@ describe('permissions system', () => {
         { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canEdit = await canUserEditPage(otherUser.id, testPage.id)
+      const canEdit = await canUserEditPage(credentialActor(otherUser.id, null), testPage.id)
       expect(canEdit).toBe(false)
     })
   })
 
   describe('canUserSharePage', () => {
     it('returns true for drive owner', async () => {
-      const canShare = await canUserSharePage(testUser.id, testPage.id)
+      const canShare = await canUserSharePage(credentialActor(testUser.id, null), testPage.id)
       expect(canShare).toBe(true)
     })
 
     it('returns false for user without permissions', async () => {
-      const canShare = await canUserSharePage(otherUser.id, testPage.id)
+      const canShare = await canUserSharePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canShare).toBe(false)
     })
 
@@ -287,7 +286,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: true, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canShare = await canUserSharePage(otherUser.id, testPage.id)
+      const canShare = await canUserSharePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canShare).toBe(true)
     })
 
@@ -298,19 +297,19 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canShare = await canUserSharePage(otherUser.id, testPage.id)
+      const canShare = await canUserSharePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canShare).toBe(false)
     })
   })
 
   describe('canUserDeletePage', () => {
     it('returns true for drive owner', async () => {
-      const canDelete = await canUserDeletePage(testUser.id, testPage.id)
+      const canDelete = await canUserDeletePage(credentialActor(testUser.id, null), testPage.id)
       expect(canDelete).toBe(true)
     })
 
     it('returns false for user without permissions', async () => {
-      const canDelete = await canUserDeletePage(otherUser.id, testPage.id)
+      const canDelete = await canUserDeletePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canDelete).toBe(false)
     })
 
@@ -321,7 +320,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: true, canDelete: true, grantedBy: testUser.id }
       )
 
-      const canDelete = await canUserDeletePage(otherUser.id, testPage.id)
+      const canDelete = await canUserDeletePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canDelete).toBe(true)
     })
 
@@ -332,7 +331,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const canDelete = await canUserDeletePage(otherUser.id, testPage.id)
+      const canDelete = await canUserDeletePage(credentialActor(otherUser.id, null), testPage.id)
       expect(canDelete).toBe(false)
     })
   })
@@ -345,7 +344,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
       expect(access?.canView).toBe(true)
       expect(access?.canEdit).toBe(true)
       expect(access?.canShare).toBe(false)
@@ -359,7 +358,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: true, canDelete: true, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
       expect(access?.canDelete).toBe(true)
     })
 
@@ -370,7 +369,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: false, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, testPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
       expect(access?.canView).toBe(true)
       expect(access?.canEdit).toBe(false)
       expect(access?.canShare).toBe(false)
@@ -400,8 +399,8 @@ describe('permissions system', () => {
         )
       )
 
-      const otherAccess = await getUserAccessLevel(otherUser.id, testPage.id)
-      const thirdAccess = await getUserAccessLevel(thirdUser.id, testPage.id)
+      const otherAccess = await getUserAccessLevel(credentialActor(otherUser.id, null), testPage.id)
+      const thirdAccess = await getUserAccessLevel(credentialActor(thirdUser.id, null), testPage.id)
 
       expect(otherAccess).toBeNull()
       expect(thirdAccess).not.toBeNull()
@@ -421,7 +420,7 @@ describe('permissions system', () => {
       )
 
       // Child page should not inherit parent permissions
-      const childAccess = await getUserAccessLevel(otherUser.id, childPage.id)
+      const childAccess = await getUserAccessLevel(credentialActor(otherUser.id, null), childPage.id)
       expect(childAccess).toBeNull()
     })
   })
@@ -439,7 +438,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, trashedPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), trashedPage.id)
       expect(access).not.toBeNull()
       expect(access?.canView).toBe(true)
     })
@@ -457,7 +456,7 @@ describe('permissions system', () => {
         { canView: true, canEdit: true, canShare: false, canDelete: false, grantedBy: testUser.id }
       )
 
-      const access = await getUserAccessLevel(otherUser.id, aiChatPage.id)
+      const access = await getUserAccessLevel(credentialActor(otherUser.id, null), aiChatPage.id)
       expect(access).not.toBeNull()
       expect(access?.canView).toBe(true)
     })

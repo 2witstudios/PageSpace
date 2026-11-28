@@ -30,7 +30,6 @@ const mockReadGateAccount = vi.hoisted(() =>
 );
 vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
 vi.mock('@pagespace/db/schema/credits', () => ({
-  creditBalances: { userId: 'cb.userId' },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.est', expiresAt: 'ch.exp' },
   creditLedger: {
     userId: 'cl.userId',

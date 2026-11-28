@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db'
 import { and, eq, ne, inArray, desc, count, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
@@ -9,6 +10,7 @@ import { stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';
+import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth';
 import { parseListUsersParams, matchesSearch, compareUsers, isDormant } from './list-params';
@@ -82,6 +84,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
 
     const allUsers = decryptedUsers.map(user => ({
       ...user,
+      subscriptionTier: toPersonalSubscriptionTier(user.subscriptionTier),
       lastActiveAt: lastActiveMap.get(user.id) ?? null,
     }));
 
@@ -204,7 +207,7 @@ export const GET = withAdminAuth(async (_adminUser, _request) => {
               const stripeSub = await stripe.subscriptions.retrieve(sub.stripeSubscriptionId);
               const metadata = stripeSub.metadata || {};
               stripeSubscriptionDetails.set(user.id, {
-                isGifted: metadata.type === 'gift_subscription',
+                isGifted: metadata.type === GIFT_SUBSCRIPTION_METADATA_TYPE,
                 giftedBy: metadata.giftedBy,
                 reason: metadata.reason,
               });

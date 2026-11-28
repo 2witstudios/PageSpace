@@ -45,7 +45,6 @@ function envInt(name: string, fallback: number): number {
 const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
   free: envInt('CODE_EXEC_CONCURRENCY_FREE', 1),
   pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 10),
-  founder: envInt('CODE_EXEC_CONCURRENCY_FOUNDER', 20),
   business: envInt('CODE_EXEC_CONCURRENCY_BUSINESS', 50),
 };
 
@@ -323,7 +322,7 @@ export function sessionActivityMapSize(): number {
  * **Ceilings, and the fact that they are placeholders.** The numbers below are a
  * deliberate first cut pending the economics sign-off — free 0 (an env is a
  * paid-tier feature; `isSandboxAvailable` already says so, and this table
- * agrees rather than contradicting it), pro 2, founder 5, business 10. Each is
+ * agrees rather than contradicting it), pro 2, business 10. Each is
  * overridable by env var (`DRIVE_ENV_LIMIT_FREE` and friends) precisely because
  * they will move: an operator can retune a tier without a deploy, and the
  * pricing work can land its real numbers as a one-line change.
@@ -363,7 +362,6 @@ function envLimit(name: string, fallback: number): number {
 const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
   free: envLimit('DRIVE_ENV_LIMIT_FREE', 0),
   pro: envLimit('DRIVE_ENV_LIMIT_PRO', 2),
-  founder: envLimit('DRIVE_ENV_LIMIT_FOUNDER', 5),
   business: envLimit('DRIVE_ENV_LIMIT_BUSINESS', 10),
 };
 

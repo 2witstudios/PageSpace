@@ -44,7 +44,7 @@
     "test:coverage": {
       "dependsOn": ["^build"],
       "cache": false,
-      "outputs": ["coverage/**"]
+      "outputs": ["coverage/**", "test-results/**"]
     },
     "package": {
       "cache": false,

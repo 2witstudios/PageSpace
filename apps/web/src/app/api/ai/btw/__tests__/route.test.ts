@@ -6,7 +6,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }))
 vi.mock('@pagespace/db/db', () => ({ db: { select: () => ({ from: (table: { __table?: string }) => ({ where: () => ({ limit: table.__table === 'users' ? mocks.user : mocks.messages }) }) }) } }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: { __table: 'users', id: 'id', subscriptionTier: 'subscriptionTier', role: 'role', currentAiProvider: 'currentAiProvider', currentAiModel: 'currentAiModel' } }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { ai: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } } }));
-vi.mock('@pagespace/lib/billing/credit-gate', () => ({ canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold_1' }) }));
+vi.mock('@/lib/ai/core/session-spend', () => ({ conversationSessionDriveId: vi.fn().mockResolvedValue(null) }));
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, holdId: 'hold_1' }),
+  // Orgs are dark: the funding tier is the caller's own (WAL-8).
+  resolveEntitlementTier: vi.fn(async (_userId: string, tier: string) => tier),
+}));
 vi.mock('@pagespace/lib/billing/credit-consume', () => ({ releaseHold: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({ MAX_CHAT_INFLIGHT: 8 }));
 vi.mock('@pagespace/lib/ai/model-defaults', () => ({ isMeteringExempt: () => false }));
@@ -28,7 +33,7 @@ describe('POST /api/ai/btw', () => {
   it('authorizes and streams through the detached path without primary writes', async () => {
     const response = await POST(new Request('http://test/api/ai/btw', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: 'c1', question: 'What changed?' }) }));
     expect(await response.text()).toBe('side');
-    expect(mocks.access).toHaveBeenCalledWith('u1', expect.anything());
+    expect(mocks.access).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1' }), expect.anything());
     expect(mocks.stream).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: expect.any(AbortSignal), question: 'What changed?' }));
     expect(mocks.messages).toHaveBeenCalledTimes(1);
   });

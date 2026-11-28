@@ -72,6 +72,7 @@ import {
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
 import { loggers } from '../../logging/logger-config';
+import type { AccessActor } from '../../permissions/access-actor';
 
 /**
  * The store slice the provisioner needs, addressed by HOLDER id — the identity
@@ -104,7 +105,8 @@ export interface SpriteHolderStore {
 
 /** The actor a provision runs as. Only what the Sprite key and the authorization gate need — a session has no clone to audit and no git token to resolve. */
 export interface AgentSessionActorContext {
-  userId: string;
+  /** The requester's credential: code-execution authorization (sign-in policy included) is asked through it. */
+  access: AccessActor;
   tenantId: string;
 }
 
@@ -882,7 +884,7 @@ export async function ensureAgentSessionSandbox({
       // the arguments and nothing else — no re-wrap to drift out of sync with.
       authorize: () =>
         deps.authorize({
-          userId: actor.userId,
+          actor: actor.access,
           driveId: row.driveId ?? undefined,
           ownerId: row.ownerId,
           requestOrigin: 'user',

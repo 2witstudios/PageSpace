@@ -1,0 +1,1 @@
+ALTER TYPE "public"."MemberRole" ADD VALUE 'GUEST';

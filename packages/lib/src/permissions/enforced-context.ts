@@ -1,4 +1,5 @@
 import type { SessionClaims } from '../auth/session-service';
+import { credentialActor, type AccessActor } from './access-actor';
 
 export interface ResourceBinding {
   type: string;
@@ -15,6 +16,8 @@ export class EnforcedAuthContext {
   public readonly userRole: 'user' | 'admin';
   public readonly resourceBinding?: ResourceBinding;
   public readonly driveId?: string;
+  /** The session's credential as the permission layer's actor: its user and the session's ceremony evidence. */
+  public readonly actor: AccessActor;
 
   private readonly _scopes: ReadonlySet<string>;
 
@@ -22,10 +25,12 @@ export class EnforcedAuthContext {
     userId: string,
     userRole: 'user' | 'admin',
     scopes: string[],
+    actor: AccessActor,
     resourceBinding?: ResourceBinding,
     driveId?: string
   ) {
     this.userId = userId;
+    this.actor = actor;
     this.userRole = userRole;
     this._scopes = new Set(scopes);
     this.resourceBinding = resourceBinding;
@@ -44,6 +49,7 @@ export class EnforcedAuthContext {
       claims.userId,
       claims.userRole,
       claims.scopes,
+      credentialActor(claims.userId, claims.authentication),
       resourceBinding,
       claims.driveId
     );

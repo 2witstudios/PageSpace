@@ -17,7 +17,9 @@ describe('openBrowser', () => {
     spawnMock.mockReset();
   });
 
-  it('resolves true once the child process reports a successful spawn', async () => {
+  // A generous timeout: the promise waits on a child-process event while the rest of a
+  // turbo coverage run competes for the same machine, and a 5 s default has tripped there.
+  it('resolves true once the child process reports a successful spawn', { timeout: 30_000 }, async () => {
     const child = fakeChild();
     spawnMock.mockReturnValue(child);
     const { openBrowser } = await import('@pagespace/cli');

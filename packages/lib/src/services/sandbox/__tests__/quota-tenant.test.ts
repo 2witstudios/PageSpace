@@ -109,7 +109,7 @@ describe('tenant: the runaway guards still bite', () => {
   });
 });
 
-describe('cloud and onprem are unaffected by the tenant bypass', () => {
+describe('deployment capability preserves cloud eligibility and onprem limits', () => {
   it('cloud still denies the free tier and still uses free ceilings', async () => {
     vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
     expect(getCodeExecutionConcurrencyLimit('free')).toBe(1);
@@ -120,11 +120,18 @@ describe('cloud and onprem are unaffected by the tenant bypass', () => {
     });
   });
 
-  it('onprem still denies the free tier — the bypass is tenant-only', async () => {
+  it('given onprem personal Free, should allow environments up to the configured Business ceiling', async () => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+    const businessLimit = getDriveEnvLimit('business');
+    const businessConcurrency = getCodeExecutionConcurrencyLimit('business');
     vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
-    expect(getDriveEnvLimit('free')).toBe(0);
-    expect(
-      await checkDriveEnvAllowance({ payerId: 'u1', tier: 'free', countEnvsOwnedBy: async () => 0 }),
-    ).toEqual({ allowed: false, reason: 'tier_ineligible', limit: 0 });
+    expect(getDriveEnvLimit('free')).toBe(businessLimit);
+    expect(getCodeExecutionConcurrencyLimit('free')).toBe(businessConcurrency);
+    expect(await checkDriveEnvAllowance({ payerId: 'u1', tier: 'free', countEnvsOwnedBy: async () => 0 })).toEqual({ allowed: true });
+    expect(await checkDriveEnvAllowance({ payerId: 'u1', tier: 'free', countEnvsOwnedBy: async () => businessLimit })).toEqual({ allowed: false, reason: 'env_limit_reached', limit: businessLimit });
+    for (let i = 0; i < businessConcurrency; i++) {
+      expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(true);
+    }
+    expect(acquireCodeExecutionSlot({ userId: 'u1', tier: 'free' })).toBe(false);
   });
 });

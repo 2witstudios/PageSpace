@@ -126,7 +126,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
 
     let canDeleteLinkedPage = false;
     for (const link of scopedLinks) {
-      const perms = await getUserAccessLevel(auth.userId, link.pageId);
+      const perms = await getUserAccessLevel(auth.actor, link.pageId);
       if (perms?.canDelete) {
         canDeleteLinkedPage = true;
         break;
@@ -184,7 +184,7 @@ export async function assertDeleteFileAccess(auth: EnforcedAuthContext | undefin
       });
       throw new DeleteFileAuthorizationError();
     } else {
-      const drivePerms = await getUserDrivePermissions(auth.userId, context.fileDriveId);
+      const drivePerms = await getUserDrivePermissions(auth.actor, context.fileDriveId);
       if (!drivePerms || (!drivePerms.isOwner && !drivePerms.isAdmin)) {
         loggers.security.warn('delete-file denied: not drive owner/admin for orphan file', {
           userId: auth.userId,

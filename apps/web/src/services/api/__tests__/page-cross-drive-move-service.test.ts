@@ -39,6 +39,12 @@ vi.mock('@/services/api/task-sync-service', () => ({
   scrubDriveScopedTaskAssociations: vi.fn().mockResolvedValue(undefined),
 }));
 
+// [D-OW-33] the lapse guard: no org (null) unless a test lapses the source drive.
+const checkDriveMayLoosen = vi.hoisted(() => vi.fn(async (_tx?: unknown, _driveId?: unknown, _loosens?: unknown): Promise<unknown> => null));
+vi.mock('@pagespace/lib/permissions/org-lapse-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/permissions/org-lapse-guard')>()),
+  checkDriveMayLoosen,
+}));
 vi.mock('@pagespace/db/db', () => {
   const txUpdateWhere = vi.fn().mockResolvedValue(undefined);
   const txUpdateSet = vi.fn().mockReturnValue({ where: txUpdateWhere });
@@ -256,16 +262,17 @@ describe('movePagesToDrive', () => {
       expect(authorize.canEditPage.mock.calls.map((c) => c[0])).toEqual(['page-1', 'page-2']);
     });
 
-    it('fails with SOURCE_PAGE_FORBIDDEN naming the page, without opening a transaction', async () => {
-      vi.mocked(db.query.pages.findMany).mockResolvedValue([
-        sourcePage({ title: 'Protected Doc' }),
-      ] as never);
+    it('fails with SOURCE_PAGE_FORBIDDEN naming the page by id, never its title, without opening a transaction', async () => {
+      const page = sourcePage({ title: 'Protected Doc' });
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([page] as never);
       const authorize = makeAuthorizer({ canEditPage: vi.fn().mockResolvedValue(false) });
 
       const result = await run({}, authorize);
 
       expect(result).toMatchObject({ success: false, code: 'SOURCE_PAGE_FORBIDDEN', status: 403 });
-      expect(result.success === false && result.message).toContain('Protected Doc');
+      // A caller refused the edit may not be able to view the page (an Imago kept out of its drive).
+      expect(result.success === false && result.message).toContain(page.id);
+      expect(result.success === false && result.message).not.toContain('Protected Doc');
       expect(mockTransaction).not.toHaveBeenCalled();
     });
 

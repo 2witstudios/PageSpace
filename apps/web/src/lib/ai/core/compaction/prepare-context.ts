@@ -5,6 +5,7 @@ import {
   type CompactionState,
 } from '@pagespace/lib/ai/context-window';
 import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import type { SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { canUseCompaction } from './compaction-gating';
 import { getState } from './compaction-repository';
 import { runCompaction } from './compaction-service';
@@ -20,6 +21,12 @@ export interface PrepareConversationContextParams {
   systemPrompt?: string;
   tools?: Record<string, unknown>;
   user: { id: string; role?: string | null } | null | undefined;
+  /**
+   * Where the turn spends (SPEND-1), with the source its gate resolved pinned. A compaction
+   * this turn schedules is gated and reserved on this same target before its own model call
+   * (see runCompaction), so it spends where the turn spent or not at all.
+   */
+  spend: SpendTarget;
 }
 
 export interface PreparedContext {
@@ -48,6 +55,7 @@ export async function prepareConversationContext(
     systemPrompt,
     tools,
     user,
+    spend,
   } = params;
 
   const noop = () => undefined;
@@ -101,6 +109,7 @@ export async function prepareConversationContext(
           provider,
           model,
           plan: result.compactionPlan,
+          spend,
         }
       : null;
 

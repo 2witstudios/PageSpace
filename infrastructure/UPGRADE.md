@@ -13,6 +13,17 @@ emits everything below.
 > It is a provisioning tool for new tenants only. Upgrades are always
 > append-only edits to the existing `.env`.
 
+## Personal billing final cutover (0338–0339)
+
+Existing installations with `users.subscriptionGrandfathered` require an offline
+maintenance window before these migrations. An ordinary compose upgrade refuses
+at the migration entrypoint. Follow the [personal billing cutover runbook](../docs/personal-billing-cutover.md#docker-compose-and-tenant-upgrades):
+back up, prepare final images, drain all old containers, verify/apply personal
+billing normalization, run the migrate service with the one-off
+`BILLING_CUTOVER_OFFLINE=true` assertion, and recreate only final images.
+Keep the assertion false in the deployment environment and preserve data volumes.
+Fresh databases and later upgrades do not need the assertion.
+
 ## 2026-09 — Declare your reverse proxy: `TRUSTED_PROXY_HOPS` (Agent Signup Phase 2b)
 
 Outside Fly, the app no longer trusts `X-Forwarded-For` / `X-Real-IP` unless
@@ -697,6 +708,95 @@ roll, so once it has succeeded the table is gone.
   `messages` no longer carries a `pageId` column. `conversations` gains
   `agentPageId`. Bundles produced by an OLDER exporter will not import into a
   0253 database.
+
+---
+
+## Home envs for existing Home drives (migration `0388_drive_env_home`)
+
+Every Home drive now has a default environment, **Home**: the one machine the
+owner's Global Assistant and Imago sessions run in, instead of a fresh sandbox
+per conversation. It is created lazily on first use, so this backfill is
+optional for correctness — it only makes Home appear in every user's env list
+up front. Run it after deploying the release that carries `0388` (additive: an
+`isHome` column and a partial unique index).
+
+```bash
+bun scripts/backfill-home-envs.ts --dry-run          # counts drives that would get Home, writes nothing
+bun scripts/backfill-home-envs.ts --batch-size 100   # the real run; --limit N caps the drives
+```
+
+Needs only `DATABASE_URL`. It calls `ensureHomeDriveEnv` (the lazy path's own
+service) for each HOME drive that has no Home env yet: it mints an env named
+"Home", or flags an existing Sprite env the user already named "Home". No
+sandbox is provisioned and the env cap is not charged. A drive whose org turns
+persistent environments off is counted as refused and left alone. Safe to
+re-run and safe beside live traffic (per-drive advisory lock, one Home per
+drive enforced by the index). Any failed drive makes the exit code 1 and is
+listed by id; output never names a user beyond their id.
+
+---
+
+## Home drives and Imago agents for existing users (IMG-4.3)
+
+Every user now gets the built-in Imago agents (Imago, Imago Planner, Imago
+Researcher) as AI_CHAT pages in their Home drive, provisioned by
+`provisionHomeDriveIfNeeded` at sign-in. A user who never signs in again would
+never get them — nor a Home drive, if they predate it (the old Home-drive
+backfill was archived). Run once, after deploying the release that provisions
+the agents (its migrations, `0333_user_builtin_agents` and
+`0334_imago_drive_access`, are additive and apply first).
+
+**Where to run it.** On the migrate image or any host with the repository,
+with the production environment's **`DATABASE_URL` and `ENCRYPTION_KEY`**
+both set. `ENCRYPTION_KEY` is not optional: provisioning decrypts each user's
+email and name to record them as the actor of the agents' `create` entries.
+Without the key that decryption fails and is swallowed: the entries are
+written as `unknown@system`, the activity log is hash-chained so those rows
+cannot be corrected afterwards, and a clean exit does not prove the key was
+set.
+
+```bash
+bun scripts/backfill-imago-agents.ts --dry-run          # reports who is missing what, writes nothing
+bun scripts/backfill-imago-agents.ts --batch-size 100   # the real run; --limit N caps the users
+```
+
+Always do the `--dry-run` first and read its counts (`missing a Home drive`,
+`missing at least one agent`, `agent pages missing`). The dry run's `of which
+own no drive` line counts the users who will get the "Getting Started" seed.
+
+For each user without a Home drive it calls `provisionHomeDriveIfNeeded` (the
+sign-in path, so the drive gets its subdomain, starter skills and Memory pages;
+a user who owns no drive at all also gets the "Getting Started" folder), then
+`provisionImagoAgents` for every user missing an agent, recreating deleted or
+trashed agent pages. It never deletes anything.
+
+**Drive grants.** Every agent the run creates is also added as a **MEMBER of
+every STANDARD drive the user owns** (unless Imago access is switched off for
+that drive), exactly as at sign-in, so the drive's members will see the
+owner's agents in its member list. A grant that fails is logged
+(`Imago agent grants` / `Imago agent grant failed`) and not retried by a later
+run, which only grants newly created agents; check the logs after the run.
+
+**Contention.** Each user's provisioning writes its activity under the
+activity log's single global advisory lock, held until that user's transaction
+commits. Live writers of activity (page edits, sign-ins) queue behind it for
+that moment, so run it **off-peak**, and lower `--batch-size` (e.g. 25) if
+activity writes slow down while it runs.
+
+Safe to re-run and safe beside live sign-ins: the work list is re-derived each
+run, and both provisioners take the sign-in path's user-row lock. Output names
+users by id only, and a failure prints only its error class and SQLSTATE (never
+message text, which can carry row values).
+
+**Expected result.** The summary of a full run ends with
+
+```
+  still missing a Home drive:    0
+  still missing an agent:        0
+```
+
+Both must be 0. Any failed user makes the exit code 1 and is listed by id —
+re-run to retry, and record the final counts.
 
 ---
 

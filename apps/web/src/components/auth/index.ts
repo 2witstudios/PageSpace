@@ -1,4 +1,6 @@
 export { AuthShell } from './AuthShell';
+export { AuthFrame } from './AuthFrame';
+export { AuthLayout } from './AuthLayout';
 export { AuthDivider } from './AuthDivider';
 export { OAuthButtons } from './OAuthButtons';
 export { GoogleOneTap } from './GoogleOneTap';

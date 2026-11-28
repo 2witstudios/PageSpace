@@ -1,0 +1,1 @@
+export { MentionHighlightOverlay } from './MentionHighlightOverlay';

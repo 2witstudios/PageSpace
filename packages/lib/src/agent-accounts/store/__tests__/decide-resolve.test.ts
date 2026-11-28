@@ -358,3 +358,16 @@ describe('decideResolve — G1c amendments', () => {
     ]);
   });
 });
+
+it('given an identity minted by another tenant, should return not_found', async () => {
+  const actual = await decideResolve({
+    identity: { tenantId: 'user:someone-else' as TenantId, identityId: 'tenant-identity', channel: makeGrant().aud, blastRadius: 'tenant' },
+    grant: makeGrant(),
+    ref: REF,
+    stored: makeStored({}),
+    now: NOW,
+    rotationGraceMs: ROTATION_GRACE_MS,
+    hash: fakeHash,
+  } as Parameters<typeof decideResolve>[0]);
+  expect(actual).toEqual({ ok: false, reason: 'not_found' });
+});

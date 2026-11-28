@@ -87,6 +87,11 @@ vi.mock('../workflow-executor', () => ({
   executeWorkflow: vi.fn(),
 }));
 
+const { mockCreditAdmission } = vi.hoisted(() => ({ mockCreditAdmission: vi.fn() }));
+vi.mock('../workflow-credit-gate', () => ({
+  creditAdmission: mockCreditAdmission,
+}));
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
     api: {
@@ -110,7 +115,6 @@ import {
   recomputeTaskTriggerMetadata,
 } from '../task-trigger-helpers';
 import { executeWorkflow } from '../workflow-executor';
-import { workflowGateOptions } from '../core/workflow-gate-options';
 import { db } from '@pagespace/db/db';
 import { isNull } from '@pagespace/db/operators';
 
@@ -171,6 +175,7 @@ describe('task-trigger-helpers', () => {
     mockDelete.mockImplementation(() => ({ where: mockDeleteWhere }));
     mockDeleteWhere.mockResolvedValue(undefined);
 
+    mockCreditAdmission.mockReturnValue(async () => ({ admitted: true, release: () => {} }));
 
     // Default: transaction runs the callback against a fresh tx mock.
     mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => {
@@ -237,7 +242,8 @@ describe('task-trigger-helpers', () => {
       id: 'wf-1',
       name: 'task-trigger-completion-task-1',
       driveId: 'drive-1',
-      createdBy: 'user-1',
+      createdBy: 'user-1' as string | null,
+      ownerLeftAt: null as Date | null,
       agentPageId: 'agent-1',
       prompt: 'Do thing',
       contextPageIds: [],
@@ -263,7 +269,7 @@ describe('task-trigger-helpers', () => {
         workflowId: 'wf-1',
         agentPageId: 'agent-1',
         taskContext: { taskItemId: 'task-1', triggerType: 'completion' },
-      }));
+      }), expect.objectContaining({ admit: expect.any(Function) }));
     });
 
     const fireWith = async (result: Record<string, unknown>) => {
@@ -290,15 +296,9 @@ describe('task-trigger-helpers', () => {
     it('given any fire, should keep the tier daily cap on: a completion is user-paced (500 completions = 500 runs), not bounded by a schedule', async () => {
       await fireWith({ success: true, durationMs: 1 });
 
-      const policy = vi.mocked(executeWorkflow).mock.calls[0][0].creditGate;
-      expect(policy?.skipDailyCap).toBeUndefined();
-      expect(workflowGateOptions({
-        sourceTable: 'taskTriggers',
-        aiStepCount: 1,
-        policy,
-        holdEstimateCents: 25,
-        maxInteractiveInFlight: 2,
-      })).not.toHaveProperty('skipDailyCap');
+      const [input] = vi.mocked(executeWorkflow).mock.calls[0];
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'user-paced');
+      expect(mockCreditAdmission).not.toHaveBeenCalledWith(expect.anything(), 'scheduled');
     });
 
     it('given a transient refusal, should keep the trigger enabled, release its claim and schedule it for the task-triggers cron (nextRunAt = the completion instant) with the reason recorded', async () => {
@@ -421,16 +421,33 @@ describe('task-trigger-helpers', () => {
         mockReturning.mockResolvedValueOnce([mockTrigger]);
       };
 
-      it('hands the executor only the run input — the executor gates the owner inside its claim, keeping the tier daily cap (user-paced fires)', async () => {
+      it('SPEND-6 (partial) hands the executor the credit gate as its admit hook, gating the drive the workflow runs in as a user-paced run (tier daily cap kept)', async () => {
         claimAndLoad();
+        const admit = async () => ({ admitted: true as const, release: () => {} });
+        mockCreditAdmission.mockReturnValue(admit);
         vi.mocked(executeWorkflow).mockResolvedValueOnce({ success: true, durationMs: 50 });
 
         await fireCompletionTrigger('task-1');
 
-        const call = vi.mocked(executeWorkflow).mock.calls[0];
-        expect(call).toHaveLength(1);
-        expect(call[0].createdBy).toBe('user-1');
-        expect(call[0].creditGate?.skipDailyCap).toBeUndefined();
+        const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
+        expect(options?.admit).toBe(admit);
+        expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'user-paced');
+        expect(input.createdBy).toBe('user-1');
+        // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
+        expect(input.driveId).toBe('drive-1');
+      });
+
+      it('SPEND-6 (partial) a completion trigger on an owner-left workflow retires with owner_left before any gate or hold ([D-OW-36])', async () => {
+        mockFrom
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([mockTrigger]) }))
+          .mockImplementationOnce(() => ({ where: vi.fn().mockResolvedValueOnce([{ ...mockWorkflow, ownerLeftAt: new Date() }]) }));
+        mockReturning.mockResolvedValueOnce([mockTrigger]);
+
+        await fireCompletionTrigger('task-1');
+
+        expect(executeWorkflow).not.toHaveBeenCalled();
+        expect(mockCreditAdmission).not.toHaveBeenCalled();
+        expect(mockSet).toHaveBeenCalledWith({ isEnabled: false, lastFireError: expect.stringContaining('owner_left') });
       });
 
       it('a refused fire retires the one-shot trigger with the reason', async () => {
@@ -549,6 +566,21 @@ describe('task-trigger-helpers', () => {
       // No inserts; both UPDATEs (workflows + task_triggers) ran
       expect(captured.txInsert).not.toHaveBeenCalled();
       expect(captured.txUpdate).toHaveBeenCalledTimes(2);
+    });
+
+    it('SPEND-6 (partial) re-saving the trigger of an owner-left workflow keeps the workflow switched off and says so ([D-OW-36], review #2831 P3-1)', async () => {
+      const captured = makeTxMock({ existingTriggers: [{ workflowId: 'wf-old', id: 'trg-old' }] });
+      const where = vi.fn()
+        .mockResolvedValueOnce([{ workflowId: 'wf-old', id: 'trg-old' }])
+        .mockResolvedValueOnce([{ ownerLeftAt: new Date() }]);
+      captured.txSelect.mockImplementation(() => ({ from: vi.fn(() => ({ where })) }));
+      mockTransaction.mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) => cb(captured.tx));
+
+      const result = await createTaskTriggerWorkflow(validParams);
+
+      const workflowSet = (captured.txUpdateSet.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(workflowSet).not.toHaveProperty('isEnabled');
+      expect(result.isEnabled).toBe(false);
     });
 
     it('given due_date trigger without dueDate, should throw', async () => {

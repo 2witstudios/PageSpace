@@ -36,6 +36,8 @@
 import type { SQL } from 'drizzle-orm';
 import type { SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
+// Generic and pure despite its name: the length-aware "<base>", "<base> 2", … picker.
+import { nextUniqueSessionName } from '../../agent-workspaces/session-contract';
 
 /**
  * One `drive_envs` row.
@@ -60,6 +62,12 @@ export interface DriveEnvRecord {
   name: string;
   /** AUDIT ONLY: who asked for this env. Nothing resolves payment, permission or lifecycle through it. */
   createdBy: string | null;
+  /**
+   * The owner's default env, "Home" — the one auto-created sessions (the Global
+   * Assistant's, Imago's) run in. At most one per drive (partial unique index),
+   * set only by `ensureHomeEnv`, and outside the payer's env ceiling.
+   */
+  isHome: boolean;
 
   spriteKey: string | null;
   sandboxId: string | null;
@@ -253,6 +261,28 @@ export interface DriveEnvStore {
    * this guards.
    */
   revokeLocal(input: { envId: string; now: Date }): Promise<boolean>;
+  /**
+   * The drive's Home env, minted on first use — the ONE way an `isHome` row is
+   * made, and deliberately OUTSIDE `createIfUnderLimit`'s ceiling: Home is the
+   * machine every user's auto-created sessions share, not an env anyone made on
+   * purpose, so metering it would refuse a free-tier user the one sandbox they
+   * already get and push a paying user's deliberate envs one short.
+   *
+   * Idempotent and race-safe, in this order inside ONE transaction holding a
+   * per-DRIVE advisory lock (`drive-env-home:<driveId>`):
+   *
+   *  1. the drive's flagged row, if any — whatever it is now named (a user may
+   *     rename Home; the flag, not the name, is what makes it Home);
+   *  2. else an unflagged row already NAMED "Home" is ADOPTED (flagged) — the
+   *     user made one by hand before Home existed, and failing on the
+   *     `(driveId, name)` index would leave them with no Home at all;
+   *  3. else a fresh row named "Home", `createdBy` and `costOwnerId` the owner.
+   *
+   * The lock serializes concurrent first uses; the partial unique index
+   * `drive_envs_home_per_drive_idx` is the backstop, and a unique violation
+   * that reaches here anyway is answered by re-reading the winner's row.
+   */
+  ensureHomeEnv(input: { driveId: string; createdBy: string; now: Date }): Promise<DriveEnvRecord>;
   /**
    * Rename, subject to the same unique constraint — and reporting the same
    * `name_taken` answer for the same reason. `not_found` distinguishes a
@@ -513,6 +543,11 @@ export function revivedDriveEnvColumns(input: {
   };
 }
 
+/** The name a Home env is minted (or adopted) under. A user may rename it afterwards; `isHome` is what keeps it Home. */
+export const HOME_ENV_NAME = 'Home';
+/** Home's name when a LOCAL env already holds "Home" in the drive (a machine is never adopted as the cloud Home). */
+export const HOME_ENV_FALLBACK_NAME = 'Home sandbox';
+
 /** Postgres unique-violation. A duplicate `(driveId, name)` is an ANSWER (`name_taken`), never a raised error. */
 const UNIQUE_VIOLATION = '23505';
 
@@ -741,15 +776,17 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           // creates for THIS payer (so the count below cannot go stale before
           // the insert) without contending with any other payer's create.
           await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'drive-env-create:' + payerId}))`);
+          // Home is outside the ceiling — see `ensureHomeEnv`.
           const [{ n }] = await tx
             .select({ n: count() })
             .from(driveEnvs)
             .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
-            .where(eq(drives.ownerId, payerId));
+            .where(and(eq(drives.ownerId, payerId), eq(driveEnvs.isHome, false)));
           if (n >= maxEnvs) return { ok: false as const, reason: 'limit_reached' as const };
           const [row] = await tx
             .insert(driveEnvs)
-            .values({ driveId, name, createdBy, substrate: local ? 'local' : 'sprite', createdAt: at, updatedAt: at })
+            // [D-OW-28] The creator's per-member cap carries the env's compute; null = the drive lead.
+            .values({ driveId, name, createdBy, costOwnerId: createdBy, substrate: local ? 'local' : 'sprite', createdAt: at, updatedAt: at })
             .returning();
           if (!local) return { ok: true as const, env: row as DriveEnvRecord, local: null };
           // The sibling in the SAME transaction: a local env never exists
@@ -827,8 +864,64 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .select({ n: count() })
         .from(driveEnvs)
         .innerJoin(drives, eq(drives.id, driveEnvs.driveId))
-        .where(eq(drives.ownerId, payerId));
+        // Home is outside the ceiling — see `ensureHomeEnv`.
+        .where(and(eq(drives.ownerId, payerId), eq(driveEnvs.isHome, false)));
       return row?.n ?? 0;
+    },
+
+    async ensureHomeEnv({ driveId, createdBy, now: at }) {
+      const isHomeOfDrive = and(eq(driveEnvs.driveId, driveId), eq(driveEnvs.isHome, true));
+      // Lock-free fast path: once Home exists (every call after the first, and
+      // every drive the backfill reached) there is nothing to serialize.
+      const [present] = await db.select().from(driveEnvs).where(isHomeOfDrive).limit(1);
+      if (present) return present as DriveEnvRecord;
+      try {
+        return await db.transaction(async (tx) => {
+          // Per-DRIVE lock: two first uses of one owner's Home (two tool calls
+          // in one turn, two tabs) serialize here instead of racing the index.
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${'drive-env-home:' + driveId}))`);
+          const [existing] = await tx.select().from(driveEnvs).where(isHomeOfDrive).limit(1);
+          if (existing) return existing as DriveEnvRecord;
+          const [named] = await tx
+            .select({ id: driveEnvs.id, substrate: driveEnvs.substrate })
+            .from(driveEnvs)
+            .where(and(eq(driveEnvs.driveId, driveId), eq(driveEnvs.name, HOME_ENV_NAME)))
+            .limit(1);
+          if (named?.substrate === 'sprite') {
+            const [adopted] = await tx
+              .update(driveEnvs)
+              .set({ isHome: true, updatedAt: at })
+              .where(eq(driveEnvs.id, named.id))
+              .returning();
+            return adopted as DriveEnvRecord;
+          }
+          // A LOCAL env holding the name is somebody's computer, never the
+          // cloud Home — leave it be and mint Home beside it, under the first
+          // FREE fallback name ("Home sandbox", "Home sandbox 2", …), so a
+          // drive that already uses the fallback never fails forever.
+          let name = HOME_ENV_NAME;
+          if (named) {
+            const taken = await tx
+              .select({ name: driveEnvs.name })
+              .from(driveEnvs)
+              .where(and(eq(driveEnvs.driveId, driveId), sql`${driveEnvs.name} LIKE ${HOME_ENV_FALLBACK_NAME + '%'}`))
+              .limit(MAX_DRIVE_ENVS_LISTED);
+            name = nextUniqueSessionName(HOME_ENV_FALLBACK_NAME, taken.map((row) => row.name));
+          }
+          const [row] = await tx
+            .insert(driveEnvs)
+            .values({ driveId, name, isHome: true, createdBy, costOwnerId: createdBy, substrate: 'sprite', createdAt: at, updatedAt: at })
+            .returning();
+          return row as DriveEnvRecord;
+        });
+      } catch (error) {
+        // The partial unique index caught a racer the lock did not serialize
+        // (a writer outside this method) — the winner's row is the answer.
+        if (!isUniqueViolation(error)) throw error;
+        const [winner] = await db.select().from(driveEnvs).where(isHomeOfDrive).limit(1);
+        if (winner) return winner as DriveEnvRecord;
+        throw error;
+      }
     },
 
     async updateSpriteIdentity({

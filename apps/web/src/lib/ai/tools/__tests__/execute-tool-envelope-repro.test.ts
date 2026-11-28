@@ -17,7 +17,7 @@ import { z } from 'zod';
 import { streamText, stepCountIs, asSchema, type Tool, type ToolSet } from 'ai';
 import type { ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { createExecuteTool } from '../execute-tool';
 import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 

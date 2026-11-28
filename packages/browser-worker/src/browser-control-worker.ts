@@ -28,18 +28,18 @@ import { createPublicKey, verify as nodeVerify, type KeyObject } from 'node:cryp
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BrowserControlResponse, BrowserOperation, BrowserRefusalReason } from './browser-operation.js';
-import { CONTROL_INSTRUCTION_MAX_BYTES, type ControlActor, type HumanInput } from './control-instruction.js';
-import { INITIAL_HUMAN_CONTROL_MODE, type HumanControlMode, type HumanControlState } from './human-control-state.js';
-import { OBSERVATION_KIND_BY_OPERATION } from './observation-kind.js';
-import { verifyControlInstruction } from './verify-control-instruction.js';
-import { decideActionAdmission } from './decide-action-admission.js';
-import { decideObservationRelease } from './decide-observation-release.js';
-import { decideNavigation } from './decide-navigation.js';
-import { decideWorkerExpiry } from './decide-worker-expiry.js';
-import { reduceHumanControlMode, type HumanControlEvent, type HumanControlTransition } from './reduce-human-control-mode.js';
-import { createBrowserDriver, type BrowserDriver, type BrowserDriverOptions } from './browser-driver-client.js';
-import { startBrowserEgressProxy, type BrowserEgressProxy, type BrowserEgressProxyOptions } from './browser-egress-proxy-adapter.js';
+import type { BrowserControlResponse, BrowserOperation, BrowserRefusalReason } from './browser-operation.ts';
+import { CONTROL_INSTRUCTION_MAX_BYTES, type ControlActor, type HumanInput } from './control-instruction.ts';
+import { INITIAL_HUMAN_CONTROL_MODE, type HumanControlMode, type HumanControlState } from './human-control-state.ts';
+import { OBSERVATION_KIND_BY_OPERATION } from './observation-kind.ts';
+import { verifyControlInstruction } from './verify-control-instruction.ts';
+import { decideActionAdmission } from './decide-action-admission.ts';
+import { decideObservationRelease } from './decide-observation-release.ts';
+import { decideNavigation } from './decide-navigation.ts';
+import { decideWorkerExpiry } from './decide-worker-expiry.ts';
+import { reduceHumanControlMode, type HumanControlEvent, type HumanControlTransition } from './reduce-human-control-mode.ts';
+import { createBrowserDriver, type BrowserDriver, type BrowserDriverOptions } from './browser-driver-client.ts';
+import { startBrowserEgressProxy, type BrowserEgressProxy, type BrowserEgressProxyOptions } from './browser-egress-proxy-adapter.ts';
 
 export type WorkerAudit = {
   readonly mode: HumanControlState;

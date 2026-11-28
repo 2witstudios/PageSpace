@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -55,6 +64,7 @@ vi.mock('../../validators/id-validators', () => ({
 import { getUserAccessLevel } from '../permissions';
 import { db } from '@pagespace/db/db';
 import { parseUserId, parsePageId } from '../../validators/id-validators';
+import { credentialActor } from '../access-actor';
 
 const VALID_USER = 'clxxxxxxxxxxxxxxxxxxxxxxx';
 const VALID_PAGE = 'clyyyyyyyyyyyyyyyyyyyyyyy';
@@ -102,7 +112,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -114,7 +124,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
@@ -126,7 +136,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: true, canDelete: false });
   });
 
@@ -138,7 +148,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -150,7 +160,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -162,7 +172,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -172,7 +182,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
       .mockReturnValueOnce(mockSelectChain([]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -182,7 +192,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
       .mockReturnValueOnce(mockSelectChain([]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -191,7 +201,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(makePageRow(true)))
       .mockReturnValueOnce(mockSelectChain([{ role: 'ADMIN', customRoleId: null }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -200,7 +210,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(mockSelectChainWithLeftJoin(ownerPage));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: true });
   });
 
@@ -210,7 +220,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
       .mockReturnValueOnce(mockSelectChain([]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: false, canDelete: false });
   });
 
@@ -220,7 +230,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: null }]))
       .mockReturnValueOnce(mockSelectChain([]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -231,7 +241,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: {}, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toBeNull();
   });
 
@@ -243,7 +253,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([]))
       .mockReturnValueOnce(mockSelectChain([{ permissions: rolePerms, driveWidePermissions: { canView: true, canEdit: false, canShare: false } }]));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: false, canShare: false, canDelete: false });
   });
 
@@ -255,7 +265,7 @@ describe('getUserAccessLevel — custom role (MEMBER path)', () => {
       .mockReturnValueOnce(mockSelectChain([{ role: 'MEMBER', customRoleId: CUSTOM_ROLE_ID }]))
       .mockReturnValueOnce(mockSelectChain(explicitPerm));
 
-    const result = await getUserAccessLevel(VALID_USER, VALID_PAGE);
+    const result = await getUserAccessLevel(credentialActor(VALID_USER, null), VALID_PAGE);
     expect(result).toEqual({ canView: true, canEdit: true, canShare: true, canDelete: false });
     expect(db.select).toHaveBeenCalledTimes(3);
   });

@@ -41,6 +41,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { error: vi.fn() } },
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   getBatchPagePermissions: (...args: unknown[]) => mockGetBatchPagePermissions(...args),
 }));
 vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({

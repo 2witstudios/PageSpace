@@ -1,10 +1,13 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
+import { OpenRoleFloorError, guardOpenRoleFloor } from '@pagespace/lib/organizations/open-role-floor';
+import { admitReentry } from '@pagespace/lib/permissions/guest-holds';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { driveBackups, driveBackupPermissions, driveBackupMembers, driveBackupRoles } from '@pagespace/db/schema/versioning';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -15,8 +18,13 @@ import {
   planMemberRestoreOps,
   planRoleRestoreOps,
   applyPermRestoreOps,
+  type RestoreAdmission,
+  revokeAgentGrantsOfRemovedMembers,
 } from '@/services/api/restore-permissions-service';
 import { runPreRestoreSnapshot } from '@/services/api/restore-backup-service';
+import { guardDriveAccess, isOrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { orgLapsedResponse } from '@/lib/orgs/org-lapsed-response';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -32,9 +40,9 @@ export async function POST(
 
   try {
     // 1. Permission check
-    const isAdmin = await isDriveOwnerOrAdmin(auth.userId, driveId);
+    const isAdmin = await isPrincipalDriveOwnerOrAdmin(auth, driveId);
     if (!isAdmin) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Access denied' }, { status: 403 }));
     }
 
     // 2. Load and validate backup
@@ -52,7 +60,7 @@ export async function POST(
     }
 
     // 4. Pre-restore snapshot (outside transaction — must survive even if restore rolls back)
-    const snapshot = await runPreRestoreSnapshot(driveId, auth.userId, backupId);
+    const snapshot = await runPreRestoreSnapshot(driveId, actorFromAuth(auth), backupId);
     if (!snapshot.success) {
       loggers.api.error('Pre-restore snapshot failed', new Error(snapshot.error));
       return NextResponse.json(
@@ -134,13 +142,32 @@ export async function POST(
       const memberOps = planMemberRestoreOps(backupMemberRows as never[], currentMemberRows);
       const roleOps = planRoleRestoreOps(backupRoleRows as never[], currentRoleRows);
 
-      const { skippedMembers, skippedPermissions } = await applyPermRestoreOps(
-        permOps,
-        memberOps,
-        roleOps,
-        driveId,
-        tx as never,
-      );
+      // POL-6: restoring roles may change an Open org drive's default role; judged against the org's floor, and a
+      // refusal rolls the whole restore back.
+      // POL-2 (independent review of #2762, P1-3): a backup taken while the org allowed guests must not bring an
+      // outsider back once it does not; each person the restore puts back is asked in this transaction.
+      const admit: RestoreAdmission = async ({ userId, member, grants }) =>
+        (await admitReentry(tx, {
+          driveId,
+          userId,
+          member,
+          // Each grant keeps its expiry, so a queued one never outlives it and an expired one is never queued.
+          grants: grants.map((g) => ({ ...g, expiresAt: g.expiresAt instanceof Date || typeof g.expiresAt === 'string' ? g.expiresAt : null })),
+          requestedBy: auth.userId,
+        })).outcome;
+      // [D-OW-33] while the drive's org is lapsed a restore may only restrict: if putting the backup's members, grants
+      // and roles back gives anyone more than they hold now, guardDriveAccess refuses (OrgLapsedError) and the whole
+      // restore rolls back (402).
+      const { skippedMembers, skippedPermissions, refusedByGuestPolicy, queuedForApproval } = await guardDriveAccess(tx, driveId, {}, (sp) =>
+        guardOpenRoleFloor(sp, driveId, () => applyPermRestoreOps(
+          permOps,
+          memberOps,
+          roleOps,
+          driveId,
+          sp as never,
+          admit,
+        )));
+      await revokeAgentGrantsOfRemovedMembers(tx, driveId, memberOps, skippedMembers);
 
       return {
         pagesCreated: diff.toCreate.length,
@@ -148,6 +175,8 @@ export async function POST(
         pagesOrphaned: diff.toOrphan.length,
         skippedMembers,
         skippedPermissions,
+        refusedByGuestPolicy,
+        queuedForApproval,
       };
     });
 
@@ -165,6 +194,10 @@ export async function POST(
       counts,
     });
   } catch (error) {
+    if (isOrgLapsedError(error)) return orgLapsedResponse();
+    if (error instanceof OpenRoleFloorError) {
+      return NextResponse.json({ error: error.message, code: error.code, policy: error.policy }, { status: error.status });
+    }
     loggers.api.error('Restore failed', error as Error);
     return NextResponse.json({ error: 'Restore failed — drive is unchanged' }, { status: 500 });
   }

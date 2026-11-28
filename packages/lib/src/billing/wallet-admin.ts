@@ -1,0 +1,298 @@
+/**
+ * wallet-admin — the PURE decisions behind running a drive wallet (Spec UI-9, WAL-3, WAL-6,
+ * WAL-7, SPEND-3): what a change sets and which action authorizes it, a top-up's money
+ * movement, and whether a wallet may be deleted. The drive-wallet service loads and locks the
+ * rows, asks the permissions module (wallet-access) whether the viewer may take each action
+ * named here, and writes the answer.
+ */
+
+import type { WalletAction } from '../permissions/wallet-access';
+import { allocateSpend, applyPaymentToDebt, type Balance } from './credit-core';
+import { walletStatusFor, type FallbackRule, type OvershootFunderChoice, type SpendSourceKind, type WalletStatus } from './wallet-core';
+
+/** Money columns are Postgres `integer`: no amount may exceed it. */
+export const MAX_WALLET_CENTS = 2_147_483_647;
+
+const isWholeCents = (n: number): boolean => Number.isInteger(n) && n >= 0 && n <= MAX_WALLET_CENTS;
+
+// ---------------------------------------------------------------------------
+// A change (allocation, pause, rules, default source)
+// ---------------------------------------------------------------------------
+
+export interface WalletPatchInput {
+  /** The monthly allocation drawn against the parent (WAL-3). */
+  allocationCents?: number;
+  /** The kill switch (WAL-7). */
+  paused?: boolean;
+  /** POL-7 fallback when the chosen source is empty; null clears it. */
+  fallbackRule?: FallbackRule | null;
+  /** WAL-4: whether others may donate to this wallet. */
+  donationsEnabled?: boolean;
+  /** SPEND-3: what a new conversation in this drive preselects; null clears it. */
+  defaultSpendSource?: SpendSourceKind | null;
+  /** WAL-6c: where this wallet's overshoot lands, the funder's choice; null restores the default. */
+  overshootChoice?: OvershootFunderChoice | null;
+  /** D-OW-4: whether the drive's guests may spend this wallet (always within their caps). */
+  guestSpendEnabled?: boolean;
+}
+
+export interface WalletPatchSet {
+  monthlyAllowanceCents?: number;
+  status?: WalletStatus;
+  fallbackRule?: FallbackRule | null;
+  donationsEnabled?: boolean;
+  defaultSpendSource?: SpendSourceKind | null;
+  overshootChoice?: OvershootFunderChoice | null;
+  guestSpendEnabled?: boolean;
+}
+
+export type WalletPatchPlan =
+  | { kind: 'patch'; actions: WalletAction[]; set: WalletPatchSet }
+  | { kind: 'refuse'; reason: 'invalid_amount' | 'nothing_to_change' };
+
+export function planWalletPatch(input: WalletPatchInput, current: { status: WalletStatus; debtCents: number }): WalletPatchPlan {
+  const actions = new Set<WalletAction>();
+  const set: WalletPatchSet = {};
+  if (input.allocationCents !== undefined) {
+    if (!isWholeCents(input.allocationCents)) return { kind: 'refuse', reason: 'invalid_amount' };
+    actions.add('allocate');
+    set.monthlyAllowanceCents = input.allocationCents;
+  }
+  if (input.paused !== undefined) {
+    actions.add('pause');
+    set.status = walletStatusFor({ paused: input.paused, debtCents: current.debtCents });
+  }
+  if (input.fallbackRule !== undefined) {
+    actions.add('set_rules');
+    set.fallbackRule = input.fallbackRule;
+  }
+  if (input.donationsEnabled !== undefined) {
+    actions.add('set_rules');
+    set.donationsEnabled = input.donationsEnabled;
+  }
+  if (input.defaultSpendSource !== undefined) {
+    actions.add('set_rules');
+    set.defaultSpendSource = input.defaultSpendSource;
+  }
+  if (input.overshootChoice !== undefined) {
+    // WAL-6c: who absorbs this wallet's overshoot is the FUNDER's call, so it takes the money
+    // authority that moves the funder's money (allocate): the org admins on an org drive, the
+    // lead on a personal drive (wallet-access).
+    actions.add('allocate');
+    set.overshootChoice = input.overshootChoice;
+  }
+  if (input.guestSpendEnabled !== undefined) {
+    // D-OW-4: opening the wallet to guests lets people outside the org spend the funder's money, so it
+    // takes the same money authority as an allocation: the org admins on an org drive (wallet-access).
+    actions.add('allocate');
+    set.guestSpendEnabled = input.guestSpendEnabled;
+  }
+  if (actions.size === 0) return { kind: 'refuse', reason: 'nothing_to_change' };
+  return { kind: 'patch', actions: [...actions], set };
+}
+
+// ---------------------------------------------------------------------------
+// The org pool's kill switch (WAL-7)
+// ---------------------------------------------------------------------------
+
+export type PoolPausePlan = { kind: 'set'; status: WalletStatus } | { kind: 'refuse'; reason: 'org_lapsed' };
+
+/**
+ * Pause or resume an org pool (WAL-7 "a kill switch pauses a wallet"). A paused pool funds nothing:
+ * no seat, no drive wallet under it (walletChainStatus), no org compute. Pausing always applies — it
+ * only restricts, and billing never blocks restricting ([D-OW-33]); resuming adds spend, an org-only
+ * capability a lapsed org does not have (SEAT-9). Resuming lands on `over` while the pool carries debt.
+ */
+export function planOrgPoolPause(input: { paused: boolean; debtCents: number; orgActive: boolean }): PoolPausePlan {
+  if (!input.paused && !input.orgActive) return { kind: 'refuse', reason: 'org_lapsed' };
+  return { kind: 'set', status: walletStatusFor({ paused: input.paused, debtCents: input.debtCents }) };
+}
+
+// ---------------------------------------------------------------------------
+// A drive that changes owner re-homes its wallet ([D-OW-60])
+// ---------------------------------------------------------------------------
+
+/** The wallet a drive wallet will draw on after the move, with its period (null: none yet). */
+export interface RehomeParent {
+  id: string;
+  periodStart: Date | null;
+  periodEnd: Date | null;
+}
+
+export type RehomeTo =
+  | { ownerType: 'org'; orgId: string; parent: RehomeParent | null }
+  | { ownerType: 'user'; userId: string; parent: RehomeParent | null };
+
+export interface DriveWalletRehomePlan {
+  kind: 'rehome';
+  set: {
+    ownerType: 'org' | 'user';
+    orgId: string | null;
+    userId: string | null;
+    parentWalletId: string | null;
+    monthlyAllowanceCents: number;
+    spentCents: number;
+    debtCents: number;
+    status: WalletStatus;
+    overshootChoice: OvershootFunderChoice | null;
+    monthlyPeriodStart: Date | null;
+    monthlyPeriodEnd: Date | null;
+  };
+  /** The wallet debt cleared by the move, ledgered as forgiven so reconciliation stays exact. */
+  forgivenDebtCents: number;
+}
+
+/**
+ * [D-OW-60] Re-home a drive wallet when its drive moves into an org (owner the org, parent its pool) or
+ * out of one (owner the drive lead, parent their personal root). The wallet row keeps its id, so its
+ * funding legs and its ledger move with it. The move commits nobody's money: the allocation (a budget
+ * against the OLD funder) is cleared for the new funder to set, and wallet debt the old funder chose to
+ * carry (WAL-6c, netted from THEIR next allocation) is forgiven rather than charged to the new one. The
+ * kill switch survives; the period follows the new parent (D-OW-12).
+ */
+export function planDriveWalletRehome(input: {
+  status: WalletStatus;
+  debtCents: number;
+  overshootChoice: OvershootFunderChoice | null;
+  /**
+   * Live holds on the wallet and on any wallet whose holds draw through it. A call in flight settles
+   * on the wallet's parent AT SETTLE, so re-homing under it would charge its cost to the new funder,
+   * who never authorized it: the move is refused until those calls settle, as wallet deletion is.
+   */
+  liveHoldCount: number;
+  to: RehomeTo;
+}): DriveWalletRehomePlan | { kind: 'refuse'; reason: 'calls_in_flight' } {
+  if (input.liveHoldCount > 0) return { kind: 'refuse', reason: 'calls_in_flight' };
+  const parent = input.to.parent;
+  return {
+    kind: 'rehome',
+    set: {
+      ownerType: input.to.ownerType,
+      orgId: input.to.ownerType === 'org' ? input.to.orgId : null,
+      userId: input.to.ownerType === 'user' ? input.to.userId : null,
+      parentWalletId: parent?.id ?? null,
+      monthlyAllowanceCents: 0,
+      spentCents: 0,
+      debtCents: 0,
+      status: walletStatusFor({ paused: input.status === 'paused', debtCents: 0 }),
+      // The CHECK refuses an overshoot choice on a wallet with no parent to absorb into.
+      overshootChoice: parent ? input.overshootChoice : null,
+      monthlyPeriodStart: parent?.periodStart ?? null,
+      monthlyPeriodEnd: parent?.periodEnd ?? null,
+    },
+    forgivenDebtCents: Math.max(0, Math.round(Number.isFinite(input.debtCents) ? input.debtCents : 0)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// [D-OW-33] what a LAPSED org may still change: only what restricts
+// ---------------------------------------------------------------------------
+
+/**
+ * A wallet change that only restricts: the kill switch (pause), a refuse fallback, closing donations. Every
+ * other field — resuming, an allocation or overshoot choice (they move or commit money), a fallback that
+ * spends, a default source — is not, and neither is an empty change. While the org is lapsed only these apply.
+ */
+export function walletPatchOnlyRestricts(input: WalletPatchInput): boolean {
+  const restricting: Record<keyof WalletPatchInput, (v: unknown) => boolean> = {
+    paused: (v) => v === true,
+    fallbackRule: (v) => v === 'refuse',
+    donationsEnabled: (v) => v === false,
+    guestSpendEnabled: (v) => v === false,
+    allocationCents: () => false,
+    defaultSpendSource: () => false,
+    overshootChoice: () => false,
+  };
+  const named = (Object.keys(restricting) as Array<keyof WalletPatchInput>).filter((k) => input[k] !== undefined);
+  return named.length > 0 && named.every((k) => restricting[k](input[k]));
+}
+
+/**
+ * A cap write that only restricts: every window ends no higher than it was, where null is no cap. Callers pass
+ * the EFFECTIVE limits — what a missing row or a null window means on that leg — not the stored row.
+ */
+export function capChangeOnlyRestricts(
+  before: { dailyCents: number | null; monthlyCents: number | null },
+  after: { dailyCents: number | null; monthlyCents: number | null },
+): boolean {
+  const noHigher = (b: number | null, a: number | null): boolean => a === b || (a !== null && (b === null || a <= b));
+  return noHigher(before.dailyCents, after.dailyCents) && noHigher(before.monthlyCents, after.monthlyCents);
+}
+
+// ---------------------------------------------------------------------------
+// A top-up (WAL-3)
+// ---------------------------------------------------------------------------
+
+export interface TopUpInput {
+  amountCents: number;
+  /** The wallet that pays: the org pool for an org drive, the lead's personal wallet for a personal drive. */
+  payer: { walletId: string; balance: Balance; heldCents: number };
+  target: { walletId: string; legsRemainingCents: number; debtCents: number };
+}
+
+export type TopUpRefusal = 'invalid_amount' | 'same_wallet' | 'insufficient_funds';
+
+export type TopUpPlan =
+  | {
+      kind: 'top_up';
+      amountCents: number;
+      payer: { monthlyRemainingCents: number; topupRemainingCents: number; spentMonthly: number; spentTopup: number };
+      /** The owner's leg: refundable (only donations are not, D-OW-13), lasting until spent. */
+      leg: { originalCents: number; remainingCents: number; nonRefundable: false };
+      target: { topupRemainingCents: number; debtCents: number; paidDebtCents: number };
+    }
+  | { kind: 'refuse'; reason: TopUpRefusal };
+
+/**
+ * Move `amountCents` from the payer into the drive wallet as an owner funding leg. Never
+ * partial and never into debt: the payer must cover the whole amount now, net of its debt and
+ * in-flight holds. The payer is drawn monthly first, then top-up (the spend order); the wallet
+ * pays its own debt first, exactly as a donation does.
+ */
+export function planTopUp(input: TopUpInput): TopUpPlan {
+  const amount = input.amountCents;
+  if (!isWholeCents(amount) || amount === 0) return { kind: 'refuse', reason: 'invalid_amount' };
+  if (input.payer.walletId === input.target.walletId) return { kind: 'refuse', reason: 'same_wallet' };
+  const b = input.payer.balance;
+  const available = b.monthlyCents + b.topupCents - Math.max(0, b.debtCents ?? 0) - Math.max(0, Math.round(input.payer.heldCents));
+  if (available < amount) return { kind: 'refuse', reason: 'insufficient_funds' };
+
+  const draw = allocateSpend(b, amount);
+  const landed = applyPaymentToDebt(input.target.debtCents, input.target.legsRemainingCents, amount);
+  return {
+    kind: 'top_up',
+    amountCents: amount,
+    payer: { monthlyRemainingCents: draw.monthlyCents, topupRemainingCents: draw.topupCents, spentMonthly: draw.spentMonthly, spentTopup: draw.spentTopup },
+    leg: { originalCents: amount, remainingCents: amount - landed.paidDebt, nonRefundable: false },
+    target: { topupRemainingCents: landed.topupCents, debtCents: landed.debtCents, paidDebtCents: landed.paidDebt },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Deleting a drive wallet
+// ---------------------------------------------------------------------------
+
+export type DeleteBlocker = 'calls_in_flight' | 'has_money_history' | 'holds_funds' | 'carries_debt';
+
+export type DeletePlan = { kind: 'delete' } | { kind: 'refuse'; reason: 'wallet_in_use'; blockers: DeleteBlocker[] };
+
+/**
+ * A drive wallet may be deleted only while it is unused. credit_ledger and credit_holds rows
+ * CASCADE with their wallet, so deleting a wallet that ever moved money would erase that
+ * history (WAL-5: the ledger is keyed on wallet); funds still in its legs (a donor's gift, an
+ * owner's top-up) and its debt would vanish with it. Such a wallet is paused instead (WAL-7).
+ * Its unspent allocation needs no return: it never left the parent (WAL-3).
+ */
+export function planDeleteWallet(input: {
+  liveHoldCount: number;
+  ledgerEntryCount: number;
+  legsRemainingCents: number;
+  debtCents: number;
+}): DeletePlan {
+  const blockers: DeleteBlocker[] = [];
+  if (input.liveHoldCount > 0) blockers.push('calls_in_flight');
+  if (input.ledgerEntryCount > 0) blockers.push('has_money_history');
+  if (input.legsRemainingCents > 0) blockers.push('holds_funds');
+  if (input.debtCents > 0) blockers.push('carries_debt');
+  return blockers.length === 0 ? { kind: 'delete' } : { kind: 'refuse', reason: 'wallet_in_use', blockers };
+}

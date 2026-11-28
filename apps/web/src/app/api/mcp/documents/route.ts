@@ -22,6 +22,7 @@ import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAcces
 import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Get drive slug from page for socket broadcasting
 async function getDriveIdFromPage(pageId: string): Promise<string | null> {
@@ -203,7 +204,7 @@ export async function POST(req: NextRequest) {
         hasAccessLevel: !!accessLevel,
         canView: accessLevel?.canView ?? false
       });
-      return new NextResponse('Forbidden', { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, new NextResponse('Forbidden', { status: 403 }));
     }
 
     // Validate write permissions for mutating operations
@@ -598,7 +599,10 @@ export async function POST(req: NextRequest) {
             });
           }
 
-          if (page.processingStatus === 'visual') {
+          // A visual file with a text layer (a scanned PDF with some text) is read
+          // as text like a completed one; MCP clients never get images, and never
+          // lose the text.
+          if (page.processingStatus === 'visual' && !(page.content ?? '').trim()) {
             return NextResponse.json({
               pageId,
               pageTitle: page.title,
@@ -652,6 +656,9 @@ export async function POST(req: NextRequest) {
           numberedLines,
           content: rangeContent,
           ...(fileMetadata && { fileMetadata }),
+          ...(page.type === PageType.FILE && page.processingStatus === 'visual' && {
+            note: 'This file is mostly images (a scan); this is its extracted text layer, which may be partial. The pages themselves can be seen with a vision model in PageSpace.',
+          }),
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
           ...(contentModeWarning && { contentModeWarning }),
         });

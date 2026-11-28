@@ -36,8 +36,10 @@ vi.mock('@pagespace/lib/auth/step-up-service', () => ({
 }));
 
 const getDriveAccess = vi.fn();
+const getExplicitScopeAuthority = vi.fn();
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   getDriveAccess: (...args: unknown[]) => getDriveAccess(...args),
+  getExplicitScopeAuthority: (...args: unknown[]) => getExplicitScopeAuthority(...args),
 }));
 
 const getMemberCustomRoleId = vi.fn();
@@ -71,6 +73,7 @@ const ALLOWED = { allowed: true, attemptsRemaining: 9 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  getExplicitScopeAuthority.mockResolvedValue({ orgDrive: false });
   vi.mocked(authenticateRequestWithOptions).mockResolvedValue(AUTHENTICATED as never);
   checkDistributedRateLimit.mockResolvedValue(ALLOWED);
   // Default: the presented user code isn't found by the read-only scope
@@ -78,7 +81,7 @@ beforeEach(() => {
   // never need it, and recordDeviceApproval independently re-validates.
   verifyDeviceUserCode.mockResolvedValue({ outcome: 'not_found' });
   getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
-  consumeStepUpGrant.mockResolvedValue({ ok: true });
+  consumeStepUpGrant.mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } });
   getMemberCustomRoleId.mockResolvedValue(null);
   customRoleBelongsToDrive.mockResolvedValue(true);
 });
@@ -209,6 +212,18 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
     expect(recordDeviceApproval).not.toHaveBeenCalled();
   });
 
+  it('ORG-4 (partial) rejects approving an explicit drive scope on an org drive the user reaches only through org power, never recording approval', async () => {
+    verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
+    getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: true, isMember: true, role: 'ADMIN' });
+    getExplicitScopeAuthority.mockResolvedValue({ orgDrive: true, row: null });
+
+    const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_scope' });
+    expect(recordDeviceApproval).not.toHaveBeenCalled();
+  });
+
   it('rejects approving a drive the user has no access to at all', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345'] });
     getDriveAccess.mockResolvedValue({ isOwner: false, isAdmin: false, isMember: false, role: null });
@@ -236,7 +251,7 @@ describe('POST /api/oauth/device_authorization/decision — P1b: grant-authority
   it('allows approving a scope the user has authority to grant', async () => {
     verifyDeviceUserCode.mockResolvedValue({ outcome: 'ok', clientId: 'pagespace-cli', scopes: ['drive:abc12345:member'] });
     getDriveAccess.mockResolvedValue({ isOwner: true, isAdmin: true, isMember: true, role: 'OWNER' });
-  consumeStepUpGrant.mockResolvedValue({ ok: true });
+  consumeStepUpGrant.mockResolvedValue({ ok: true, authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } });
     recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
     const res = await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve' }) as never);
@@ -306,6 +321,7 @@ describe('POST /api/oauth/device_authorization/decision — step-up gate on cred
       recordDeviceApproval.mockResolvedValue({ outcome: 'approved' });
 
       await POST(decisionRequest({ userCode: 'ABCD-EFGH', action: 'approve', stepUpToken: 'grant' }) as never);
+      expect(recordDeviceApproval).toHaveBeenCalledWith(expect.objectContaining({ authentication: { authenticatedAtMs: 1700000000000, assurance: 'user_verified_passkey' } }));
 
       // Bound to the user code AND the scope string, so a grant obtained for
       // one device approval cannot be replayed against another.

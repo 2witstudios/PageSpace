@@ -5,8 +5,8 @@
  * `{"listening":"http://host:port"}`, once it serves, and closes the browser
  * and removes the profile on SIGTERM/SIGINT.
  */
-import { parseWorkerEnv } from './parse-worker-env.js';
-import { startBrowserControlWorker } from './browser-control-worker.js';
+import { parseWorkerEnv } from './parse-worker-env.ts';
+import { startBrowserControlWorker } from './browser-control-worker.ts';
 
 const main = async (): Promise<void> => {
   const parsed = parseWorkerEnv(process.env);

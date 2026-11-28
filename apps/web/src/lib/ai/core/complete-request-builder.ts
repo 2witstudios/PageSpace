@@ -63,6 +63,7 @@ export interface CompleteAIRequest {
     locationContext?: LocationContext;
     modelCapabilities: {
       hasVision: boolean;
+      hasPdfInput: boolean;
       hasTools: boolean;
       model: string;
       provider: string;
@@ -260,6 +261,7 @@ export function buildCompleteRequest(
     locationContext: locationContext || undefined,
     modelCapabilities: {
       hasVision: false,
+      hasPdfInput: false,
       hasTools: true,
       model: '[varies by chat]',
       provider: '[varies by chat]',

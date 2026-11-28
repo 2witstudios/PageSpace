@@ -1,4 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const orgLapsed = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  isOrgLapsedForDrive: orgLapsed,
+}));
 import { NextResponse } from 'next/server';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
@@ -19,6 +25,7 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isDriveOwnerOrAdmin: vi.fn(),
 }));
 
@@ -61,6 +68,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
 import { db } from '@pagespace/db/db';
 import { validateTimezone } from '@/lib/workflows/cron-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Helpers
@@ -91,6 +99,7 @@ const DRIVE_ID = 'drive_1';
 describe('GET /api/drives/[driveId]/backups/schedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(USER_ID));
     vi.mocked(isAuthError).mockReturnValue(false);
     vi.mocked(isDriveOwnerOrAdmin).mockResolvedValue(true);
@@ -140,6 +149,15 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       });
     });
 
+    it.each([false, true])('SEAT-8 (partial) resolves organization backup availability independently of the personal Free lead (lapsed: %s)', async (lapsed) => {
+      orgLapsed.mockResolvedValue(lapsed);
+      mockLimit.mockReset();
+      mockLimit.mockResolvedValueOnce([{ tier: 'free', orgId: 'org_1' }]).mockResolvedValueOnce([]);
+      const response = await GET(req(), ctx(DRIVE_ID));
+      expect(response.status).toBe(200);
+      expect((await response.json()).available).toBe(!lapsed);
+    });
+
     it('returns available:false for free tier', async () => {
       mockLimit.mockReset();
       mockLimit
@@ -154,19 +172,20 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       expect(body.enabled).toBe(false);
     });
 
-    it('returns available:true for founder tier', async () => {
-      mockLimit.mockReset();
-      mockLimit
-        .mockResolvedValueOnce([{ tier: 'founder' }])
-        .mockResolvedValueOnce([]);
-
-      const res = await GET(req(), ctx(DRIVE_ID));
-      const body = await res.json();
-
-      expect(body.available).toBe(true);
+    it.each(['onprem', 'tenant'])('given %s personal Free, should retain scheduled backup capability', async (mode) => {
+      vi.stubEnv('DEPLOYMENT_MODE', mode);
+      try {
+        mockLimit.mockReset();
+        mockLimit.mockResolvedValueOnce([{ tier: 'free' }]).mockResolvedValueOnce([]);
+        const res = await GET(req(), ctx(DRIVE_ID));
+        expect(res.status).toBe(200);
+        expect((await res.json()).available).toBe(true);
+      } finally {
+        vi.unstubAllEnvs();
+      }
     });
 
-    it('returns available:true for business tier', async () => {
+    it('A-9 refuses retired personal Business backup entitlement', async () => {
       mockLimit.mockReset();
       mockLimit
         .mockResolvedValueOnce([{ tier: 'business' }])
@@ -175,7 +194,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       const res = await GET(req(), ctx(DRIVE_ID));
       const body = await res.json();
 
-      expect(body.available).toBe(true);
+      expect(body.available).toBe(false);
     });
   });
 
@@ -213,7 +232,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
       await GET(req(), ctx(DRIVE_ID));
       // isDriveOwnerOrAdmin is mocked separately; db.select covers tier + schedule
       expect(db.select).toHaveBeenCalledTimes(2);
-      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+      expect(isDriveOwnerOrAdmin).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID }), DRIVE_ID);
     });
   });
 
@@ -242,6 +261,7 @@ describe('GET /api/drives/[driveId]/backups/schedule', () => {
 describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    orgLapsed.mockResolvedValue(false);
     // mockResolvedValueOnce values survive vi.clearAllMocks() — reset the queue explicitly
     mockLimit.mockReset();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth(USER_ID));
@@ -270,6 +290,14 @@ describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
       const res = await PATCH(patchReq({ enabled: true }), ctx(DRIVE_ID));
       expect(res.status).toBe(401);
     });
+  });
+
+  it('SEAT-8 (partial) enables backups for an active Business org with a Free lead', async () => {
+    mockLimit.mockReset();
+    mockLimit.mockResolvedValueOnce([{ tier: 'free', orgId: 'org_1' }]).mockResolvedValueOnce([]);
+    const response = await PATCH(patchReq({ enabled: true }), ctx(DRIVE_ID));
+    expect(response.status).toBe(200);
+    expect(mockOnConflictDoUpdate).toHaveBeenCalled();
   });
 
   describe('authorization', () => {
@@ -388,4 +416,13 @@ describe('PATCH /api/drives/[driveId]/backups/schedule', () => {
       expect(mockOnConflictDoUpdate).toHaveBeenCalledTimes(1);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    isPrincipalDriveOwnerOrAdmin: (auth: { userId: string }, resourceId: string) => permissions.isDriveOwnerOrAdmin(credentialActor(auth.userId, null), resourceId),
+  };
 });

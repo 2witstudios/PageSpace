@@ -79,6 +79,7 @@ export const driveEnvLabelSchema = z
  */
 export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
 export const driveEnvSubstrateSchema = z.enum(DRIVE_ENV_SUBSTRATES);
+/** @public Public contract type for the local-environments epic (#2590). */
 export type DriveEnvSubstrate = z.infer<typeof driveEnvSubstrateSchema>;
 
 /**
@@ -130,6 +131,12 @@ const driveEnvDtoBase = {
   driveId: z.string().min(1),
   /** Unique within the drive — an address humans use, not a label. */
   name: z.string().min(1),
+  /**
+   * The owner's default env, "Home": where the Global Assistant's and Imago's
+   * sessions run, and the env a spawn picker preselects. Stays true across a
+   * rename — the flag, not the name, is what makes it Home.
+   */
+  isHome: z.boolean(),
   createdAt: isoTimestamp,
 };
 
@@ -186,6 +193,7 @@ export const createDriveEnvRequestSchema = z
   )
   .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));
 
+/** @public Public contract type for the local-environments epic (#2590). */
 export type CreateDriveEnvRequest = z.infer<typeof createDriveEnvRequestSchema>;
 
 /**

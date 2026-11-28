@@ -27,6 +27,8 @@ export interface SessionRecord {
   expiresAt: Date;
   lastUsedAt: Date | null;
   createdAt: Date;
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: string | null;
   resourceType: string | null;
   resourceId: string | null;
   driveId: string | null;

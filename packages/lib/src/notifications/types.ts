@@ -226,6 +226,31 @@ export type TaskAssignedNotification = NotificationBase & {
   };
 };
 
+// WAL-7: a consumer reached 80% or 100% of a cap on a wallet leg; sent to its funders
+// (billing/wallet-cap-alerts). driveId is null for a seat on the org pool.
+export type WalletCapAlertNotification = NotificationBase & {
+  type: 'WALLET_CAP_ALERT';
+  title: string;
+  message: string;
+  metadata: { walletId: string; consumerId: string; window: 'daily' | 'monthly'; threshold: 80 | 100 };
+};
+
+// WAL-6e: a wallet the person funds carries debt (billing/wallet-debt-notifier).
+export type WalletDebtNotification = NotificationBase & {
+  type: 'WALLET_DEBT';
+  title: string;
+  message: string;
+  metadata: { walletId: string };
+};
+
+// SPEND-6: an automation in the drive the person leads was skipped (billing/automation-skip-notifier).
+export type AutomationSkippedNotification = NotificationBase & {
+  type: 'AUTOMATION_SKIPPED';
+  title: string;
+  message: string;
+  metadata: { walletId: string | null; reason: string };
+};
+
 // Union of all notification types
 export type Notification =
   | ConnectionRequestNotification
@@ -242,7 +267,10 @@ export type Notification =
   | EmailVerificationRequiredNotification
   | TosPrivacyUpdatedNotification
   | MentionNotification
-  | TaskAssignedNotification;
+  | TaskAssignedNotification
+  | WalletCapAlertNotification
+  | WalletDebtNotification
+  | AutomationSkippedNotification;
 
 // Type for notification types
 export type NotificationType = Notification['type'];

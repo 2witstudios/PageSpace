@@ -75,6 +75,7 @@ import {
   ensureGlobalSandboxSession,
   spawnSession,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** One captured `POST /api/broadcast` body. */
 interface CapturedBroadcast {
@@ -347,11 +348,28 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     expect(broadcasts.filter(createdFor(conversationId))).toHaveLength(1);
   });
 
+  it('path 3, in a caller transaction — the INSERT emits only when the caller runs its after-commit queue', async () => {
+    const owner = await factories.createUser();
+    const conversationId = createId();
+    const afterCommit: Array<() => void> = [];
+
+    await db.transaction(async (tx) => {
+      await resolveOrCreateConversation(owner.id, conversationId, tx, { afterCommit: (emit) => afterCommit.push(emit) });
+    });
+    await settle();
+    // Committed, but nothing announced yet: a re-read triggered earlier would have raced the commit.
+    expect(broadcasts.filter(createdFor(conversationId))).toHaveLength(0);
+    expect(afterCommit).toHaveLength(1);
+
+    for (const emit of afterCommit) emit();
+    await waitForBroadcasts(createdFor(conversationId), 1, 'deferred global create');
+  });
+
   it('path 4a — createWorkerSession (global worker): the spawn emits conversation:created, then the claim emits the workspace binding', async () => {
     const owner = await factories.createUser();
     const callerConversationId = createId();
     await resolveOrCreateConversation(owner.id, callerConversationId);
-    const ensured = await ensureGlobalSandboxSession(callerConversationId, owner.id);
+    const ensured = await ensureGlobalSandboxSession(callerConversationId, credentialActor(owner.id, null));
     if (!ensured.ok) throw new Error(`ensureGlobalSandboxSession failed: ${ensured.reason}`);
 
     broadcasts.length = 0;
@@ -359,7 +377,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const spawned = await buildSessionToolsDeps().createWorkerSession({
       conversationId: workerConversationId,
       callerConversationId,
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: null,
       name: 'spawned worker',
       // undefined = the caller's own workspace (the epic-central spawn shape).
@@ -431,7 +449,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const owner = await factories.createUser();
     const drive = await factories.createDrive(owner.id);
     const agentPage = await factories.createPage(drive.id, { type: 'AI_CHAT', title: 'Drive agent' });
-    const session = await spawnSession({ userId: owner.id, driveId: drive.id });
+    const session = await spawnSession({ actor: credentialActor(owner.id, null), driveId: drive.id });
     if (!session.ok) throw new Error(`spawnSession failed: ${session.reason}`);
 
     broadcasts.length = 0;
@@ -439,7 +457,7 @@ describe('conversation:created is genuinely EMITTED by every creation path (real
     const spawned = await buildSessionToolsDeps().createWorkerSession({
       conversationId: workerConversationId,
       callerConversationId: createId(),
-      ownerId: owner.id,
+      actor: credentialActor(owner.id, null),
       agentPageId: agentPage.id,
       name: 'page worker',
       workspace: session.session.id,

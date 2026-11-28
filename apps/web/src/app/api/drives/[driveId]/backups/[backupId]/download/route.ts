@@ -1,6 +1,7 @@
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { getDriveBackupDetail } from '@/services/api/drive-backup-service';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 
@@ -17,7 +18,7 @@ export async function GET(
   if (isAuthError(auth)) return auth.error;
 
   try {
-    const result = await getDriveBackupDetail(backupId, driveId, auth.userId);
+    const result = await getDriveBackupDetail(backupId, driveId, actorFromAuth(auth));
     if (!result.success || !result.detail) {
       return new Response(JSON.stringify({ error: result.error }), {
         status: result.status ?? 403,

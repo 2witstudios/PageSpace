@@ -39,7 +39,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { auth: { erro
 import { POST } from '../route';
 
 const OAUTH_REFUSAL = { error: 'OAuth tokens are not permitted for this endpoint' };
-const NO_SCOPE_PROBLEMS = { invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [] };
+const NO_SCOPE_PROBLEMS = { invalidDriveIds: [], unauthorizedRoles: [], invalidCustomRoles: [], unauthorizedCustomRoles: [], explicitRoleWithoutMembership: [] };
 
 const agentAuth = { userId: 'agent-1', tokenType: 'oauth', tokenId: 'at-1', role: 'user', tokenVersion: 7, scopes: { account: true } };
 const mint = (body: unknown = { name: 'agent key' }) =>
@@ -81,7 +81,7 @@ describe('POST /api/auth/mcp-tokens — agent bearer path', () => {
 
     it('should scope a drive-scoped key through the SAME validateDriveScopeAccess the session path uses, for the agent', async () => {
       await mint({ name: 'k', drives: [{ id: 'd1', role: 'MEMBER' }] });
-      expect(mocks.validate).toHaveBeenCalledWith([{ id: 'd1', role: 'MEMBER', customRoleId: undefined }], 'agent-1');
+      expect(mocks.validate).toHaveBeenCalledWith([expect.objectContaining({ id: 'd1', role: 'MEMBER' })], expect.objectContaining({ userId: 'agent-1' }));
       expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'agent-1', isScoped: true }));
     });
 

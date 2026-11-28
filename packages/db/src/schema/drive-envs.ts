@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, bigint, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, bigint, boolean, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -134,6 +134,26 @@ export const driveEnvs = pgTable('drive_envs', {
    */
   createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
 
+  /**
+   * D-OW-28: who this env's compute — its storage, and its published app's wakes, awake time and
+   * storage — is RECORDED under and CAPPED against on an org drive: the member who created it.
+   * NULL means the drive's lead, who is accountable for the drive: an env created before this
+   * column existed, or one whose creator left the org (`leaveOrganization` clears it). Payment
+   * still goes through `driveId` (the org pool for an org drive); this only names whose
+   * per-member cap the cost counts toward. Distinct from `createdBy`, which stays an audit record.
+   */
+  costOwnerId: text('costOwnerId').references(() => users.id, { onDelete: 'set null' }),
+
+  /**
+   * The owner's default env, "Home": the one every auto-created session (the
+   * Global Assistant's, Imago's) runs in, so a user gets ONE machine to return
+   * to instead of a fresh Sprite per conversation. Only ever true in a HOME
+   * drive, at most once per drive (partial unique index below), and set only by
+   * `ensureHomeDriveEnv` — never by a user-facing create. It does not count
+   * toward the payer's env ceiling: the ceiling meters envs made on purpose.
+   */
+  isHome: boolean('isHome').notNull().default(false),
+
   // ---------------------------------------------------------------------------
   // Sprite identity, mirroring `agent_workspaces` column for column. All
   // NULLABLE for the same reason: the row exists from the moment the env is
@@ -190,9 +210,14 @@ export const driveEnvs = pgTable('drive_envs', {
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
   driveIdIdx: index('drive_envs_drive_id_idx').on(table.driveId),
+  /** D-OW-28: a departing member's envs are found by this column and handed to the drive lead. */
+  costOwnerIdx: index('drive_envs_cost_owner_idx').on(table.costOwnerId),
 
   /** The naming exception, enforced. See the table docblock for why an env is addressed by name. */
   driveNameUnique: uniqueIndex('drive_envs_drive_name_idx').on(table.driveId, table.name),
+
+  /** At most one Home env per drive — the backstop for two first uses racing `ensureHomeEnv`. */
+  homePerDriveUnique: uniqueIndex('drive_envs_home_per_drive_idx').on(table.driveId).where(sql`${table.isHome}`),
 
   /**
    * The same "still believed live" slice the session table indexes, scanned by

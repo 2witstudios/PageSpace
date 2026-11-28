@@ -41,7 +41,7 @@ export const workspacesListHandler: CommandHandler = async (ctx, intent) => {
     }
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.workspaces.list(driveId ? { driveId } : {}));
+  const result = await callSdk(ctx, () => ctx.sdk.workspaces.list(driveId ? { driveId } : {}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderWorkspacesList(result.value));
@@ -134,7 +134,7 @@ export const workspacesExecHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(`${parsed.message}\n`);
     return EXIT_USAGE_ERROR;
   }
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.workspaces.exec({
       workspaceId: parsed.workspaceId,
       command: parsed.command,

@@ -6,11 +6,13 @@ import { startRegistration } from "@simplewebauthn/browser";
 import { motion } from "motion/react";
 import { toast } from "sonner";
 import { Fingerprint, Key, Loader2 } from "lucide-react";
-import { AuthShell, useWebAuthnSupport } from "@/components/auth";
+import { AuthLayout, useWebAuthnSupport } from "@/components/auth";
 import { Button } from "@/components/ui/button";
 import { fetchWithAuth } from "@/lib/auth/auth-fetch";
 import { isDesktopPlatform } from "@/lib/desktop-auth";
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from "@/lib/auth/url-utils";
+import { authHomePath } from "@/lib/imago/auth-home";
+import { isV3AuthEnabled } from "@/lib/imago/v3-auth-enabled";
 
 /**
  * First-run passkey enrollment. On-prem users arrive here right after their
@@ -29,7 +31,7 @@ function PasskeySetupForm() {
   const nextPath =
     rawNext && isSafeNextPath({ path: rawNext, allowedPrefixes: SIGNIN_NEXT_ALLOWED_PREFIXES })
       ? rawNext
-      : "/dashboard";
+      : authHomePath();
 
   const goNext = useCallback(() => {
     router.replace(nextPath);
@@ -92,7 +94,7 @@ function PasskeySetupForm() {
   }, [goNext]);
 
   return (
-    <AuthShell>
+    <AuthLayout>
       <motion.div
         className="mb-8 text-center"
         initial={{ opacity: 0, y: 16 }}
@@ -102,7 +104,13 @@ function PasskeySetupForm() {
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-muted">
           <Fingerprint className="h-6 w-6 text-muted-foreground" />
         </div>
-        <h1 className="text-3xl font-bold tracking-tight text-gray-900 dark:text-white">
+        <h1
+          className={
+            isV3AuthEnabled()
+              ? "text-[28px] font-bold leading-[1.15] tracking-[-0.02em] text-[oklch(0.15_0.01_220)]"
+              : "text-3xl font-bold tracking-tight text-gray-900 dark:text-white"
+          }
+        >
           Secure your account
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
@@ -149,7 +157,7 @@ function PasskeySetupForm() {
           </button>
         </div>
       )}
-    </AuthShell>
+    </AuthLayout>
   );
 }
 

@@ -124,10 +124,12 @@ export async function mockStreams(
 
 /**
  * End the deterministic live window: flush + terminate every held stream. Pair with
- * `expect.poll(() => mockStreams(request))` to know the stream was live first.
+ * `expect.poll(() => mockStreams(request))` to know the stream was live first. Answers how many
+ * held streams it released, so a spec can also prove there was nothing left to release.
  */
-export async function releaseStreams(request: APIRequestContext): Promise<void> {
-  await request.post(`${MOCK_BASE}/__release-stream`);
+export async function releaseStreams(request: APIRequestContext): Promise<number> {
+  const res = await request.post(`${MOCK_BASE}/__release-stream`);
+  return ((await res.json()) as { released: number }).released;
 }
 
 /**

@@ -10,6 +10,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { createCanvasFileViewToken } from '@/lib/canvas/file-view-token';
 import { safeParseBody } from '@/lib/validation/parse-body';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 const idSchema = z.string().regex(/^[a-zA-Z0-9_-]+$/);
 
@@ -55,7 +56,7 @@ export async function POST(request: Request) {
   const links = (await Promise.all(uniqueRefs.map(async ({ driveId, pageId }) => {
     const row = rowsById.get(pageId);
     if (!row || row.driveId !== driveId || !isFilePage(row.type as PageType)) return null;
-    if (!(await canUserViewPage(user.id, pageId))) return null;
+    if (!(await canUserViewPage(actorFromVerifiedUser(user), pageId))) return null;
 
     const token = createCanvasFileViewToken({ driveId, pageId });
     return {

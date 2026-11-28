@@ -231,6 +231,13 @@ describe('conversationRepository.createConversation', () => {
     expect(mockDb.insert).not.toHaveBeenCalled();
   });
 
+  it('Given a validated initial source, should insert its wallet atomically with the new page conversation', async () => {
+    mockSelectChain.from.mockImplementationOnce(() => mockConversationsLookup([])).mockImplementationOnce(() => mockChatMessagesLookup([]));
+    const { valuesMock } = mockInsert([{ id: 'conv-new' }]);
+    await conversationRepository.createConversation('conv-new', 'user-1', 'agent-1', { initialChosenWalletId: 'wallet-own' });
+    expect(valuesMock).toHaveBeenCalledWith(expect.objectContaining({ chosenWalletId: 'wallet-own' }));
+  });
+
   it('creates the row when no conversations row exists and no prior message conflicts', async () => {
     mockSelectChain.from
       .mockImplementationOnce(() => mockConversationsLookup([]))

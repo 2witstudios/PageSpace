@@ -3,6 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // ── Hoisted mock state ────────────────────────────────────────────────────────
 // FIFO queue of result sets; each db.select() dequeues the next set in query order.
 const resultQueue = vi.hoisted(() => [] as unknown[][]);
+// Every argument any query passed to .where(), in call order.
+const whereCalls = vi.hoisted(() => [] as unknown[]);
 
 const mockEq = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'eq', col, val })));
 const mockGte = vi.hoisted(() => vi.fn((col: unknown, val: unknown) => ({ type: 'gte', col, val })));
@@ -15,6 +17,7 @@ const mockSql = vi.hoisted(() => {
   return tag;
 });
 const mockPricesRetrieve = vi.hoisted(() => vi.fn());
+const mockReadCreditLiability = vi.hoisted(() => vi.fn());
 
 // Chainable db mock whose terminal resolves to the next queued result set.
 const makeChain = vi.hoisted(() => () => {
@@ -24,7 +27,10 @@ const makeChain = vi.hoisted(() => () => {
   chain.from = vi.fn(() => chain);
   chain.innerJoin = vi.fn(() => chain);
   chain.leftJoin = vi.fn(() => chain);
-  chain.where = vi.fn(() => chain);
+  chain.where = vi.fn((arg: unknown) => {
+    whereCalls.push(arg);
+    return chain;
+  });
   chain.groupBy = vi.fn(() => chain);
   chain.orderBy = vi.fn(() => chain);
   chain.having = vi.fn(() => chain);
@@ -52,8 +58,18 @@ vi.mock('@pagespace/db/schema/sessions', () => ({
 
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditLedger: { entryType: 'CL_ENTRY_TYPE', amountCents: 'CL_AMOUNT', chargeMillicents: 'CL_CHARGE', appliedCents: 'CL_APPLIED', realCostCents: 'CL_REAL_COST', aiUsageLogId: 'CL_AI_ID', createdAt: 'CL_CREATED', userId: 'CL_USER' },
-  creditBalances: { userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
   creditHolds: { estCents: 'CH_EST', expiresAt: 'CH_EXPIRES' },
+}));
+
+vi.mock('@pagespace/db/schema/wallets', () => ({
+  wallets: { id: 'W_ID', userId: 'CB_USER', monthlyRemainingCents: 'CB_MONTHLY', topupRemainingCents: 'CB_TOPUP', debtCents: 'CB_DEBT' },
+  isPersonalRootWallet: vi.fn(() => ({ personalRoot: true })),
+  personalRootWalletOf: vi.fn((userId: string) => ({ personalRootOf: userId })),
+}));
+
+vi.mock('@pagespace/db/schema/organizations', () => ({
+  orgSubscriptions: { orgId: 'ORG_SUB_ORG_ID', stripeSubscriptionId: 'ORG_SUB_ID', status: 'ORG_SUB_STATUS', gifted: 'ORG_SUB_GIFTED', stripeBasePriceId: 'ORG_SUB_PRICE_ID' },
+  orgSubscriptionFunding: { orgId: 'FUNDING_ORG_ID', stripeSubscriptionId: 'FUNDING_SUB_ID' },
 }));
 
 vi.mock('@pagespace/db/schema/subscriptions', () => ({
@@ -82,13 +98,16 @@ vi.mock('@pagespace/db/operators', () => ({
 }));
 
 vi.mock('@pagespace/lib/billing/credit-core', () => ({
-  computeBalanceDrift: vi.fn(),
   isNegativeMargin: vi.fn(),
 }));
 
 vi.mock('@pagespace/lib/billing/credit-pricing', () => ({
   BALANCE_DRIFT_TOLERANCE_CENTS: 100,
   NEGATIVE_MARGIN_FLOOR_BPS: 0,
+}));
+
+vi.mock('@pagespace/lib/billing/credit-liability-query', () => ({
+  readCreditLiability: mockReadCreditLiability,
 }));
 
 vi.mock('@pagespace/lib/auth/user-repository', () => ({
@@ -103,9 +122,22 @@ vi.mock('../stripe/client', () => ({
 import { stripeConfig } from '../stripe-config';
 import {
   getActiveSubscriptionsByTier,
+  getCreditLiability,
   getCreditRevenue,
   getErrorAnalytics,
 } from '../monitoring-queries';
+
+const liabilityReport = (over: Record<string, number> = {}) => ({
+  includedCreditLiabilityCents: 0,
+  personalIncludedCents: 0,
+  starterGrantIncludedCents: 0,
+  orgPoolIncludedCents: 0,
+  topupRemainingCents: 0,
+  totalLiabilityCents: 0,
+  userCount: 0,
+  orgPoolCount: 0,
+  ...over,
+});
 
 function resetQueue(...sets: unknown[][]) {
   resultQueue.length = 0;
@@ -115,6 +147,7 @@ function resetQueue(...sets: unknown[][]) {
 beforeEach(() => {
   vi.clearAllMocks();
   resultQueue.length = 0;
+  whereCalls.length = 0;
   mockSelect.mockImplementation(() => makeChain());
 });
 
@@ -125,14 +158,15 @@ describe('getActiveSubscriptionsByTier', () => {
 
     expect(mockInArray).toHaveBeenCalledWith('SUB_STATUS', ['active', 'trialing']);
     expect(mockEq).toHaveBeenCalledWith('SUB_GIFTED', false);
+    expect(mockInArray).toHaveBeenCalledWith('ORG_SUB_STATUS', ['active']);
+    expect(mockEq).toHaveBeenCalledWith('ORG_SUB_GIFTED', false);
   });
 
   it('buckets known price IDs via the static map without calling Stripe', async () => {
     resetQueue([
       { stripePriceId: stripeConfig.priceIds.pro },
       { stripePriceId: stripeConfig.priceIds.pro },
-      { stripePriceId: stripeConfig.priceIds.business },
-    ]);
+    ], [{ stripePriceId: stripeConfig.orgPriceIds.businessBase }]);
 
     const result = await getActiveSubscriptionsByTier();
 
@@ -140,28 +174,33 @@ describe('getActiveSubscriptionsByTier', () => {
     expect(result).toEqual(expect.arrayContaining([
       { tier: 'free', count: 0 },
       { tier: 'pro', count: 2 },
-      { tier: 'founder', count: 0 },
       { tier: 'business', count: 1 },
     ]));
   });
 
-  it('resolves legacy price IDs to a tier via the Stripe unit amount (H2)', async () => {
+  it('keeps personal and organization price identities in their owner boundary', async () => {
+    resetQueue([{ stripePriceId: stripeConfig.orgPriceIds.businessBase }], [{ stripePriceId: stripeConfig.priceIds.pro }]);
+    expect(await getActiveSubscriptionsByTier()).toEqual(expect.arrayContaining([
+      { tier: 'free', count: 2 }, { tier: 'pro', count: 0 }, { tier: 'business', count: 0 },
+    ]));
+  });
+
+  it('unknown prices remain unentitled even when their amount matches a paid plan', async () => {
     resetQueue([
       { stripePriceId: 'price_legacy_pro' },
       { stripePriceId: 'price_legacy_pro' },
-      { stripePriceId: stripeConfig.priceIds.founder },
-    ]);
+      { stripePriceId: 'price_retired_founder' },
+      { stripePriceId: 'price_retired_business' },
+    ], [{ stripePriceId: stripeConfig.orgPriceIds.businessBase }]);
     mockPricesRetrieve.mockResolvedValue({ unit_amount: 2999 }); // legacy $29.99 pro
 
     const result = await getActiveSubscriptionsByTier();
 
-    // One Stripe lookup per DISTINCT legacy price ID, not per subscription row.
-    expect(mockPricesRetrieve).toHaveBeenCalledTimes(1);
-    expect(mockPricesRetrieve).toHaveBeenCalledWith('price_legacy_pro');
+    expect(mockPricesRetrieve).not.toHaveBeenCalled();
     expect(result).toEqual(expect.arrayContaining([
-      { tier: 'pro', count: 2 },
-      { tier: 'founder', count: 1 },
-      { tier: 'free', count: 0 },
+      { tier: 'pro', count: 0 },
+      { tier: 'business', count: 1 },
+      { tier: 'free', count: 4 },
     ]));
   });
 
@@ -181,6 +220,7 @@ describe('getCreditRevenue', () => {
       { entryType: 'topup_purchase', cents: 500, count: 2 },
       { entryType: 'monthly_grant', cents: 1500, count: 3 },
     ]);
+    mockReadCreditLiability.mockResolvedValueOnce(liabilityReport({ includedCreditLiabilityCents: 900 }));
 
     const result = await getCreditRevenue();
 
@@ -189,8 +229,64 @@ describe('getCreditRevenue', () => {
       topupCount: 2,
       monthlyGrantCents: 1500,
       monthlyGrantCount: 3,
+      includedCreditLiabilityCents: 900,
     });
     expect(result).not.toHaveProperty('totalCents');
+  });
+
+  it('MON-7 (partial) reports included credit liability = grants outstanding on personal roots AND org pools, separate from cash and from the grant flow', async () => {
+    // Range flow: $15 granted this range. Wallets: 900 unspent on personal roots plus a
+    // 4,800 org pool. The liability is the unspent 5,700, not the flow and not top-up cash.
+    resetQueue([
+      { entryType: 'topup_purchase', cents: 2500, count: 1 },
+      { entryType: 'monthly_grant', cents: 1500, count: 1 },
+    ]);
+    mockReadCreditLiability.mockResolvedValueOnce(
+      liabilityReport({ includedCreditLiabilityCents: 5700, personalIncludedCents: 900, orgPoolIncludedCents: 4800, topupRemainingCents: 2500 }),
+    );
+
+    const result = await getCreditRevenue();
+
+    expect(result.includedCreditLiabilityCents).toBe(5700);
+    expect(result.includedCreditLiabilityCents).not.toBe(result.monthlyGrantCents);
+    expect(result.includedCreditLiabilityCents).not.toBe(result.topupCents);
+    // One read, over every wallet kind: the no-range overload (undefined, unscoped) and no
+    // personal-root filter narrows it (Review 2).
+    expect(mockReadCreditLiability).toHaveBeenCalledWith(undefined);
+    expect(whereCalls).not.toContainEqual({ personalRoot: true });
+  });
+
+  it('MON-7 (partial) reports zero liability when no wallets exist', async () => {
+    resetQueue([]);
+    mockReadCreditLiability.mockResolvedValueOnce(liabilityReport());
+    const result = await getCreditRevenue();
+    expect(result.includedCreditLiabilityCents).toBe(0);
+  });
+});
+
+describe('getCreditLiability', () => {
+  it('MON-7 (partial) carries the org pool and starter-grant parts and the total across every wallet', async () => {
+    mockReadCreditLiability.mockResolvedValueOnce(
+      liabilityReport({
+        includedCreditLiabilityCents: 6200,
+        personalIncludedCents: 1400,
+        starterGrantIncludedCents: 500,
+        orgPoolIncludedCents: 4800,
+        topupRemainingCents: 400,
+        totalLiabilityCents: 6600,
+        userCount: 2,
+        orgPoolCount: 1,
+      }),
+    );
+    expect(await getCreditLiability()).toEqual({
+      monthlyRemainingCents: 6200,
+      orgPoolMonthlyRemainingCents: 4800,
+      starterGrantRemainingCents: 500,
+      topupRemainingCents: 400,
+      totalLiabilityCents: 6600,
+      userCount: 2,
+      orgPoolCount: 1,
+    });
   });
 });
 

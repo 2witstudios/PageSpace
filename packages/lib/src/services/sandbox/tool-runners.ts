@@ -24,6 +24,7 @@
  * `resolveSandboxPath`, `truncateToBytes`) is called directly.
  */
 
+import { envInt, type EnvSource } from '../../billing/env-parse';
 import type { SubscriptionTier } from '../subscription-utils';
 import {
   SANDBOX_TIMEOUT_MS,
@@ -46,8 +47,11 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import { LocalEnvUnsupportedError } from './sandbox-host';
+import { LocalEnvGrantDeniedError } from './sandbox-client/local-env-sandbox-host';
+import { findSentinel } from './sandbox-client/stdout-sentinel';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
+import { ORG_COMPUTE_REFUSAL_MESSAGES, isOrgComputeRefusal, type ComputeCharge, type OrgComputeGateRefusal } from '../../billing/compute-charge';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -91,6 +95,11 @@ export interface SandboxActorContext {
    * for that call rather than guessed at.
    */
   turnId?: string;
+  /**
+   * SPEND-10: the automation (its stored reference, automation-attribution) this turn runs for when no person is present, so compute
+   * its tools meter (a browser session) is listed under that automation, not its creator.
+   */
+  automationRef?: string;
 }
 
 export interface SandboxQuotaDeps {
@@ -118,12 +127,25 @@ export interface SandboxBillingDeps {
    * ACQUIRED SESSION's own `driveId`/`ownerId` (drive owner when it has one,
    * else the session's own owner), never the caller's surface drive or agent
    * page. The one seam payer resolution goes through; see `sandbox-payer.ts`'s
-   * `resolveSessionPayerId` — the same rule `storageBillingTarget` applies for
-   * storage attribution.
+   * `resolveSessionPayer` — the same rule `storageBillingTarget` applies for
+   * storage attribution. An org drive's payer is the org: the charge is its POOL
+   * wallet (WAL-9), recorded under `actorId` — THE PERSON WHO CAUSES the run (the user whose
+   * chat turn or command runs, the attacher of a terminal), never the session's owner, so the
+   * per-member cap binds whoever is actually spending (WAL-2). A drive session is shared with
+   * the drive's members: charging its owner would let a member at their cap keep running in a
+   * drive-mate's session. Required, so no caller can silently default to the owner.
    */
-  resolvePayerId: (input: { driveId: string | null; ownerId: string }) => Promise<string>;
-  /** Places a flat-estimate hold for this payer before the machine run begins. */
-  gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
+  resolveCharge: (input: { driveId: string | null; ownerId: string; actorId: string }) => Promise<ComputeCharge | null>;
+  /**
+   * Places a flat-estimate hold on the charge's wallet before the machine run begins.
+   * `orgRefusal` names why an org pool refused (missing, paused, empty).
+   */
+  gate: (input: { charge: ComputeCharge }) => Promise<{
+    allowed: boolean;
+    holdId?: string;
+    reason?: string;
+    orgRefusal?: OrgComputeGateRefusal;
+  }>;
   /**
    * Settles the hold to the real active-window cost. Only called on a
    * successful run. `pageId` is the AI-tool-runner path's calling-surface
@@ -138,7 +160,8 @@ export interface SandboxBillingDeps {
    * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
-    payerId: string;
+    /** The charge the hold was placed for — settled against the same wallet. */
+    charge: ComputeCharge;
     holdId?: string;
     activeSeconds: number;
     /** The referenced agent page, for the per-agent usage-breakdown grouping — purely descriptive, never the payer source. */
@@ -364,7 +387,7 @@ export function safeLogWarn(
 // error-level line for every free-tier user hitting their own plan ceiling is
 // noise that trains the on-call to ignore this logger.
 const AUTHZ_DENY_REASONS = new Set([
-  'no_drive_access', 'insufficient_role', 'no_agent_access', 'tier_ineligible', 'kill_switch_off', 'no_machine',
+  'no_drive_access', 'insufficient_role', 'no_agent_access', 'org_policy', 'tier_ineligible', 'org_wallet_unavailable', 'org_wallet_paused', 'org_wallet_empty', 'org_lapsed', 'org_member_cap_reached', 'kill_switch_off', 'no_machine',
   'session_runtime_exceeded', 'session_limit_reached',
   // A legacy conversation that predates sessions has no working context to run
   // in — an expected refusal (not an infra fault), so it belongs here rather
@@ -387,9 +410,21 @@ export interface SandboxReconnectPrincipal {
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
+  /** WAL-9: the drive's org pays, and its pool wallet is missing, paused, or cannot cover the run. Nothing started. */
+  | 'org_wallet_unavailable'
+  | 'org_wallet_paused'
+  | 'org_wallet_empty'
+  /** SEAT-9: the drive's org is lapsed — its pool spends nothing until an Owner or Admin reactivates billing. Nothing started. */
+  | 'org_lapsed'
+  /** WAL-2: the member has used their allowance of the org pool (AI and compute share it). Nothing started. */
+  | 'org_member_cap_reached'
+  /** WAL-9: the session's drive cannot be resolved, so nobody can be billed for the run. Nothing started. */
+  | 'payer_unresolved'
   | 'no_drive_access'
   | 'insufficient_role'
   | 'no_agent_access'
+  /** POL-10: the drive's org has turned cloud sandboxes off. Nothing started. */
+  | 'org_policy'
   | 'no_machine'
   | 'session_runtime_exceeded'
   | 'credit_exhausted'
@@ -402,6 +437,14 @@ export type SandboxToolDenialReason =
   | 'path_escape'
   | 'content_too_large'
   | 'binary_content'
+  /** A copy whose source is a zero-byte file: copying it would empty the destination. */
+  | 'empty_source'
+  /** A copy whose target path is an existing directory. */
+  | 'target_is_directory'
+  /** The server's in-flight budget for large copies is used up. Nothing was copied. */
+  | 'copy_budget_exhausted'
+  /** The copy did not finish inside its time budget. Nothing was written under the target name. */
+  | 'copy_deadline_exceeded'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
@@ -476,9 +519,16 @@ export type EditFileToolResult =
 export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   kill_switch_off: 'Code execution is disabled.',
   tier_ineligible: 'Running code requires a Pro plan or above.',
+  org_wallet_unavailable: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_unavailable,
+  org_wallet_paused: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_paused,
+  org_wallet_empty: ORG_COMPUTE_REFUSAL_MESSAGES.org_wallet_empty,
+  org_lapsed: ORG_COMPUTE_REFUSAL_MESSAGES.org_lapsed,
+  org_member_cap_reached: ORG_COMPUTE_REFUSAL_MESSAGES.org_member_cap_reached,
+  payer_unresolved: "This session's drive could not be found, so there is no one to bill for the run and nothing was started.",
   no_drive_access: 'You do not have access to run code in this drive.',
   insufficient_role: 'Running code requires edit access to this drive.',
   no_agent_access: 'This agent is not permitted to run code in this drive.',
+  org_policy: "This organization doesn't allow cloud sandboxes.",
   no_machine: 'No machine is configured for this run.',
   session_runtime_exceeded:
     "This session's sandbox has been running continuously for too long. Wait for it to go idle, or switch to a different session.",
@@ -498,7 +548,15 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
   binary_content:
-    'This file is not valid UTF-8 text, so it cannot be copied byte-for-byte through this tool — decoding it would silently replace the undecodable bytes. Use bash (cp/mv) to move binary files inside the sandbox.',
+    'This file is not valid UTF-8 text, so it cannot be copied into a page as text — decoding it would silently replace the undecodable bytes. '
+    + 'To put the file itself in the drive, copy it to a new FILE page (copy_content with to.kind "new_file_page"); to move it inside the sandbox, copy it to another sandbox file or use bash (cp/mv).',
+  empty_source: 'The source file is empty, so nothing was copied — copying it would empty the destination rather than fill it.',
+  target_is_directory:
+    'The destination path is an existing directory, so nothing was copied there. Name the file itself (e.g. "exhibits/scan.pdf").',
+  copy_budget_exhausted:
+    'The server is already moving as many large files as it safely can, so nothing was copied. Wait a moment and retry.',
+  copy_deadline_exceeded:
+    'The copy did not finish in time and was stopped; nothing was written under the destination name. Retry, or copy a smaller file.',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -679,12 +737,21 @@ export async function withMachineBilling<S>(
   if (billingSession && 'deny' in billingSession) return fail(billingSession.deny);
   if (!billingSession) return run();
 
-  const payerId = await billing.resolvePayerId({
+  const charge = await billing.resolveCharge({
     driveId: billingSession.driveId,
     ownerId: billingSession.ownerId,
+    // The person whose turn runs this tool, not the session's owner: a drive session is shared.
+    actorId: ctx.userId,
   });
-  const gate = await billing.gate({ payerId });
-  if (!gate.allowed) return fail('credit_exhausted');
+  // WAL-9: a session whose drive cannot be resolved has no payer — refused, never billed to a person.
+  if (charge === null) return fail('payer_unresolved');
+  // WAL-9: an org drive's run is held on the org pool. A missing, paused or empty pool
+  // refuses here, before any machine is touched, and names the org state — it never
+  // falls back to holding on a person's wallet.
+  const gate = await billing.gate({ charge });
+  if (!gate.allowed) {
+    return fail(gate.orgRefusal !== undefined && isOrgComputeRefusal(gate.orgRefusal) ? gate.orgRefusal : 'credit_exhausted');
+  }
 
   const holdId = gate.holdId;
   const startedAt = deps.now().getTime();
@@ -694,7 +761,7 @@ export async function withMachineBilling<S>(
     if (result.success) {
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
       const settle = await billing.trackUsage({
-        payerId,
+        charge,
         holdId,
         activeSeconds,
         // Purely descriptive (which agent page this run was for) — never the
@@ -1469,6 +1536,523 @@ export async function readSandboxFileForCopy({
         durationMs,
       });
       return { success: true, path, content, bytes };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Binary copies: real files in and out of the sandbox.
+//
+// The text copy path above refuses anything that is not UTF-8 and stops at
+// MAX_WRITE_BYTES, which is right for text bound for a page and wrong for the
+// file itself. An agent asked to work on a 72 MB scanned PDF needs the PDF
+// (`pdfimages`, `tesseract`), not the 18 KB of text extraction found in it. The
+// sandbox cannot fetch the bytes itself (storage is on its egress deny list), so
+// the server pushes them in here, and pulls finished files back out the same way.
+// ---------------------------------------------------------------------------
+
+/** Default ceiling on one binary copy, in either direction. */
+export const DEFAULT_MAX_BINARY_COPY_BYTES = 250 * 1024 * 1024;
+
+/**
+ * Pure: the binary copy cap for `env` (`SANDBOX_MAX_BINARY_COPY_BYTES`). A
+ * malformed or zero override keeps the default — a typo must neither open the
+ * cap nor shut copies off.
+ */
+export function resolveMaxBinaryCopyBytes(env: EnvSource): number {
+  const value = envInt('SANDBOX_MAX_BINARY_COPY_BYTES', DEFAULT_MAX_BINARY_COPY_BYTES, env);
+  return value > 0 ? value : DEFAULT_MAX_BINARY_COPY_BYTES;
+}
+
+/**
+ * Largest file one binary copy moves, in bytes. Every byte is held in host
+ * memory on the way through (the Sprite fs API has no streamed write or ranged
+ * read), so this bounds the server, not only the sandbox.
+ */
+export const MAX_BINARY_COPY_BYTES = resolveMaxBinaryCopyBytes(process.env);
+
+/**
+ * Per-attempt ceiling for a binary transfer through the sandbox filesystem API
+ * (the driver default, 30 s, is sized for source files). A caller's `deadlineAt`
+ * clips it further: a step never gets more time than the copy has left.
+ */
+export const BINARY_COPY_TIMEOUT_MS = 90_000;
+
+/**
+ * Last-line marker the binary copy's helper commands print with their exit
+ * code. A Sprite driver answers at that line instead of waiting out the exec
+ * socket's 5-10 s close tail (see `RunCommandArgs.stdoutSentinel`); every
+ * substrate's answer is READ from it (see {@link runCopyHelper}).
+ */
+export const BINARY_COPY_SENTINEL = '__PAGESPACE_COPY_END__';
+
+/** Ceiling on the small helper commands (stat, rename, cleanup) around a transfer. */
+const BINARY_COPY_HELPER_TIMEOUT_MS = 30_000;
+
+/** Helper exit codes with a meaning of their own. */
+const EXIT_NOT_FOUND = 44;
+const EXIT_EMPTY = 45;
+const EXIT_IS_DIRECTORY = 21;
+
+/**
+ * Shell: print the size of the file named by positional arg `ref` ("$1"), on
+ * GNU (`stat -c %s`) and BSD/macOS (`stat -f %z`) alike. `-L` follows a symlink
+ * to the file it names, which is what a read returns.
+ */
+function sizeProbe(ref: string): string {
+  return `{ stat -L -c %s -- "${ref}" 2>/dev/null || stat -L -f %z -- "${ref}"; }`;
+}
+
+/** Pure: a probe's printed size, or null when the output is not one. */
+function parseProbedSize(stdout: string): number | null {
+  const text = stdout.trim();
+  return /^\d+$/.test(text) ? Number.parseInt(text, 10) : null;
+}
+
+/** Thrown when a step outlives the copy's deadline. */
+class CopyDeadlineError extends Error {
+  constructor() {
+    super('The copy ran out of time');
+    this.name = 'CopyDeadlineError';
+  }
+}
+
+/** Milliseconds left before `deadlineAt` (on the runner's clock); Infinity with no deadline. */
+function remainingMs(deps: SandboxRunDeps, deadlineAt: number | undefined): number {
+  return deadlineAt === undefined ? Number.POSITIVE_INFINITY : deadlineAt - deps.now().getTime();
+}
+
+/**
+ * Settle with `p`, or reject with {@link CopyDeadlineError} once `deadlineAt`
+ * passes — so a step that hangs past the copy's budget hands control back on
+ * time. The step itself is also given at most the remaining time (its driver
+ * timeout), so it does not run on for long after.
+ */
+function beforeDeadline<T>(p: Promise<T>, deps: SandboxRunDeps, deadlineAt: number | undefined): Promise<T> {
+  const left = remainingMs(deps, deadlineAt);
+  if (left === Number.POSITIVE_INFINITY) return p;
+  if (left <= 0) return Promise.reject(new CopyDeadlineError());
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new CopyDeadlineError()), left);
+    p.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/** A step's own timeout: its ceiling, clipped to the time the copy has left. */
+function stepTimeoutMs(ceiling: number, deps: SandboxRunDeps, deadlineAt: number | undefined): number {
+  return Math.max(1, Math.min(ceiling, remainingMs(deps, deadlineAt)));
+}
+
+export type BinaryReadForCopyResult =
+  | { success: true; path: string; content: Buffer; bytes: number }
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
+/**
+ * Run one helper script with positional data args, and return its exit code AS
+ * THE SCRIPT REPORTED IT on the sentinel line.
+ *
+ * The script runs in a subshell so its own `exit N` still reaches the `echo`.
+ * A Sprite driver honours `stdoutSentinel` (parses the line, strips it, returns
+ * its code); a local env ignores it and returns the shell's own status — which,
+ * with `echo` last, is always 0. So the line is parsed HERE whenever it is still
+ * present, and the driver's code is used only when the driver already consumed it.
+ */
+async function runCopyHelper(
+  sandbox: ExecutableSandbox,
+  script: string,
+  args: string[],
+  timeoutMs: number,
+): Promise<SandboxRunResult> {
+  const result = await sandbox.runCommand({
+    cmd: 'sh',
+    // Paths are positional DATA ("$1"...), never spliced into the script, so a
+    // file name full of shell metacharacters cannot escape into the command.
+    args: ['-c', `( ${script} ); echo "${BINARY_COPY_SENTINEL} $?"`, 'sh', ...args],
+    timeoutMs,
+    maxBytes: 4096,
+    stdoutSentinel: BINARY_COPY_SENTINEL,
+  });
+  const reported = findSentinel(result.stdout, BINARY_COPY_SENTINEL);
+  return reported ? { ...result, exitCode: reported.exitCode, stdout: reported.stdout } : result;
+}
+
+/** Best-effort removal of a temp file a failed copy left behind. Never throws. */
+async function removeTempFile(sandbox: ExecutableSandbox, tempPath: string): Promise<void> {
+  try {
+    await runCopyHelper(sandbox, 'rm -f -- "$1"', [tempPath], BINARY_COPY_HELPER_TIMEOUT_MS);
+  } catch {
+    // A stray temp file is untidy, not unsafe: it never carries the target's name.
+  }
+}
+
+/** A sibling temp path for `target` — same directory, so the rename is atomic. */
+function binaryCopyTempPath(target: string): string {
+  // globalThis.crypto (Web Crypto), not `node:crypto`: this module is reachable
+  // from client bundles, where a `node:*` import breaks the build.
+  return `${target}.pagespace-copy-${globalThis.crypto.randomUUID()}.tmp`;
+}
+
+/**
+ * Write real bytes into a sandbox file — the binary sibling of `writeSandboxFile`.
+ *
+ * Same confinement (`resolveSandboxPath`), metering (`withMachineBilling`),
+ * acquisition (`openSession`) and audit (`safeAudit`) as every other runner; it
+ * differs in what the size of what it moves demands:
+ *
+ *   - its own cap, {@link MAX_BINARY_COPY_BYTES}, instead of MAX_WRITE_BYTES;
+ *   - its own per-attempt timeout, {@link BINARY_COPY_TIMEOUT_MS}, clipped to
+ *     `deadlineAt` (the whole copy's budget) when the caller has one;
+ *   - it writes to a temp file beside the target and renames it into place, so
+ *     a transfer that times out or drops midway never leaves a truncated file
+ *     under the name the agent will open next. A failure removes the temp file,
+ *     and a target that is a directory is refused (`mv` would otherwise move the
+ *     file INTO it and report success).
+ */
+export async function writeSandboxBinaryFile({
+  path,
+  content,
+  deadlineAt,
+  ctx,
+  deps,
+}: {
+  path: string;
+  content: Uint8Array;
+  /** Epoch ms (on `deps.now`) by which the write must have answered. */
+  deadlineAt?: number;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<WriteFileToolResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `binaryWrite ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+  const bytes = content.byteLength;
+  if (bytes > MAX_BINARY_COPY_BYTES) return fail('content_too_large');
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
+
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    const tempPath = binaryCopyTempPath(resolved);
+    try {
+      const startedAt = deps.now();
+      const failWith = async (reason: SandboxToolDenialReason): Promise<{ success: false; error: string; reason: SandboxToolDenialReason }> => {
+        await removeTempFile(session.sandbox, tempPath);
+        await safeAudit(deps, ctx, {
+          code: `binaryWrite ${path} (${bytes} bytes)`,
+          exitCode: null,
+          durationMs: deps.now().getTime() - startedAt.getTime(),
+          anomaly: 'nonzero_exit',
+        });
+        return fail(reason);
+      };
+      const failureOf = (error: unknown): SandboxToolDenialReason =>
+        error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed';
+
+      try {
+        await beforeDeadline(
+          session.sandbox.writeFiles([{ path: tempPath, content }], {
+            timeoutMs: stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          }),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        return await failWith(failureOf(error));
+      }
+
+      let moved: SandboxRunResult;
+      try {
+        moved = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            `[ -d "$2" ] && exit ${EXIT_IS_DIRECTORY}; mv -f -- "$1" "$2"`,
+            [tempPath, resolved],
+            stepTimeoutMs(BINARY_COPY_HELPER_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        return await failWith(failureOf(error));
+      }
+      if (moved.exitCode === EXIT_IS_DIRECTORY) return await failWith('target_is_directory');
+      if (moved.exitCode !== 0) return await failWith('execution_failed');
+
+      await safeAudit(deps, ctx, {
+        code: `binaryWrite ${path} (${bytes} bytes)`,
+        exitCode: 0,
+        durationMs: deps.now().getTime() - startedAt.getTime(),
+      });
+      return { success: true, path, bytesWritten: bytes };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+/**
+ * Copy one sandbox file to another WITHOUT the bytes leaving the sandbox.
+ *
+ * Both ends live in the same machine, so moving them through the server (a
+ * binary read out, a binary write back) would spend twice the file's size in
+ * host memory and network for what one `cp` does. Same temp-then-rename shape
+ * (and directory-target refusal) as {@link writeSandboxBinaryFile}, in a single
+ * exec; the destination's size is echoed back as the byte count. No binary cap:
+ * nothing reaches the host.
+ */
+export async function copySandboxFile({
+  fromPath,
+  toPath,
+  deadlineAt,
+  ctx,
+  deps,
+}: {
+  fromPath: string;
+  toPath: string;
+  /** Epoch ms (on `deps.now`) by which the copy must have answered. */
+  deadlineAt?: number;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<WriteFileToolResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const source = resolveSandboxPath(fromPath);
+  const target = resolveSandboxPath(toPath);
+  if (!source || !target) {
+    await safeAudit(deps, ctx, {
+      code: `sandboxCopy ${fromPath} -> ${toPath}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
+
+  return withMachineBilling<{ path: string; bytesWritten: number }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      const audit = (exitCode: number | null, anomaly?: CodeExecutionAnomaly) =>
+        safeAudit(deps, ctx, {
+          code: `sandboxCopy ${fromPath} -> ${toPath}`,
+          exitCode,
+          durationMs: deps.now().getTime() - startedAt.getTime(),
+          ...(anomaly ? { anomaly } : {}),
+        });
+
+      // A cp/mv/probe failure removes the temp file. The temp file is a sibling of
+      // the TARGET, so it is never left inside a directory the target turned out to be.
+      const script =
+        `[ -e "$1" ] || exit ${EXIT_NOT_FOUND}; [ -s "$1" ] || exit ${EXIT_EMPTY}; ` +
+        `[ -d "$2" ] && exit ${EXIT_IS_DIRECTORY}; ` +
+        `cp -f -- "$1" "$3" && mv -f -- "$3" "$2" && ${sizeProbe('$2')} || { rm -f -- "$3"; exit 1; }`;
+      let copied: SandboxRunResult;
+      try {
+        copied = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            script,
+            [source, target, binaryCopyTempPath(target)],
+            stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        await audit(null, 'nonzero_exit');
+        return fail(error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed');
+      }
+      const refusal: Partial<Record<number, SandboxToolDenialReason>> = {
+        [EXIT_NOT_FOUND]: 'not_found',
+        [EXIT_EMPTY]: 'empty_source',
+        [EXIT_IS_DIRECTORY]: 'target_is_directory',
+      };
+      const refused = refusal[copied.exitCode];
+      if (refused) {
+        await audit(copied.exitCode, 'nonzero_exit');
+        return fail(refused);
+      }
+      const size = copied.exitCode === 0 ? parseProbedSize(copied.stdout) : null;
+      if (size === null) {
+        await audit(copied.exitCode, 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      await audit(0);
+      return { success: true, path: toPath, bytesWritten: size };
+    } finally {
+      session.release();
+    }
+  });
+}
+
+/**
+ * Read a sandbox file's real bytes, for filing them in the drive — the binary
+ * sibling of `readSandboxFileForCopy`.
+ *
+ * No UTF-8 decode and no `binary_content` refusal: the bytes are the point.
+ * Like the text copy read it skips the injection seam (the bytes never reach a
+ * model) and refuses rather than truncates.
+ *
+ * The cap is the SMALLER of the caller's `maxBytes` (the destination drive's
+ * per-file limit) and {@link MAX_BINARY_COPY_BYTES}. The file's size is probed
+ * before the read — portably, and a size that cannot be read is an error, never
+ * a skipped check — because the fs API materializes the whole file in host
+ * memory and a cap applied afterwards would already have paid for it. That size
+ * is then offered to `admit` (the caller's process-wide byte budget), which may
+ * refuse it — BETWEEN two short sessions, so a wait for budget holds no exec
+ * slot or billing hold. The read's own length is checked again: a file that grew
+ * past what was reserved is refused.
+ */
+export async function readSandboxBinaryFileForCopy({
+  path,
+  maxBytes,
+  admit,
+  deadlineAt,
+  ctx,
+  deps,
+}: {
+  path: string;
+  maxBytes: number;
+  /** Reserve `bytes` before they are read; false refuses the copy. */
+  admit?: (bytes: number) => Promise<boolean>;
+  /** Epoch ms (on `deps.now`) by which the read must have answered. */
+  deadlineAt?: number;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<BinaryReadForCopyResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `binaryRead ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+  const cap = Math.min(maxBytes, MAX_BINARY_COPY_BYTES);
+  if (remainingMs(deps, deadlineAt) <= 0) return fail('copy_deadline_exceeded');
+
+  const auditRead = (startedAt: Date, exitCode: number | null, note: string, anomaly?: CodeExecutionAnomaly) =>
+    safeAudit(deps, ctx, {
+      code: `binaryRead ${path}${note}`,
+      exitCode,
+      durationMs: deps.now().getTime() - startedAt.getTime(),
+      ...(anomaly ? { anomaly } : {}),
+    });
+
+  // 1. Probe the size in a short session of its own.
+  const probed = await withMachineBilling<{ size: number }>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+    const startedAt = deps.now();
+    try {
+      let probe: SandboxRunResult;
+      try {
+        probe = await beforeDeadline(
+          runCopyHelper(
+            session.sandbox,
+            `[ -e "$1" ] || exit ${EXIT_NOT_FOUND}; ${sizeProbe('$1')}`,
+            [resolved],
+            stepTimeoutMs(BINARY_COPY_HELPER_TIMEOUT_MS, deps, deadlineAt),
+          ),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        await auditRead(startedAt, null, '', 'nonzero_exit');
+        return fail(error instanceof CopyDeadlineError ? 'copy_deadline_exceeded' : 'execution_failed');
+      }
+      if (probe.exitCode === EXIT_NOT_FOUND) {
+        await auditRead(startedAt, probe.exitCode, '', 'nonzero_exit');
+        return fail('not_found');
+      }
+      const size = probe.exitCode === 0 ? parseProbedSize(probe.stdout) : null;
+      if (size === null) {
+        await auditRead(startedAt, probe.exitCode, ' (size unreadable)', 'nonzero_exit');
+        return fail('execution_failed');
+      }
+      if (size > cap) {
+        await auditRead(startedAt, 1, ` (${size} bytes, over cap)`);
+        return fail('content_too_large');
+      }
+      return { success: true, size };
+    } finally {
+      session.release();
+    }
+  });
+  if (!probed.success) return probed;
+  const { size } = probed;
+
+  // 2. Reserve the bytes with NO session open: a copy waiting for room in the
+  //    caller's budget holds no code-exec slot and no billing hold, and is not
+  //    billed active time for the wait.
+  if (admit && !(await admit(size))) {
+    await auditRead(deps.now(), 1, ` (${size} bytes, copy budget exhausted)`);
+    return fail('copy_budget_exhausted');
+  }
+
+  // 3. Read, under exactly what was reserved.
+  return withMachineBilling<Extract<BinaryReadForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+    const startedAt = deps.now();
+    try {
+      let buffer: Buffer | null;
+      try {
+        buffer = await beforeDeadline(
+          session.sandbox.readFileToBuffer({
+            path: resolved,
+            timeoutMs: stepTimeoutMs(BINARY_COPY_TIMEOUT_MS, deps, deadlineAt),
+          }),
+          deps,
+          deadlineAt,
+        );
+      } catch (error) {
+        await auditRead(startedAt, null, '', 'nonzero_exit');
+        if (error instanceof CopyDeadlineError) return fail('copy_deadline_exceeded');
+        // A local env's daemon refuses a file over its frame ceiling; that is a
+        // size refusal, and the agent must be told so in those words.
+        if (error instanceof LocalEnvGrantDeniedError && error.reason === 'too_large') return fail('content_too_large');
+        return fail('execution_failed');
+      }
+      if (buffer === null) {
+        await auditRead(startedAt, 1, '', 'nonzero_exit');
+        return fail('not_found');
+      }
+      const bytes = buffer.byteLength;
+      if (bytes > cap) {
+        await auditRead(startedAt, 1, ` (${bytes} bytes, over cap)`);
+        return fail('content_too_large');
+      }
+      if (bytes > size) {
+        // It grew between the probe and the read: more than was reserved.
+        await auditRead(startedAt, 1, ` (${bytes} bytes, grew past the ${size} probed)`);
+        return fail('execution_failed');
+      }
+
+      await auditRead(startedAt, 0, ` (${bytes} bytes)`);
+      return { success: true, path, content: buffer, bytes };
     } finally {
       session.release();
     }

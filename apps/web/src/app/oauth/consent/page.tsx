@@ -9,6 +9,11 @@ import { getRegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { describeScopeForConsent } from '@pagespace/lib/auth/oauth/consent';
 import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import { sessionRepository } from '@/lib/repositories/session-repository';
+import { AuthLayout } from '@/components/auth/AuthLayout';
+import { ConsentScopeCard } from '@/components/auth/ConsentScopeCard';
+import { V3_BODY, V3_HEADING } from '@/components/auth/auth-v3-styles';
+import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
+import { getViewerDisplayName } from '@/lib/auth/viewer-display-name';
 import { ConsentActions } from './ConsentActions';
 
 interface ConsentPageProps {
@@ -62,15 +67,27 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
   const client = authorizeParams.clientId ? getRegisteredClient(authorizeParams.clientId) : null;
   const result = validateAuthorizeRequest(authorizeParams, client);
 
+  const v3 = isV3AuthEnabled();
+  const signedInAs = v3 ? await getViewerDisplayName(session.userId) : undefined;
+  const frame = signedInAs ? { signedInAs } : {};
+
   if (!result.ok) {
     if (result.kind === 'no_redirect') {
+      const message = result.error === 'invalid_client' ? 'Unknown client.' : 'Invalid or unregistered redirect_uri.';
       return (
-        <div className="mx-auto max-w-md py-16 text-center">
-          <h1 className="text-xl font-semibold">Authorization error</h1>
-          <p className="mt-2 text-muted-foreground">
-            {result.error === 'invalid_client' ? 'Unknown client.' : 'Invalid or unregistered redirect_uri.'}
-          </p>
-        </div>
+        <AuthLayout classic="bare" {...frame}>
+          {v3 ? (
+            <div>
+              <h1 className={V3_HEADING}>Authorization error</h1>
+              <p className={V3_BODY}>{message}</p>
+            </div>
+          ) : (
+            <div className="mx-auto max-w-md py-16 text-center">
+              <h1 className="text-xl font-semibold">Authorization error</h1>
+              <p className="mt-2 text-muted-foreground">{message}</p>
+            </div>
+          )}
+        </AuthLayout>
       );
     }
     // Defense in depth: /api/oauth/authorize should already have redirected
@@ -157,36 +174,28 @@ export default async function ConsentPage({ searchParams }: ConsentPageProps) {
     }
   }
 
+  const title =
+    updateKeyName !== null
+      ? `${result.client.name} wants to update the key "${updateKeyName}"`
+      : activateKeyName !== null
+        ? `${result.client.name} wants to make "${activateKeyName}" its active key`
+        : `${result.client.name} is requesting access`;
+
   return (
-    <div className="mx-auto max-w-md py-16">
-      <h1 className="text-xl font-semibold">
-        {updateKeyName !== null
-          ? `${result.client.name} wants to update the key "${updateKeyName}"`
-          : activateKeyName !== null
-            ? `${result.client.name} wants to make "${activateKeyName}" its active key`
-            : `${result.client.name} is requesting access`}
-        {result.client.firstParty && (
-          <span className="ml-2 rounded bg-muted px-2 py-0.5 text-xs font-normal text-muted-foreground">
-            Built by PageSpace
-          </span>
-        )}
-      </h1>
-      <ul className="mt-6 space-y-3 text-sm">
-        {scopeDescriptions.map((text, i) => (
-          <li key={i} className="rounded border p-3">
-            {text}
-          </li>
-        ))}
-      </ul>
-      <ConsentActions
-        clientId={authorizeParams.clientId!}
-        redirectUri={result.redirectUri}
-        responseType={authorizeParams.responseType!}
-        codeChallenge={result.codeChallenge}
-        codeChallengeMethod={authorizeParams.codeChallengeMethod!}
-        scope={authorizeParams.scope!}
-        state={result.state}
-      />
-    </div>
+    <AuthLayout classic="bare" {...frame}>
+      <div className={v3 ? undefined : 'mx-auto max-w-md py-16'}>
+        <ConsentScopeCard title={title} firstParty={result.client.firstParty} scopeDescriptions={scopeDescriptions}>
+          <ConsentActions
+            clientId={authorizeParams.clientId!}
+            redirectUri={result.redirectUri}
+            responseType={authorizeParams.responseType!}
+            codeChallenge={result.codeChallenge}
+            codeChallengeMethod={authorizeParams.codeChallengeMethod!}
+            scope={authorizeParams.scope!}
+            state={result.state}
+          />
+        </ConsentScopeCard>
+      </div>
+    </AuthLayout>
   );
 }

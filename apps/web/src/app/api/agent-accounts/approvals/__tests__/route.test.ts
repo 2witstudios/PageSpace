@@ -21,6 +21,7 @@ vi.mock('@/lib/agent-accounts/account-authority-client', () => ({ getAccountAuth
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const DIGEST = 'a'.repeat(64);
 const request = (payload: unknown) => new Request('http://localhost/api/agent-accounts/approvals', { method: 'POST', body: JSON.stringify(payload) });
@@ -35,7 +36,7 @@ describe('POST /api/agent-accounts/approvals', () => {
     mockAuthority.approveRequest.mockResolvedValue({ ok: true, approvalId: 'appr_1', expiresAt: 5 });
     const response = await POST(request({ accountId: 'acct_1', requestDigest: DIGEST }));
     const actual = { status: response.status, call: mockAuthority.approveRequest.mock.calls[0]?.[0] };
-    const expected = { status: 201, call: { actorUserId: 'user_1', sessionId: 'sess_live', accountId: 'acct_1', requestDigest: DIGEST } };
+    const expected = { status: 201, call: { actor: credentialActor('user_1', null), sessionId: 'sess_live', accountId: 'acct_1', requestDigest: DIGEST } };
     expect(actual).toEqual(expected);
   });
 

@@ -36,6 +36,7 @@ vi.mock('@pagespace/db/schema/calendar-triggers', () => ({
 }));
 // timestamp-utils is pure; the real parser is used rather than a partial stub.
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
   isDriveOwnerOrAdmin: vi.fn(),
 }));

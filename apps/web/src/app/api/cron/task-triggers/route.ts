@@ -6,8 +6,10 @@ import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { taskItems } from '@pagespace/db/schema/tasks';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 import { executeWorkflow, type WorkflowExecutionInput, type WorkflowExecutionResult } from '@/lib/workflows/workflow-executor';
+import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { audit } from '@pagespace/lib/audit/audit-log';
+import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 
 const MAX_CONCURRENT_TRIGGERS = 5;
 const MAX_DUE_TRIGGERS = 50;
@@ -142,11 +144,23 @@ export async function POST(req: Request) {
             }
           }
 
+          // [D-OW-36] Nothing runs under a missing person: an owner-left workflow retires the one-shot
+          // trigger with the reason, before any gate or hold.
+          const owner = automationRunOwner(workflow);
+          if (!owner.runs) {
+            await db.update(taskTriggers).set({
+              isEnabled: false,
+              lastFireError: owner.error,
+            }).where(eq(taskTriggers.id, trigger.id));
+            const skippedResult: WorkflowExecutionResult = { success: false, skipped: true, durationMs: 0, error: owner.error };
+            return { trigger, result: skippedResult };
+          }
+
           const input: WorkflowExecutionInput = {
             workflowId: workflow.id,
             workflowName: workflow.name,
             driveId: workflow.driveId,
-            createdBy: workflow.createdBy,
+            createdBy: owner.ownerId,
             agentPageId: workflow.agentPageId,
             prompt: workflow.prompt,
             contextPageIds: (workflow.contextPageIds as string[] | null) ?? [],
@@ -154,10 +168,6 @@ export async function POST(req: Request) {
             timezone: workflow.timezone,
             source: { table: 'taskTriggers', id: trigger.id, triggerAt: trigger.nextRunAt },
             taskContext: { taskItemId: trigger.taskItemId, triggerType: trigger.triggerType },
-            // executeWorkflow gates credit on createdBy. A due-date fire is
-            // bounded by its schedule, so it skips the daily cap; a completion
-            // retry keeps it, the same policy as its first fire (user-paced).
-            creditGate: trigger.triggerType === 'due_date' ? { skipDailyCap: true } : {},
           };
 
           // The credit gate runs inside the executor's run claim, on the owner
@@ -165,7 +175,12 @@ export async function POST(req: Request) {
           // back `skipped` (recorded as a cancelled run with the reason); the
           // one-shot trigger is retired with that reason just below, like any
           // other fire. A retryable one gave its claim back and is re-armed.
-          const result = await executeWorkflow(input);
+          // A due-date fire is bounded by its schedule, so it skips the daily
+          // cap ('scheduled'); a completion retry keeps it, the same mode as its
+          // first fire ('user-paced').
+          const result = await executeWorkflow(input, {
+            admit: creditAdmission(input, trigger.triggerType === 'due_date' ? 'scheduled' : 'user-paced'),
+          });
 
           if (result.retryable) {
             // A retryable unstarted run (transient refusal, or the gate threw)

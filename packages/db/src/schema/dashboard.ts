@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, jsonb, boolean, index, pgEnum } from 'drizzle-orm/pg-core';
-import { relations } from 'drizzle-orm';
+import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
 import { createId } from '@paralleldrive/cuid2';
 
@@ -87,6 +87,10 @@ export const pulseSummaries = pgTable('pulse_summaries', {
       events: { title: string; startAt: string }[];
     };
   }>(),
+
+  // SEC-2/3 (D-OW-62): the orgs whose drives fed this summary (personal drives feed none). A reader is served the
+  // summary only through a credential every one of these orgs' sign-in policy admits.
+  orgIds: text('orgIds').array().notNull().default(sql`ARRAY[]::text[]`),
 
   // AI generation metadata
   aiProvider: text('aiProvider'),

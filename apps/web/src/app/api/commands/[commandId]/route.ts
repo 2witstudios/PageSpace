@@ -1,3 +1,4 @@
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth/principal-permissions';
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db';
 import { and, eq, ne } from '@pagespace/db/operators';
@@ -8,7 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket/socket-utils';
-import { isDriveOwnerOrAdmin } from '@pagespace/lib/permissions/permissions';
+
 import {
   validateCommandTrigger,
   validateCommandDescription,
@@ -20,6 +21,7 @@ import {
   isUniqueViolation,
   validateEntryPage,
 } from '../command-route-helpers';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 type RouteContext = { params: Promise<{ commandId: string }> };
 
@@ -51,12 +53,12 @@ async function loadCommandForManage(
   const scopeError = checkMCPDriveScope(auth, command.driveId as string);
   if (scopeError) return { error: scopeError };
 
-  const allowed = await isDriveOwnerOrAdmin(userId, command.driveId as string);
+  const allowed = await isPrincipalDriveOwnerOrAdmin(auth, command.driveId as string);
   if (!allowed) {
     return {
-      error: NextResponse.json(
+      error: await deniedResponse(actorFromAuth(auth), command.driveId, NextResponse.json(
         { error: 'Only the drive owner or admins can manage drive commands' },
-        { status: 403 }
+        { status: 403 })
       ),
     };
   }

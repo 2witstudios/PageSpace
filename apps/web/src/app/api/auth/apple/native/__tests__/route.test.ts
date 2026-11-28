@@ -128,7 +128,7 @@ vi.mock('@/lib/auth/native-invite-acceptance', () => ({
     kind: null,
     invitedDriveId: null,
     invitedPageId: null,
-    connectionId: null,
+    connectionId: null, invitedOrgId: null, orgLandingPath: null,
   }),
   consumeAllInvitesForEmail: vi.fn().mockResolvedValue({
     drivesAccepted: 0,
@@ -520,12 +520,13 @@ describe('POST /api/auth/apple/native', () => {
       expect(body.error).toBe('Session creation failed');
     });
 
-    it('creates session with correct params', async () => {
+    it('SEC-2 (partial) creates session with correct params, including Apple single-factor evidence (D-OW-45)', async () => {
       vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
 
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -541,6 +542,7 @@ describe('POST /api/auth/apple/native', () => {
       await POST(createNativeRequest(validPayload));
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: 'new-user-id',
         type: 'user',
         scopes: ['*'],
@@ -552,10 +554,11 @@ describe('POST /api/auth/apple/native', () => {
   });
 
   describe('device token creation', () => {
-    it('creates device token with correct parameters', async () => {
+    it('SEC-2 (partial) creates device token with correct parameters, carrying the same Apple evidence (D-OW-45)', async () => {
       await POST(createNativeRequest(validPayload));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -575,6 +578,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -593,6 +597,7 @@ describe('POST /api/auth/apple/native', () => {
       }));
 
       expect(validateOrCreateDeviceToken).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         providedDeviceToken: undefined,
         userId: 'new-user-id',
         deviceId: 'device-123',
@@ -757,7 +762,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'drive',
         invitedDriveId: 'drive-from-invite',
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_xyz' }));
@@ -774,7 +779,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: null,
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
         inviteError: 'TOKEN_CONSUMED',
       });
 
@@ -798,7 +803,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'page',
         invitedDriveId: 'drv_1',
         invitedPageId: 'page_1',
-        connectionId: null,
+        connectionId: null, invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_p' }));
@@ -814,7 +819,7 @@ describe('POST /api/auth/apple/native', () => {
         kind: 'connection',
         invitedDriveId: null,
         invitedPageId: null,
-        connectionId: 'conn_1',
+        connectionId: 'conn_1', invitedOrgId: null, orgLandingPath: null,
       });
 
       const response = await POST(createNativeRequest({ ...validPayload, inviteToken: 'ps_invite_c' }));

@@ -47,6 +47,10 @@ export function buildPreviewResponseHeaders(csp: string): Readonly<Record<string
 
   return Object.freeze({
     'Content-Type': 'text/html; charset=utf-8',
+    // The dashboard is COEP credentialless. A response-sandboxed preview has
+    // an opaque origin and must carry the same embedder policy to load inside
+    // that parent. Keep both CSP sandboxes and their origin isolation intact.
+    'Cross-Origin-Embedder-Policy': 'credentialless',
     // The author's policy verbatim, plus the two directives that must differ from
     // the published artifact:
     //

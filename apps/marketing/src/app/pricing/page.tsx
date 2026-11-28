@@ -4,21 +4,38 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { creditsPhrase } from "@/lib/credits";
+import { creditsPhrase, formatDollars, planFacts, type PlanFacts } from "@/lib/credits";
 import {
   TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
+  STORAGE_ADDON,
   formatTierBytes,
+  tierAllowsStorageAddon,
   type SubscriptionTier,
 } from "@pagespace/lib/billing/subscription-tiers";
+import { centsFromDollars } from "@pagespace/lib/billing/money-model";
 import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibility";
 
 export const metadata = pageMetadata.pricing;
 
+// Extra storage on paid plans, from the one add-on table (blocks never change the per-file limit).
+const STORAGE_ADDON_PHRASE = `Add ${formatTierBytes(STORAGE_ADDON.blockBytes, " ")} for ${formatDollars(centsFromDollars(STORAGE_ADDON.priceMonthlyUsd))}/month`;
+
+/**
+ * MON-2 / D-OW-17: this page prerenders once at `next build` time (inside the
+ * Docker builder stage) and serves that static HTML. `creditsPhrase` /
+ * `includedCreditsPhrase` derive from money-model's ratio, a literal in the
+ * shared source with no runtime switch, so a static, unrevalidated prerender is
+ * correct by construction: nothing at runtime could disagree with it.
+ */
+
 interface Plan {
-  name: string;
-  price: string;
-  period?: string;
+  /**
+   * MON-6 / SEAT-2: price, included credits, the top-up rate, and the org plan's
+   * seat terms — every number from the tier table and money-model via planFacts,
+   * the same source the in-app PlanCard reads.
+   */
+  facts: PlanFacts;
   description: string;
   cta: string;
   ctaVariant: "default" | "outline";
@@ -36,8 +53,8 @@ interface Plan {
   };
 }
 
-// Storage/credit numbers derive from the canonical TIER_PLAN_LIMITS table (the
-// same table apps/web and enforcement use) so pricing copy can never drift.
+// Price and credit facts come from planFacts (money-model); storage from the
+// canonical TIER_PLAN_LIMITS table. No number on this page is typed in by hand.
 const PLAN_COPY: Record<
   SubscriptionTier,
   Pick<Plan, "description" | "cta" | "ctaVariant" | "highlight"> & { models: string; prioritySupport: boolean }
@@ -57,16 +74,9 @@ const PLAN_COPY: Record<
     models: "Standard + Pro",
     prioritySupport: true,
   },
-  founder: {
-    description: "Serious AI capability for power users and small teams, sandbox included",
-    cta: "Upgrade to Founder",
-    ctaVariant: "outline",
-    models: "Standard + Pro",
-    prioritySupport: true,
-  },
   business: {
-    description: "Maximum capacity, priority support, and sandbox access for the whole team",
-    cta: "Upgrade to Business",
+    description: "For teams: an organization with seats, a shared credit pool, org-owned drives, and sandbox access for everyone",
+    cta: "Start an organization",
     ctaVariant: "outline",
     models: "Standard + Pro",
     prioritySupport: true,
@@ -77,9 +87,7 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
   const limits = TIER_PLAN_LIMITS[tier];
   const copy = PLAN_COPY[tier];
   return {
-    name: limits.name,
-    price: limits.priceMonthlyUsd === 0 ? "$0" : `$${limits.priceMonthlyUsd}`,
-    period: limits.priceMonthlyUsd === 0 ? undefined : "/month",
+    facts: planFacts(tier),
     description: copy.description,
     cta: copy.cta,
     ctaVariant: copy.ctaVariant,
@@ -134,10 +142,12 @@ export default function PricingPage() {
       {/* Pricing Cards */}
       <section className="pb-16 md:pb-24">
         <div className="container mx-auto px-4 md:px-6">
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-7xl mx-auto">
+          <div className="grid gap-6 lg:grid-cols-3 max-w-6xl mx-auto">
             {plans.map((plan) => (
               <div
-                key={plan.name}
+                key={plan.facts.tier}
+                data-testid="plan-card"
+                data-tier={plan.facts.tier}
                 className={`rounded-2xl border p-6 flex flex-col ${
                   plan.highlight
                     ? "border-primary bg-primary/5 relative"
@@ -149,34 +159,46 @@ export default function PricingPage() {
                     Most Popular
                   </div>
                 )}
-                <div className="mb-6">
-                  <h3 className="text-xl font-semibold mb-2">{plan.name}</h3>
-                  <div className="flex items-baseline gap-1 mb-2">
-                    <span className="text-4xl font-bold">{plan.price}</span>
-                    {plan.period && (
-                      <span className="text-muted-foreground">{plan.period}</span>
+                <div>
+                  <h3 className="text-lg font-semibold">{plan.facts.name}</h3>
+                  <div className="flex items-baseline gap-1 mt-2">
+                    <span className="text-4xl font-bold tracking-tight" data-testid="plan-price">{plan.facts.price}</span>
+                    {plan.facts.period && (
+                      <span className="text-muted-foreground" data-testid="plan-period">{plan.facts.period}</span>
                     )}
                   </div>
-                  <p className="text-sm text-muted-foreground">{plan.description}</p>
+                  <p className="text-sm text-muted-foreground mt-3 min-h-[2.5rem]">{plan.description}</p>
                 </div>
 
-                <div className="space-y-4 flex-1">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Storage</span>
-                      <span className="font-medium">{plan.features.storage}</span>
+                <div className="flex-1 space-y-6 mt-6">
+                  {/* MON-6: price (above), included credits, and the top-up rate are three separate facts. */}
+                  <dl className="divide-y divide-border rounded-xl border border-border text-sm">
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Included</dt>
+                      <dd className="font-medium text-right" data-testid="plan-included-credits">{plan.facts.includedCredits}</dd>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Credits</span>
-                      <span className="font-medium">{plan.features.monthlyCredits}</span>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Top up</dt>
+                      <dd className="font-medium text-right" data-testid="plan-topup-rate">{plan.facts.topUpRate}</dd>
                     </div>
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="text-muted-foreground">Models</span>
-                      <span className="font-medium">{plan.features.models}</span>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Storage</dt>
+                      <dd className="font-medium text-right">
+                        {plan.features.storage}
+                        {tierAllowsStorageAddon(plan.facts.tier) && (
+                          <span className="block text-xs font-normal text-muted-foreground" data-testid="plan-storage-addon">
+                            {STORAGE_ADDON_PHRASE}
+                          </span>
+                        )}
+                      </dd>
                     </div>
-                  </div>
+                    <div className="flex items-start justify-between gap-4 px-4 py-3">
+                      <dt className="text-muted-foreground shrink-0">Models</dt>
+                      <dd className="font-medium text-right">{plan.features.models}</dd>
+                    </div>
+                  </dl>
 
-                  <div className="border-t border-border pt-4 space-y-2">
+                  <ul className="space-y-2.5 text-sm">
                     {[
                       { key: "sandbox", label: "Cloud sandbox — run code, use a terminal", value: plan.features.sandbox },
                       { key: "buyMore", label: "Buy more credits anytime", value: plan.features.buyMore },
@@ -184,18 +206,39 @@ export default function PricingPage() {
                       { key: "hierarchicalAgents", label: "Hierarchical AI agents", value: plan.features.hierarchicalAgents },
                       { key: "prioritySupport", label: "Priority support", value: plan.features.prioritySupport },
                     ].map((feature) => (
-                      <div key={feature.key} className="flex items-center gap-2 text-sm">
+                      <li key={feature.key} className="flex items-start gap-2.5">
                         {feature.value ? (
-                          <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
+                          <Check className="h-4 w-4 mt-0.5 text-green-500 flex-shrink-0" />
                         ) : (
-                          <X className="h-4 w-4 text-muted-foreground/50 flex-shrink-0" />
+                          <X className="h-4 w-4 mt-0.5 text-muted-foreground/50 flex-shrink-0" />
                         )}
                         <span className={feature.value ? "" : "text-muted-foreground/50"}>
                           {feature.label}
                         </span>
-                      </div>
+                      </li>
                     ))}
-                  </div>
+                  </ul>
+
+                  {/* SEAT-2: Business is the org plan; A-7 / D-OW-30: no org trial, card at checkout. */}
+                  {plan.facts.org && (
+                    <div className="rounded-xl bg-muted/60 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-3">Team terms</p>
+                      <dl className="space-y-3 text-sm">
+                        <div>
+                          <dt className="text-muted-foreground">Seats</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-seats">{plan.facts.org.seatTerms}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-muted-foreground">Extra seat credits</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-seat-credits">{plan.facts.org.extraSeatCredits}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-muted-foreground">Checkout</dt>
+                          <dd className="font-medium mt-0.5" data-testid="plan-checkout">{plan.facts.org.checkout}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  )}
                 </div>
 
                 <Button
@@ -203,7 +246,7 @@ export default function PricingPage() {
                   variant={plan.ctaVariant}
                   asChild
                 >
-                  <a href={`${APP_URL}/auth/signup`}>{plan.cta}</a>
+                  <a href={`${APP_URL}/auth/signup`} data-testid="plan-cta">{plan.cta}</a>
                 </Button>
               </div>
             ))}
@@ -223,12 +266,12 @@ export default function PricingPage() {
                   <th className="text-left p-4 border-b border-border font-medium">Feature</th>
                   {plans.map((plan) => (
                     <th
-                      key={plan.name}
+                      key={plan.facts.tier}
                       className={`text-center p-4 border-b font-medium ${
                         plan.highlight ? "bg-primary/5 border-primary/20" : "border-border"
                       }`}
                     >
-                      {plan.name}
+                      {plan.facts.name}
                     </th>
                   ))}
                 </tr>
@@ -252,7 +295,7 @@ export default function PricingPage() {
                       const value = plan.features[row.key as keyof typeof plan.features];
                       return (
                         <td
-                          key={plan.name}
+                          key={plan.facts.tier}
                           className={`text-center p-4 border-b ${
                             plan.highlight ? "bg-primary/5 border-primary/20" : "border-border"
                           }`}

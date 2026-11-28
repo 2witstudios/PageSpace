@@ -9,6 +9,7 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { authenticateRequestWithOptions, isAuthError, canManagePageWebhooks } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -63,7 +64,7 @@ export async function GET(request: Request, context: { params: Promise<{ pageId:
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     const scope = await findWebhookWithDrive(pageId, id);
@@ -94,7 +95,7 @@ export async function POST(request: Request, context: { params: Promise<{ pageId
 
     const canManage = await canManagePageWebhooks(auth, pageId);
     if (!canManage) {
-      return NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({ error: 'Only the drive owner or an admin can manage page webhooks' }, { status: 403 }));
     }
 
     let body: unknown;

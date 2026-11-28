@@ -80,6 +80,9 @@ vi.mock('@/lib/auth', () => ({
   // the route passes the scope ceiling into the Home-drive hint.
   getAllowedDriveIds: vi.fn(() => []),
   authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
+  // The turn's tool selection reads this; a session principal is never
+  // drive-scoped, so the account-level tools stay advertised.
+  isDriveScopedPrincipal: vi.fn(() => false),
 }));
 
 vi.mock('@/lib/ai/core/stream-takeover', () => ({
@@ -356,6 +359,7 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForSandboxTier: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAllowlist: vi.fn((tools: unknown) => tools),
   filterToolsForAgentAccounts: vi.fn((tools: unknown) => tools),
+  filterToolsForMcpScope: vi.fn((tools: unknown) => tools),
   filterToolsForReadOnly: vi.fn().mockReturnValue({}),
   filterToolsForWebSearch: vi.fn().mockReturnValue({}),
   filterToolsForImageGen: vi.fn((t) => t),
@@ -470,6 +474,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
   DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 
@@ -502,6 +508,7 @@ vi.mock('@/lib/ai/core/compaction/prepare-context', () => ({
 }));
 
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
 import { MAX_BROWSER_SESSION_ID_LENGTH } from '@/lib/ai/core/browser-session-id-validation';
@@ -598,6 +605,18 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       channel: makeFakeChannel(),
       finish: mockLifecycleFinish,
       getParts: vi.fn().mockResolvedValue([]),
+    });
+  });
+
+  describe('content blocklist', () => {
+    it('given the user-message save refuses a blocklisted attachment, should return the neutral 422 and never reach the model', async () => {
+      mockSaveGlobalAssistantMessageToDatabase.mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+      const response = await POST(makeRequest(), makeContext());
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ error: "This file can't be uploaded" });
+      expect(streamText).not.toHaveBeenCalled();
     });
   });
 
@@ -811,7 +830,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
   const newConv = {
     id: 'conv-1', userId: 'user-1', title: null, type: 'global',
     contextId: null, isActive: true, isShared: false,
-  agentPageId: null, rev: 0, planPageId: null,
+  agentPageId: null, chosenWalletId: null, rev: 0, planPageId: null,
     createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-01-01'), lastMessageAt: null,
   };
 
@@ -866,7 +885,7 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }) })
       );
     });
 
@@ -1214,6 +1233,44 @@ describe('POST /api/ai/global/[id]/messages — lifecycle handoff', () => {
       expect(settled.outputTokens).toBe(50);
       expect(settled.providerCostDollars).toBeCloseTo(0.0025, 9);
       expect(settled.metadata).toMatchObject({ abortedStep: { inputTokens: 1000, outputTokens: 50, capped: false } });
+    });
+  });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest(), makeContext());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      // Conditional steps (drive prompt, page tree, drive summary, MCP drive access) may be
+      // absent for this fixture (this file does not mock the integration resolver, so
+      // `integrations_ready` is skipped by its caught failure); the rest must appear, each after the step it follows.
+      const inOrder = [
+        'credit_gate',
+        'provider_ready',
+        'history_loaded',
+        'history_converted',
+        // The payer's eligibility first, then the context the shared
+        // assistant-surface builder assembles (IMG-10.10).
+        'sandbox_eligibility',
+        'personalization',
+        'home_drive_resolved',
+        'agent_awareness_built',
+        'commands_loaded',
+        'active_plan_loaded',
+        'system_prompt',
+        'integrations_import',
+        'history_compacted',
+        'model_messages_built',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ];
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
     });
   });
 });

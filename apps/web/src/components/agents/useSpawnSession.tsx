@@ -20,6 +20,7 @@ import { useDriveEnvs, driveEnvsKey } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure } from '@/hooks/drive-envs/drive-env-writes';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
+import { isHomeDrive } from '@pagespace/lib/services/drive-guards';
 import { useEditingSession } from '@/stores/useEditingSession';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { MAX_DRIVE_ENV_LABEL_LENGTH, MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
@@ -150,14 +151,26 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const flowToken = useRef(0);
 
   const spawn = useCallback(
-    async (input: { driveId: string | null; envId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
+    async (input: {
+      driveId: string | null;
+      /**
+       * `undefined` OMITS the field — "no opinion", which the route answers
+       * with its own default (the agent's env, or Home). `null` is the explicit
+       * ephemeral choice ("New sandbox"). The two are different requests.
+       */
+      envId: string | null | undefined;
+      agentPageId: string | null;
+      kind: SpawnKind;
+      name: string;
+    }) => {
       if (spawning) return;
       setSpawning(true);
+      const envField = input.envId === undefined ? {} : { envId: input.envId };
       try {
         if (input.kind === 'shell') {
           const created = await post<{ session: { workspaceId: string }; shellId: string; shellName: string }>(
             '/api/agent-workspaces',
-            { driveId: input.driveId, envId: input.envId, firstThing: 'shell', name: input.name },
+            { driveId: input.driveId, ...envField, firstThing: 'shell', name: input.name },
           );
           setSpawnTarget(null);
           setSpawnPick(null);
@@ -174,7 +187,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         }
         const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
           '/api/agent-workspaces',
-          { driveId: input.driveId, envId: input.envId, agentPageId: input.agentPageId, name: input.name },
+          { driveId: input.driveId, ...envField, agentPageId: input.agentPageId, name: input.name },
         );
         setSpawnTarget(null);
         setSpawnPick(null);
@@ -229,20 +242,38 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
     setNewEnvFrom(null);
   }, []);
 
+  /**
+   * The user's Home drive, from the drive store — where an Assistant spawn
+   * (opened with no drive) finds the environments it may run in. Null when the
+   * store has not loaded it; the spawn then omits `envId` and the server's own
+   * Home default applies.
+   */
+  const homeDriveId = useDriveStore(
+    (state) => state.drives.find((drive) => isHomeDrive(drive) && !drive.isTrashed && drive.isOwned !== false)?.id ?? null,
+  );
+  /** An Assistant spawn — the one opening with no drive — whose environments are Home's. */
+  const isAssistantInHome = spawnTarget?.driveId === null;
+  /** The drive whose environments the palette offers: the target's, or Home's for an Assistant spawn. */
+  const envsDriveId = spawnTarget ? (spawnTarget.driveId ?? homeDriveId) : null;
+
   const handleSubmitName = useCallback(
     (name: string) => {
       if (!spawnTarget || !spawnPick) return;
+      const envId = spawnPick.envId;
       void spawn({
-        driveId: spawnTarget.driveId,
-        // `undefined` (the step was skipped because the drive has none) and
-        // `null` (the user chose ephemeral) mean the same thing to the server.
-        envId: spawnPick.envId ?? null,
+        // An env is always IN a drive, and a driveless spawn may not name one:
+        // an Assistant spawn into one of Home's envs carries the Home drive.
+        driveId: spawnTarget.driveId ?? (typeof envId === 'string' ? envsDriveId : null),
+        // `undefined` — the step never asked (nothing to choose, or the listing
+        // failed for an Assistant spawn) — is OMITTED, so the server applies
+        // its default; `null` is the user's explicit ephemeral choice.
+        envId,
         agentPageId: spawnPick.agentPageId,
         kind: spawnPick.kind,
         name,
       });
     },
-    [spawn, spawnTarget, spawnPick],
+    [spawn, spawnTarget, spawnPick, envsDriveId],
   );
 
   // The targeted drive's environments — ONE fetch, keyed on whichever drive the
@@ -260,7 +291,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
     isLoading: paletteEnvsLoading,
     error: paletteEnvsError,
     mutate: retryPaletteEnvs,
-  } = useDriveEnvs(spawnTarget?.driveId ?? null);
+  } = useDriveEnvs(envsDriveId);
 
   const paletteAgents = useMemo(
     () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
@@ -426,6 +457,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       envs={paletteEnvs}
       envsLoading={paletteEnvsLoading}
       envsError={paletteEnvsError}
+      envsErrorSkipsStep={isAssistantInHome}
       onRetryEnvs={retryPaletteEnvs}
       canRunSandbox={canRunSandbox}
       canCreateEnv={canCreateEnv}
@@ -485,6 +517,7 @@ function SpawnSessionPalette({
   envs,
   envsLoading,
   envsError,
+  envsErrorSkipsStep,
   onRetryEnvs,
   canRunSandbox,
   canCreateEnv,
@@ -524,6 +557,13 @@ function SpawnSessionPalette({
    * for the same reason loading did.
    */
   envsError: unknown;
+  /**
+   * A failed listing goes straight on to naming (with `envId` left unset, so
+   * the server picks) instead of stopping on the error step. True for the
+   * Assistant spawn, whose question is about Home's envs — a question the
+   * server answers with Home anyway, so a failed read is no reason to block.
+   */
+  envsErrorSkipsStep: boolean;
   onRetryEnvs: () => void;
   /**
    * Whether the requester can actually run this drive's sandbox (the
@@ -670,7 +710,9 @@ function SpawnSessionPalette({
           : envsLoading
             ? 'pending'
             : envsError != null
-              ? 'error'
+              ? envsErrorSkipsStep
+                ? 'name'
+                : 'error'
               : envs.length > 0
                 ? 'env'
                 : 'name';
@@ -683,9 +725,14 @@ function SpawnSessionPalette({
   // environment stay one arrow-key away, fully overridable. A stale default
   // (the env was deleted after being assigned) simply fails to match here and
   // the list renders in its ordinary order — no error state needed.
-  const defaultEnv = pick?.agentPageId
+  //
+  // Failing that, the drive's HOME env (single-sandbox model): it is where the
+  // server puts a session nobody chose a place for, so it is what the picker
+  // offers first — with "New sandbox" still right below it.
+  const agentDefaultEnv = pick?.agentPageId
     ? (envs.find((env) => env.id === agents.find((agent) => agent.id === pick.agentPageId)?.defaultEnvId) ?? null)
     : null;
+  const defaultEnv = agentDefaultEnv ?? envs.find((env) => env.isHome) ?? null;
   const otherEnvs = defaultEnv ? envs.filter((env) => env.id !== defaultEnv.id) : envs;
 
   return (

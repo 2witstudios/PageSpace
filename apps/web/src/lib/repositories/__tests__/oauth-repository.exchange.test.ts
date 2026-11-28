@@ -107,6 +107,8 @@ function evalPredicate(pred: Predicate, row: Record<string, unknown>): boolean {
 }
 
 interface CodeRow {
+  authenticatedAt?: Date | null;
+  authenticationAssurance?: 'single_factor' | 'user_verified_passkey' | null;
   id: string;
   codeHash: string;
   clientId: string;
@@ -789,5 +791,15 @@ describe('exchangeAuthorizationCode — end-to-end name round trip (pagespace ke
     ] as never);
     const listed = await sessionRepository.findUserMcpTokensWithDrives(USER_ID);
     expect(listed[0].name).toBe(CHOSEN_NAME);
+  });
+});
+
+describe('SEC-3 (partial) OAuth credential ceremony provenance', () => {
+  it('copies the original ceremony to every issued credential without advancing its time', async () => {
+    const authentication = { authenticatedAt: new Date(Date.now() - 3600000), authenticationAssurance: 'user_verified_passkey' as const };
+    seedCodeRow(authentication);
+    expect((await exchangeAuthorizationCode({ code: CODE, redirectUri: REDIRECT_URI, codeVerifier: CODE_VERIFIER, clientDbId: CLIENT_DB_ID, now: new Date() })).outcome).toBe('ok');
+    expect(refreshRows[0]).toMatchObject(authentication);
+    expect(accessRows[0]).toMatchObject(authentication);
   });
 });

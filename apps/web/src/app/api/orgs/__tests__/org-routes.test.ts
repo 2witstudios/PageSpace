@@ -1,0 +1,778 @@
+/**
+ * Organizations & Wallets, Wave B3 — every /api/orgs route.
+ *
+ * Services are faked at the lib boundary; authorization is NOT: the real
+ * requireOrgRole runs over a faked membership lookup, so a route that skipped it
+ * or asked for the wrong minimum role fails the role matrix below.
+ */
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { NextResponse } from 'next/server';
+import type { MCPAuthResult, SessionAuthResult, AuthError } from '@/lib/auth';
+import type { OrgRole } from '@pagespace/db/schema/organizations';
+
+const endSubscriptionPort = vi.hoisted(() => async () => {});
+
+// The org sign-in policy (SEC-2/3) has its own suites; here every credential meets it.
+vi.mock('@pagespace/lib/permissions/actor-authentication', () => ({
+  checkActorOrgAuthentication: vi.fn(async () => ({ allowed: true })),
+  drivePolicyOrgId: vi.fn(async () => null),
+}));
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn(),
+  getAllowedDriveIds: (auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? [],
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+    security: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  },
+  logger: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ audit: vi.fn(), auditRequest: vi.fn() }));
+vi.mock('@pagespace/lib/auth/verification-utils', () => ({ isEmailVerified: vi.fn() }));
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: vi.fn(),
+  DISTRIBUTED_RATE_LIMITS: { DRIVE_INVITE: {}, DRIVE_INVITE_RESEND: {} },
+}));
+
+vi.mock('@pagespace/lib/organizations/repository', () => ({
+  findMembershipRole: vi.fn(),
+  findOrganizationById: vi.fn(),
+  listOrganizationsForUser: vi.fn(),
+  listOrgMembers: vi.fn(),
+  createOrganization: vi.fn(),
+  updateOrganization: vi.fn(),
+}));
+vi.mock('@pagespace/lib/organizations/org-change-events', () => ({
+  announceOrgChange: vi.fn(async () => undefined),
+  announceOrgChangeTo: vi.fn(async () => undefined),
+  orgChangeAudience: vi.fn(async () => []),
+}));
+vi.mock('@pagespace/lib/organizations/membership', () => ({
+  changeMemberRole: vi.fn(),
+  removeMember: vi.fn(),
+  transferOwnership: vi.fn(),
+}));
+vi.mock('@pagespace/lib/organizations/invitations', () => ({
+  INVITE_EXPIRY_DAYS: 7,
+  createOrRotateInvitation: vi.fn(),
+  listOpenInvitations: vi.fn(),
+  resendInvitation: vi.fn(),
+  revokeInvitation: vi.fn(),
+  acceptInvitation: vi.fn(),
+}));
+vi.mock('@pagespace/lib/organizations/deletion', () => ({ deleteOrganization: vi.fn() }));
+vi.mock('@pagespace/lib/organizations/policy-reader', async (importOriginal) => {
+  const { parseOrgPolicies: parse } = await import('@pagespace/lib/organizations/policies-core');
+  return {
+    ...(await importOriginal<typeof import('@pagespace/lib/organizations/policy-reader')>()),
+    getOrgPolicies: vi.fn(async () => parse({})),
+  };
+});
+vi.mock('@/lib/orgs/org-avatar-storage', () => ({
+  mintOrgAvatarToken: vi.fn().mockResolvedValue('ps_svc_org'),
+  callOrgAvatarStorage: vi.fn().mockResolvedValue(new Response('{}', { status: 200 })),
+}));
+// The notice's per-role decision is status-core's (unit-tested); here only that GET passes the caller's role through.
+vi.mock('@pagespace/lib/organizations/status', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/organizations/status')>()),
+  getOrgBillingNotice: vi.fn(async () => null),
+  isOrgActive: vi.fn(async () => true),
+}));
+vi.mock('@/lib/orgs/org-invite-delivery', () => ({ deliverOrgInvite: vi.fn() }));
+vi.mock('@/lib/org-billing/seat-billing', () => ({ defaultSeatBilling: vi.fn(() => ({ setSeatQuantity: vi.fn(), readSeatQuantity: vi.fn() })) }));
+vi.mock('@/lib/org-billing/org-subscription', () => ({ startOrgBusinessSubscription: vi.fn(), endOrgSubscriptionPort: vi.fn(() => endSubscriptionPort) }));
+
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
+import * as repository from '@pagespace/lib/organizations/repository';
+import * as membership from '@pagespace/lib/organizations/membership';
+import * as invitations from '@pagespace/lib/organizations/invitations';
+import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { getOrgPolicies } from '@pagespace/lib/organizations/policy-reader';
+import { parseOrgPolicies } from '@pagespace/lib/organizations/policies-core';
+import { callOrgAvatarStorage, mintOrgAvatarToken } from '@/lib/orgs/org-avatar-storage';
+import { getOrgBillingNotice, isOrgActive } from '@pagespace/lib/organizations/status';
+import { deliverOrgInvite } from '@/lib/orgs/org-invite-delivery';
+import { startOrgBusinessSubscription } from '@/lib/org-billing/org-subscription';
+
+import * as orgsRoute from '../route';
+import * as orgRoute from '../[orgId]/route';
+import * as membersRoute from '../[orgId]/members/route';
+import * as memberRoute from '../[orgId]/members/[userId]/route';
+import * as transferRoute from '../[orgId]/transfer-ownership/route';
+import * as invitationsRoute from '../[orgId]/invitations/route';
+import * as invitationRoute from '../[orgId]/invitations/[invitationId]/route';
+import * as resendRoute from '../[orgId]/invitations/[invitationId]/resend/route';
+import { announceOrgChange, announceOrgChangeTo } from '@pagespace/lib/organizations/org-change-events';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
+import * as acceptRoute from '../invitations/accept/route';
+
+const ORG_ID = 'org_northwind';
+const CALLER = 'user_caller';
+const NOW = new Date('2026-09-17T12:00:00.000Z');
+
+const session = (userId: string): SessionAuthResult => ({
+  userId,
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const req = (method: string, body?: unknown) =>
+  new Request(`https://example.test/api/orgs/${ORG_ID}`, {
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+const params = <T extends Record<string, string>>(value: T) => ({ params: Promise.resolve(value) });
+
+const organization = {
+  id: ORG_ID,
+  name: 'Northwind Labs',
+  slug: 'northwind',
+  avatarUrl: null,
+  ownerId: 'user_jono',
+  policies: {},
+  stripeCustomerId: 'cus_secret',
+  stripeSubscriptionId: null,
+  seatAutoAdd: false,
+  createdAt: NOW,
+  updatedAt: NOW,
+};
+
+const invitation = {
+  id: 'inv_1',
+  orgId: ORG_ID,
+  email: 'marcus@northwind.test',
+  role: 'MEMBER' as const,
+  invitedBy: CALLER,
+  expiresAt: NOW,
+  acceptedAt: null,
+  createdAt: NOW,
+};
+
+function setServiceDefaults() {
+  vi.mocked(repository.findOrganizationById).mockResolvedValue(organization);
+  vi.mocked(repository.listOrganizationsForUser).mockResolvedValue([]);
+  vi.mocked(repository.listOrgMembers).mockResolvedValue([]);
+  vi.mocked(repository.createOrganization).mockResolvedValue({ ok: true, organization });
+  vi.mocked(repository.updateOrganization).mockResolvedValue({ ok: true, organization });
+  vi.mocked(membership.changeMemberRole).mockResolvedValue({ ok: true });
+  vi.mocked(membership.removeMember).mockResolvedValue({ ok: true });
+  vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: true });
+  // The fakes call the route's delivery the way the service does, and report a failed
+  // delivery the way the service does after undoing its write.
+  vi.mocked(invitations.createOrRotateInvitation).mockImplementation(async ({ deliver }) => {
+    try {
+      await deliver(invitation, 'ps_orginv_t');
+    } catch (cause) {
+      return { ok: false, status: 502, reason: 'delivery_failed', cause };
+    }
+    return { ok: true, invitation, token: 'ps_orginv_t', rotated: false };
+  });
+  vi.mocked(invitations.listOpenInvitations).mockResolvedValue([invitation]);
+  vi.mocked(invitations.resendInvitation).mockImplementation(async ({ deliver }) => {
+    try {
+      await deliver(invitation, 'ps_orginv_t2');
+    } catch (cause) {
+      return { ok: false, status: 502, reason: 'delivery_failed', cause };
+    }
+    return { ok: true, invitation, token: 'ps_orginv_t2' };
+  });
+  vi.mocked(invitations.revokeInvitation).mockResolvedValue(true);
+  vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: true, orgId: ORG_ID, role: 'MEMBER', joined: true });
+  vi.mocked(deleteOrganization).mockResolvedValue({ ok: true, steps: [] });
+  vi.mocked(deliverOrgInvite).mockResolvedValue(undefined);
+  vi.mocked(startOrgBusinessSubscription).mockResolvedValue({
+    state: 'payment_required',
+    subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+    payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
+  });
+  vi.mocked(isEmailVerified).mockResolvedValue(true);
+  vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true, attemptsRemaining: 2 });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(isAuthError).mockImplementation((result) => 'error' in result);
+  vi.mocked(authenticateRequestWithOptions).mockResolvedValue(session(CALLER));
+  vi.mocked(repository.findMembershipRole).mockResolvedValue(null);
+  setServiceDefaults();
+});
+
+interface RouteCase {
+  name: string;
+  /** null: no org role required (the caller has no org yet, or is accepting). */
+  minRole: OrgRole | null;
+  call: () => Promise<Response>;
+  successStatus: number;
+  /** Reads authenticate without CSRF; every mutation must require it. */
+  csrf: boolean;
+  /** Credential types admitted. Every org route but the X-1 exclusions (card-checkout create, org delete,
+   * ownership transfer, billing and money views) admits an MCP key. */
+  allow: readonly string[];
+  /** The service the route must not reach when authorization refuses. */
+  service: () => unknown;
+}
+
+const ROUTES: RouteCase[] = [
+  { name: 'GET /api/orgs', csrf: false, minRole: null, successStatus: 200, allow: ['session', 'mcp'], service: () => repository.listOrganizationsForUser,
+    call: () => orgsRoute.GET(req('GET')) },
+  { name: 'POST /api/orgs', csrf: true, minRole: null, successStatus: 201, allow: ['session', 'mcp'], service: () => repository.createOrganization,
+    call: () => orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' })) },
+  { name: 'GET /api/orgs/[orgId]', csrf: false, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.findOrganizationById,
+    call: () => orgRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
+  { name: 'PATCH /api/orgs/[orgId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.updateOrganization,
+    call: () => orgRoute.PATCH(req('PATCH', { name: 'Northwind' }), params({ orgId: ORG_ID })) },
+  { name: 'DELETE /api/orgs/[orgId]', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session', 'mcp'], service: () => deleteOrganization,
+    call: () => orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID })) },
+  { name: 'GET /api/orgs/[orgId]/members', csrf: false, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => repository.listOrgMembers,
+    call: () => membersRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
+  { name: 'PATCH /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.changeMemberRole,
+    call: () => memberRoute.PATCH(req('PATCH', { role: 'ADMIN' }), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
+  { name: 'DELETE /api/orgs/[orgId]/members/[userId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.removeMember,
+    call: () => memberRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, userId: 'user_marcus' })) },
+  { name: 'POST /api/orgs/[orgId]/transfer-ownership', csrf: true, minRole: 'OWNER', successStatus: 200, allow: ['session', 'mcp'], service: () => membership.transferOwnership,
+    call: () => transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID })) },
+  { name: 'GET /api/orgs/[orgId]/invitations', csrf: false, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.listOpenInvitations,
+    call: () => invitationsRoute.GET(req('GET'), params({ orgId: ORG_ID })) },
+  { name: 'POST /api/orgs/[orgId]/invitations', csrf: true, minRole: 'MEMBER', successStatus: 201, allow: ['session', 'mcp'], service: () => invitations.createOrRotateInvitation,
+    call: () => invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID })) },
+  { name: 'DELETE /api/orgs/[orgId]/invitations/[invitationId]', csrf: true, minRole: 'ADMIN', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.revokeInvitation,
+    call: () => invitationRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
+  { name: 'POST /api/orgs/[orgId]/invitations/[invitationId]/resend', csrf: true, minRole: 'MEMBER', successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.resendInvitation,
+    call: () => resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })) },
+  { name: 'POST /api/orgs/invitations/accept', csrf: true, minRole: null, successStatus: 200, allow: ['session', 'mcp'], service: () => invitations.acceptInvitation,
+    call: () => acceptRoute.POST(req('POST', { token: 'ps_orginv_t' })) },
+];
+
+const RANK: Record<OrgRole, number> = { MEMBER: 1, ADMIN: 2, OWNER: 3 };
+const CALLERS: Array<{ label: string; role: OrgRole | null }> = [
+  { label: 'a non-member', role: null },
+  { label: 'a Member', role: 'MEMBER' },
+  { label: 'an Admin', role: 'ADMIN' },
+  { label: 'the Owner', role: 'OWNER' },
+];
+
+const expectedStatus = (route: RouteCase, role: OrgRole | null): number => {
+  if (route.minRole === null) return route.successStatus;
+  if (role === null) return 404;
+  return RANK[role] >= RANK[route.minRole] ? route.successStatus : 403;
+};
+
+describe('org route role matrix', () => {
+  for (const route of ROUTES) {
+    describe(route.name, () => {
+      for (const caller of CALLERS) {
+        const status = expectedStatus(route, caller.role);
+        it(`ORG-5 (partial) ${route.name} as ${caller.label} answers ${status}`, async () => {
+          vi.mocked(repository.findMembershipRole).mockResolvedValue(caller.role);
+          const res = await route.call();
+          expect(res.status).toBe(status);
+          if (status === route.successStatus) {
+            expect(route.service()).toHaveBeenCalled();
+          } else {
+            expect(route.service()).not.toHaveBeenCalled();
+            expect(repository.findMembershipRole).toHaveBeenCalledWith(ORG_ID, CALLER);
+            expect(auditRequest).toHaveBeenCalledWith(
+              expect.any(Request),
+              expect.objectContaining({ eventType: 'authz.access.denied', resourceId: ORG_ID }),
+            );
+          }
+        });
+      }
+
+      it(`${route.name} authenticates a session ${route.csrf ? 'with' : 'without'} CSRF`, async () => {
+        vi.mocked(repository.findMembershipRole).mockResolvedValue('OWNER');
+        await route.call();
+        expect(authenticateRequestWithOptions).toHaveBeenCalledWith(expect.any(Request), {
+          allow: [...route.allow],
+          requireCSRF: route.csrf,
+        });
+      });
+
+      it(`${route.name} requires a session`, async () => {
+        vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+          error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+        } satisfies AuthError);
+        const res = await route.call();
+        expect(res.status).toBe(401);
+        expect(route.service()).not.toHaveBeenCalled();
+      });
+    });
+  }
+});
+
+describe('org route behaviour', () => {
+  const asRole = (role: OrgRole | null) => vi.mocked(repository.findMembershipRole).mockResolvedValue(role);
+
+  it('SEAT-9 (partial) [D-OW-33] GET /api/orgs flags each org the caller belongs to as lapsed or not, for the drive-side restrict-only controls', async () => {
+    vi.mocked(repository.listOrganizationsForUser).mockResolvedValue([
+      { id: 'org_paid', name: 'Paid', slug: 'paid', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_lapsed', name: 'Lapsed', slug: 'lapsed', avatarUrl: null, role: 'ADMIN' },
+    ]);
+    vi.mocked(isOrgActive).mockImplementation(async (orgId: string) => orgId === 'org_paid');
+    const res = await orgsRoute.GET(req('GET'));
+    expect(res.status).toBe(200);
+    expect((await res.json()).organizations.map((o: { id: string; lapsed: boolean }) => [o.id, o.lapsed])).toEqual([['org_paid', false], ['org_lapsed', true]]);
+  });
+
+  it('DRV-3 (partial) GET /api/orgs says per org whether the caller may create a drive in it: role against the who-can-create policy, never while lapsed', async () => {
+    vi.mocked(repository.listOrganizationsForUser).mockResolvedValue([
+      { id: 'org_members', name: 'M', slug: 'm', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_admins', name: 'A', slug: 'a', avatarUrl: null, role: 'MEMBER' },
+      { id: 'org_admin_role', name: 'B', slug: 'b', avatarUrl: null, role: 'ADMIN' },
+      { id: 'org_lapsed', name: 'L', slug: 'l', avatarUrl: null, role: 'OWNER' },
+    ]);
+    vi.mocked(isOrgActive).mockImplementation(async (orgId: string) => orgId !== 'org_lapsed');
+    const stored: Record<string, Record<string, unknown>> = { org_admins: { whoCanCreateDrives: 'admins' }, org_admin_role: { whoCanCreateDrives: 'admins' } };
+    vi.mocked(getOrgPolicies).mockImplementation(async (orgId: string) => parseOrgPolicies(stored[orgId] ?? {}));
+    const res = await orgsRoute.GET(req('GET'));
+    expect((await res.json()).organizations.map((o: { id: string; canCreateDrives: boolean }) => [o.id, o.canCreateDrives])).toEqual([
+      ['org_members', true], ['org_admins', false], ['org_admin_role', true], ['org_lapsed', false],
+    ]);
+  });
+
+  it('SEAT-9 (partial) SEAT-6 (partial) GET /api/orgs/[orgId] carries the billing notice for the caller\'s own role, and nothing when there is none', async () => {
+    asRole('ADMIN');
+    vi.mocked(getOrgBillingNotice).mockResolvedValueOnce({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+    const admin = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(getOrgBillingNotice).toHaveBeenLastCalledWith(ORG_ID, 'ADMIN');
+    expect((await admin.json()).billingNotice).toEqual({ kind: 'reactivate', reason: 'unpaid', canManageBilling: true });
+
+    asRole('MEMBER');
+    vi.mocked(getOrgBillingNotice).mockResolvedValueOnce({ kind: 'read_only', canManageBilling: false });
+    const member = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(getOrgBillingNotice).toHaveBeenLastCalledWith(ORG_ID, 'MEMBER');
+    expect((await member.json()).billingNotice).toEqual({ kind: 'read_only', canManageBilling: false });
+
+    // Billing off (onprem, tenant) or nothing to say: no field at all.
+    const quiet = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(await quiet.json()).not.toHaveProperty('billingNotice');
+  });
+
+  it.each(['OWNER', 'ADMIN', 'MEMBER'] as const)('UI-11 (partial) GET /api/orgs/[orgId] names the caller\'s own role (%s), so the hub renders by role', async (role) => {
+    asRole(role);
+    const res = await orgRoute.GET(req('GET'), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).viewer).toEqual({ userId: expect.any(String), role });
+  });
+
+  it('ORG-1 (partial) POST /api/orgs makes the caller the Owner and never returns billing ids', async () => {
+    const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'Northwind' }));
+    expect(res.status).toBe(201);
+    expect(repository.createOrganization).toHaveBeenCalledWith({
+      name: 'Northwind Labs',
+      slug: 'northwind',
+      ownerId: CALLER,
+    });
+    const body = await res.json();
+    expect(body.organization).not.toHaveProperty('stripeCustomerId');
+    expect(body.organization).not.toHaveProperty('policies');
+  });
+
+  it('SEAT-8 (partial) D-OW-30 POST /api/orgs starts the new org on Business with no trial: payment is required, with the client secret to confirm a card and no Stripe id', async () => {
+    const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
+    expect(res.status).toBe(201);
+    expect(startOrgBusinessSubscription).toHaveBeenCalledWith(ORG_ID);
+    const body = await res.json();
+    expect(body.billing).toEqual({
+      state: 'payment_required',
+      subscription: { status: 'incomplete', currentPeriodEnd: '2026-10-01T12:00:00.000Z', extraSeatQuantity: 0 },
+      payment: { kind: 'confirm_payment', clientSecret: 'pi_1_secret_x' },
+    });
+    expect(JSON.stringify(body)).not.toMatch(/cus_|sub_|si_/);
+  });
+
+  it('SEAT-8 (partial) POST /api/orgs still creates the org when its subscription could not start, and says billing is pending', async () => {
+    vi.mocked(startOrgBusinessSubscription).mockResolvedValue({ state: 'pending' });
+    const res = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
+    expect(res.status).toBe(201);
+    expect((await res.json()).billing).toEqual({ state: 'pending' });
+  });
+
+  it('ORG-6 (partial) an erasing ownership recipient is refused explicitly without announcing a transfer', async () => {
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_erasure_in_progress' });
+    const response = await transferRoute.POST(req('POST', { toUserId: 'user_priya' }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'owner_erasure_in_progress', error: expect.stringMatching(/erasure/) });
+    expect(announceOrgChange).not.toHaveBeenCalled();
+  });
+
+  it('ORG-6 (partial) an erasing account cannot create an organization or start billing', async () => {
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_erasure_in_progress' });
+    const response = await orgsRoute.POST(req('POST', { name: 'Northwind Labs', slug: 'northwind' }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'owner_erasure_in_progress', error: expect.stringMatching(/erasure/) });
+    expect(startOrgBusinessSubscription).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-8 (partial) POST /api/orgs starts no subscription when the org was not created', async () => {
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'slug_taken' });
+    expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
+    expect(startOrgBusinessSubscription).not.toHaveBeenCalled();
+  });
+
+  it('ORG-1 (partial) POST /api/orgs refuses a malformed slug and reports a taken one', async () => {
+    expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'no spaces!' }))).status).toBe(400);
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'slug_taken' });
+    expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }))).status).toBe(409);
+  });
+
+  it('ORG-1 (partial) POST /api/orgs and transfer-ownership refuse an Owner who is not a person, never as a taken slug', async () => {
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_human' });
+    const created = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
+    expect(created.status).toBe(403);
+    expect(await created.json()).toMatchObject({ code: 'owner_not_human' });
+    vi.mocked(repository.createOrganization).mockResolvedValue({ ok: false, reason: 'owner_not_found' });
+    const vanished = await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind' }));
+    expect(vanished.status).toBe(404);
+    expect(await vanished.json()).toMatchObject({ code: 'owner_not_found' });
+
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'owner_not_human' });
+    const transferred = await transferRoute.POST(req('POST', { toUserId: 'agent_page' }), params({ orgId: ORG_ID }));
+    expect(transferred.status).toBe(400);
+    expect(await transferred.json()).toEqual({ error: 'Only a person can own an organization', code: 'owner_not_human' });
+  });
+
+  it('ORG-1 (partial) an org avatar is never a URL: create and update refuse any avatarUrl, even https (it is uploaded to /avatar)', async () => {
+    for (const avatarUrl of ['https://tracker.example.com/pixel.png', 'javascript:alert(1)', 'data:image/png;base64,AAAA', 'http://example.test/n.png']) {
+      expect((await orgsRoute.POST(req('POST', { name: 'N', slug: 'northwind', avatarUrl }))).status).toBe(400);
+    }
+    asRole('ADMIN');
+    expect((await orgRoute.PATCH(req('PATCH', { avatarUrl: 'https://tracker.example.com/pixel.png' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    expect((await orgRoute.PATCH(req('PATCH', { name: 'Northwind', avatarUrl: 'https://tracker.example.com/pixel.png' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    expect(repository.createOrganization).not.toHaveBeenCalled();
+    expect(repository.updateOrganization).not.toHaveBeenCalled();
+  });
+
+  it('ORG-1 (partial) the Owner role cannot be granted through a role change', async () => {
+    asRole('OWNER');
+    const res = await memberRoute.PATCH(req('PATCH', { role: 'OWNER' }), params({ orgId: ORG_ID, userId: 'user_marcus' }));
+    expect(res.status).toBe(400);
+    expect(membership.changeMemberRole).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-9 (partial) ORG-2 (partial) [D-OW-33] a promotion refused while the org is lapsed answers 402 org_lapsed with the lapse copy, and audits nothing', async () => {
+    asRole('ADMIN');
+    vi.mocked(membership.changeMemberRole).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await memberRoute.PATCH(req('PATCH', { role: 'ADMIN' }), params({ orgId: ORG_ID, userId: 'user_marcus' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ code: 'org_lapsed', error: ORG_LAPSED_MESSAGE });
+    expect(auditRequest).not.toHaveBeenCalled();
+  });
+
+  it('ORG-2 (partial) a refused role change or removal carries the service status and code', async () => {
+    asRole('ADMIN');
+    vi.mocked(membership.removeMember).mockResolvedValue({ ok: false, status: 400, reason: 'use_ownership_transfer' });
+    const res = await memberRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, userId: 'user_jono' }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).code).toBe('use_ownership_transfer');
+    expect(membership.removeMember).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: CALLER, targetId: 'user_jono' });
+  });
+
+  it('ORG-1 (partial) transfer-ownership passes the caller as actor and maps refusals', async () => {
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 400, reason: 'target_not_member' });
+    const res = await transferRoute.POST(req('POST', { toUserId: 'user_chris' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(400);
+    expect(membership.transferOwnership).toHaveBeenCalledWith({ orgId: ORG_ID, actorId: CALLER, targetId: 'user_chris' });
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] #19 a lapsed transfer that would grant new access answers 402 org_lapsed with the lapse copy and audits nothing', async () => {
+    asRole('OWNER');
+    vi.mocked(membership.transferOwnership).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await transferRoute.POST(req('POST', { toUserId: 'user_marcus' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.role.assigned' }));
+  });
+
+  it('ORG-6 (partial) DELETE /api/orgs/[orgId] writes one audit event per drive naming its destination', async () => {
+    asRole('OWNER');
+    const steps = [
+      { driveId: 'd_product', driveName: 'Product', destination: 'transfer' as const, ownerId: 'user_priya', trashed: false },
+      { driveId: 'd_old', driveName: 'Old Site', destination: 'owner_trash' as const, ownerId: 'user_jono', trashed: true },
+    ];
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: true, steps });
+    const res = await orgRoute.DELETE(
+      req('DELETE', { drives: [{ driveId: 'd_product', action: 'transfer', toUserId: 'user_priya' }] }),
+      params({ orgId: ORG_ID }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).drives).toEqual(steps);
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: ORG_ID,
+      choices: [{ driveId: 'd_product', action: 'transfer', toUserId: 'user_priya' }],
+    }), expect.anything());
+    for (const step of steps) {
+      expect(auditRequest).toHaveBeenCalledWith(expect.any(Request), expect.objectContaining({
+        resourceType: 'drive',
+        resourceId: step.driveId,
+        details: expect.objectContaining({ destination: step.destination, newOwnerId: step.ownerId }),
+      }));
+    }
+  });
+
+  it('SEAT-1 (partial) DELETE /api/orgs/[orgId] hands the service the port that ends the org\'s Stripe subscription', async () => {
+    asRole('OWNER');
+    const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ orgId: ORG_ID }), { endSubscription: endSubscriptionPort });
+  });
+
+  it.each([['not_member', 404], ['insufficient_role', 403]] as const)('Given a current profile-write refusal (%s), should preserve its authorization code and write no success audit', async (reason, status) => {
+    asRole('ADMIN');
+    vi.mocked(repository.updateOrganization).mockResolvedValueOnce({ ok: false, reason });
+    const response = await orgRoute.PATCH(req('PATCH', { name: 'Unauthorized' }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ code: reason });
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write' }));
+  });
+
+  it('ORG-1 (partial) deleting an org removes its stored avatar file, only once the delete has gone through', async () => {
+    asRole('OWNER');
+    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: `/api/orgs/${ORG_ID}/avatar/avatar-abc123.png` });
+    vi.mocked(deleteOrganization).mockResolvedValueOnce({ ok: false, status: 403, reason: 'not_owner' });
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(200);
+    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, expect.objectContaining({ via: 'credential', userId: CALLER }));
+    expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
+  });
+
+  it('ORG-1 (partial) Given no initial avatar, should clear the whole folder after successful deletion and never clean up a refused or failed deletion', async () => {
+    asRole('ADMIN');
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(mintOrgAvatarToken).not.toHaveBeenCalled();
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    asRole('OWNER');
+    vi.mocked(repository.findOrganizationById).mockResolvedValue({ ...organization, avatarUrl: null });
+    vi.mocked(deleteOrganization).mockResolvedValueOnce({ ok: false, status: 403, reason: 'not_owner' });
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(403);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    vi.mocked(deleteOrganization).mockRejectedValueOnce(new Error('subscription cancellation failed'));
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(500);
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    expect((await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }))).status).toBe(200);
+    expect(mintOrgAvatarToken).toHaveBeenCalledWith(ORG_ID, expect.objectContaining({ userId: CALLER }));
+    expect(callOrgAvatarStorage).toHaveBeenCalledTimes(1);
+    expect(callOrgAvatarStorage).toHaveBeenCalledWith(ORG_ID, 'ps_svc_org', { method: 'DELETE' });
+  });
+
+  it('ORG-6 (partial) DELETE /api/orgs/[orgId] passes the caller so the service can re-check ownership, and maps its refusal', async () => {
+    asRole('OWNER');
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 403, reason: 'not_owner' });
+    const res = await orgRoute.DELETE(req('DELETE', { drives: [] }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(403);
+    expect(deleteOrganization).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, orgId: ORG_ID }), expect.anything());
+  });
+
+  it('Given a live drive-wallet hold, should return retryable conflict and perform no deletion cleanup or success audit', async () => {
+    asRole('OWNER');
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 409, reason: 'drive_wallet_calls_in_flight', driveIds: ['d_product'] });
+    const response = await orgRoute.DELETE(req('DELETE', { drives: [{ driveId: 'd_product', action: 'trash' }] }), params({ orgId: ORG_ID }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'drive_wallet_calls_in_flight', driveIds: ['d_product'] });
+    expect(callOrgAvatarStorage).not.toHaveBeenCalled();
+    expect(announceOrgChangeTo).not.toHaveBeenCalled();
+    expect(auditRequest).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.delete' }));
+  });
+
+  it('ORG-6 (partial) DELETE /api/orgs/[orgId] reports the drives that block the delete', async () => {
+    asRole('OWNER');
+    vi.mocked(deleteOrganization).mockResolvedValue({ ok: false, status: 400, reason: 'transfer_target_not_member', driveIds: ['d_product'] });
+    const res = await orgRoute.DELETE(
+      req('DELETE', { drives: [{ driveId: 'd_product', action: 'transfer', toUserId: 'user_chris' }] }),
+      params({ orgId: ORG_ID }),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: 'transfer_target_not_member', driveIds: ['d_product'] });
+  });
+
+  it('ORG-3 (partial) inviting sends the email with the new token and never returns the token', async () => {
+    asRole('ADMIN');
+    const res = await invitationsRoute.POST(req('POST', { email: ' Marcus@Northwind.test ', role: 'ADMIN' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(201);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({
+      orgId: ORG_ID, email: 'marcus@northwind.test', role: 'ADMIN', invitedBy: CALLER,
+    }));
+    expect(deliverOrgInvite).toHaveBeenCalledWith({
+      orgId: ORG_ID, inviterId: CALLER, email: 'marcus@northwind.test', role: 'ADMIN', token: 'ps_orginv_t',
+    });
+    expect(JSON.stringify(await res.json())).not.toContain('ps_orginv_t');
+  });
+
+  it('ORG-3 (partial) an invite or resend that could not be emailed answers 502 and the service undoes it', async () => {
+    asRole('ADMIN');
+    vi.mocked(deliverOrgInvite).mockRejectedValue(new Error('smtp down'));
+    expect((await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(502);
+    expect((await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }))).status).toBe(502);
+    // Compensation lives in the service (proven against Postgres), never a second route write.
+    expect(invitations.revokeInvitation).not.toHaveBeenCalled();
+  });
+
+  it('POL-5 (partial) the route reaches the service for a plain Member as the ACTOR (the service reads their role itself), and the service\'s policy refusal is answered 403 naming the policy (create and resend)', async () => {
+    const refusal = { ok: false as const, status: 403 as const, code: 'org_policy' as const, reason: 'org_policy' as const, policy: 'whoCanInvite' as const, message: 'This organization lets only Owners and Admins invite people.' };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('MEMBER');
+
+    const created = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    const resent = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+
+    expect(created.status).toBe(403);
+    expect(await created.json()).toEqual({ error: refusal.message, code: 'org_policy', policy: 'whoCanInvite' });
+    expect(resent.status).toBe(403);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ invitedBy: CALLER }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER }));
+    // The gate's role is never handed over: the service re-reads it inside its transaction.
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.not.objectContaining({ actorRole: expect.anything() }));
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.not.objectContaining({ actorRole: expect.anything() }));
+  });
+
+  it('ORG-3 (partial) an inviter removed from the org between the gate and the write is answered 404 like any non-member (create and resend)', async () => {
+    asRole('ADMIN');
+    const gone = { ok: false as const, status: 404 as const, reason: 'not_member' as const };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(gone);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(gone);
+    for (const res of [
+      await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID })),
+      await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })),
+    ]) {
+      expect(res.status).toBe(404);
+      expect(await res.json()).toMatchObject({ code: 'org_not_found' });
+    }
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+  });
+
+  it('ORG-3 (partial) inviting refuses an existing member, an unverified inviter, and an OWNER role', async () => {
+    asRole('ADMIN');
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue({ ok: false, status: 409, reason: 'already_member' });
+    expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(409);
+    expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test', role: 'OWNER' }), params({ orgId: ORG_ID }))).status).toBe(400);
+    vi.mocked(isEmailVerified).mockResolvedValue(false);
+    expect((await invitationsRoute.POST(req('POST', { email: 'dana@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(403);
+  });
+
+  it('SEAT-9 (partial) a lapsed org\'s invite and resend answer 402 with the lapse refusal message and the org_lapsed code', async () => {
+    asRole('ADMIN');
+    const lapsed = { ok: false as const, status: 402 as const, reason: 'org_lapsed' as const, message: ORG_LAPSED_MESSAGE };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(lapsed);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(lapsed);
+    for (const res of [
+      await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID })),
+      await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' })),
+    ]) {
+      expect(res.status).toBe(402);
+      expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+    }
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+  });
+
+  it('SEAT-4 (partial) a refused seat answers 402 with the seats_full code and the message, audits it, sends no email, and passes the inviter and the Stripe port to the service', async () => {
+    asRole('ADMIN');
+    const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(refusal);
+    const res = await invitationsRoute.POST(req('POST', { email: 'lena@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ invitedBy: CALLER, seatBilling: expect.any(Object) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', purchased: 5, held: 5 }) }));
+  });
+
+  it('SEAT-4 (partial) resending an expired invite into a full org answers 402 seats_full, audits it, sends no email, and passes the resender and the Stripe port', async () => {
+    asRole('ADMIN');
+    const refusal = { ok: false as const, status: 402 as const, reason: 'seats_full' as const, message: 'All 5 seats in this organization are taken.', purchased: 5, held: 5 };
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(refusal);
+    const res = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: refusal.message, code: 'seats_full' });
+    expect(deliverOrgInvite).not.toHaveBeenCalled();
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ actorId: CALLER, seatBilling: expect.any(Object) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'seats_full', operation: 'resend_org_invitation' }) }));
+  });
+
+  it('ORG-3 (partial) re-inviting after expiry rotates the open invite (route answers 200 and emails the new link)', async () => {
+    asRole('ADMIN');
+    vi.mocked(invitations.createOrRotateInvitation).mockImplementation(async ({ deliver }) => {
+      await deliver(invitation, 'ps_orginv_rotated');
+      return { ok: true, invitation, token: 'ps_orginv_rotated', rotated: true };
+    });
+    const res = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(res.status).toBe(200);
+    expect(deliverOrgInvite).toHaveBeenCalledWith(expect.objectContaining({ token: 'ps_orginv_rotated' }));
+  });
+
+  it('ORG-3 (partial) resend emails the rotated link; an unknown invitation is 404', async () => {
+    asRole('ADMIN');
+    const res = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(res.status).toBe(200);
+    expect(deliverOrgInvite).toHaveBeenCalledWith(expect.objectContaining({ email: invitation.email, token: 'ps_orginv_t2' }));
+    vi.mocked(invitations.resendInvitation).mockResolvedValue({ ok: false, status: 404, reason: 'not_found' });
+    expect((await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_x' }))).status).toBe(404);
+    vi.mocked(invitations.revokeInvitation).mockResolvedValue(false);
+    expect((await invitationRoute.DELETE(req('DELETE'), params({ orgId: ORG_ID, invitationId: 'inv_x' }))).status).toBe(404);
+  });
+
+  it('ORG-3 (partial) accept binds the token to the signed-in caller and maps refusals', async () => {
+    const ok = await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }));
+    expect(ok.status).toBe(200);
+    expect(invitations.acceptInvitation).toHaveBeenCalledWith(expect.objectContaining({ token: 'ps_orginv_t', userId: CALLER }));
+    expect(await ok.json()).toEqual({ orgId: ORG_ID, role: 'MEMBER', joined: true });
+
+    vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: false, status: 403, reason: 'email_mismatch' });
+    expect((await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }))).status).toBe(403);
+    vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: false, status: 410, reason: 'expired' });
+    expect((await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }))).status).toBe(410);
+  });
+
+  it('SEAT-9 (partial) [D-OW-33] accepting while the org is lapsed answers 402 org_lapsed with the lapse copy (the invitation stays open)', async () => {
+    vi.mocked(invitations.acceptInvitation).mockResolvedValue({ ok: false, status: 402, reason: 'org_lapsed' });
+    const res = await acceptRoute.POST(req('POST', { token: 'ps_orginv_t' }));
+    expect(res.status).toBe(402);
+    expect(await res.json()).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+  });
+});
+
+describe('invites by a delegated key never buy a seat ([D-OW-26])', () => {
+  const key = (): MCPAuthResult => ({ userId: CALLER, tokenVersion: 0, tokenType: 'mcp', tokenId: 'tok', role: 'user', adminRoleVersion: 0, allowedDriveIds: [] });
+  const raiseRefused = { ok: false as const, status: 403 as const, reason: 'mcp_token_cannot_move_money' as const, message: 'An access token cannot buy another seat', purchased: 5, held: 5 };
+
+  it('X-1 (partial) an invite and a resend tell the service the caller is a key, and a seat raise it refuses answers 403 by name', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(key());
+    vi.mocked(invitations.createOrRotateInvitation).mockResolvedValue(raiseRefused);
+    vi.mocked(invitations.resendInvitation).mockResolvedValue(raiseRefused);
+
+    const created = await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }));
+    expect(created.status).toBe(403);
+    expect((await created.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+
+    const resent = await resendRoute.POST(req('POST'), params({ orgId: ORG_ID, invitationId: 'inv_1' }));
+    expect(resent.status).toBe(403);
+    expect((await resent.json()).code).toBe('mcp_token_cannot_move_money');
+    expect(invitations.resendInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'mcp' }));
+  });
+
+  it('X-1 (partial) a session invite is passed through as a session, which may buy a seat', async () => {
+    vi.mocked(repository.findMembershipRole).mockResolvedValue('ADMIN');
+    expect((await invitationsRoute.POST(req('POST', { email: 'marcus@northwind.test' }), params({ orgId: ORG_ID }))).status).toBe(201);
+    expect(invitations.createOrRotateInvitation).toHaveBeenCalledWith(expect.objectContaining({ credential: 'session' }));
+  });
+});

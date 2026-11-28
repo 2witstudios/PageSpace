@@ -38,6 +38,7 @@
     "../../packages/**/__tests__/**",
     "../../packages/cli/**",
     "../../packages/sdk/**",
-    "../../packages/browser-worker/**"
+    "../../packages/browser-worker/**",
+    "../../packages/editor/**"
   ]
 }

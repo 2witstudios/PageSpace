@@ -158,7 +158,7 @@ describe('device-auth-utils', () => {
 
       const result = await createDeviceTokenRecord(
         'user-1', 'device-1', 'web', 1,
-        { deviceName: 'Chrome', userAgent: 'Mozilla/5.0', ipAddress: '1.2.3.4', location: 'US' }
+        { authentication: null, deviceName: 'Chrome', userAgent: 'Mozilla/5.0', ipAddress: '1.2.3.4', location: 'US' }
       );
 
       expect(result.id).toBe('record-id-1');
@@ -170,7 +170,7 @@ describe('device-auth-utils', () => {
       const mockValues = vi.fn().mockReturnValue({ returning: mockReturning });
       mockDb.insert.mockReturnValue({ values: mockValues });
 
-      const result = await createDeviceTokenRecord('user-1', 'device-1', 'desktop', 1);
+      const result = await createDeviceTokenRecord('user-1', 'device-1', 'desktop', 1, { authentication: null });
       expect(result.id).toBe('record-id-2');
     });
   });
@@ -427,7 +427,7 @@ describe('device-auth-utils', () => {
         isNew: true,
       });
 
-      const result = await validateOrCreateDeviceToken({
+      const result = await validateOrCreateDeviceToken({ authentication: null,
         providedDeviceToken: null,
         userId: 'user-1',
         deviceId: 'dev-1',

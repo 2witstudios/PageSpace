@@ -14,14 +14,14 @@ import { useCreditBalance } from '@/hooks/useCreditBalance';
 import { useBillingVisibility } from '@/hooks/useBillingVisibility';
 import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
-import { centsToCredits, creditBalanceCopy, formatCreditCount } from '@/lib/subscription/credits';
+import { creditBalanceCopy, creditsFromCents, formatCreditCount } from '@/lib/subscription/credits';
 
 /** Percentage of the allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
 
 export function CreditBalance() {
   const router = useRouter();
-  const { showBilling } = useBillingVisibility();
+  const { showPurchases } = useBillingVisibility();
   const { balance, isLoading, isError } = useCreditBalance();
 
   if (isLoading) {
@@ -47,7 +47,7 @@ export function CreditBalance() {
 
   const { spendable, monthly, topup, reserved, debt, subscriptionTier } = balance;
   const isFree = subscriptionTier === 'free';
-  const copy = creditBalanceCopy({ isFree, showBilling });
+  const copy = creditBalanceCopy({ isFree, canPurchase: showPurchases });
   const inDebt = spendable < 0;
   // Net monthly portion: gross bucket minus any outstanding debt (topup credits are separate).
   // Using monthly.remaining would overstate the balance when a lapsed period carries debt
@@ -56,7 +56,7 @@ export function CreditBalance() {
   const isLow = inDebt || (monthly.allowance > 0 && netMonthly / monthly.allowance <= LOW_BALANCE_THRESHOLD_PCT / 100);
   const monthlyStr = formatCreditCount(netMonthly);
   const allowanceStr = formatCreditCount(monthly.allowance);
-  const topupCredits = centsToCredits(topup.remaining);
+  const topupCredits = creditsFromCents(topup.remaining);
   const topupStr = formatCreditCount(topup.remaining);
   // Surface in-flight reservations as a quiet signal, not in the headline number.
   const hasInFlight = reserved > 0;
@@ -132,7 +132,7 @@ export function CreditBalance() {
 
       <UpgradeTierButton isFree={isFree} />
 
-      {showBilling && (
+      {showPurchases && (
         <div className="hidden sm:flex">
           <BuyCreditsButton variant={isLow ? 'default' : 'ghost'} size="sm" />
         </div>

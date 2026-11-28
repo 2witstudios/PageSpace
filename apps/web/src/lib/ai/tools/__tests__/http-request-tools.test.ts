@@ -14,9 +14,15 @@ vi.mock('@/lib/agent-accounts/account-authority-client', () => ({ getAccountAuth
 
 import { httpRequestTools } from '../http-request-tools';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
+
+/** A tool context always carries its user's actor (D-OW-45); tests name the user, the actor follows. */
+const withActor = (context: Partial<ToolExecutionContext>) =>
+  context.userId ? { accessActor: credentialActor(context.userId, null), ...context } : context;
+
 
 const execute = (input: Record<string, unknown>, context: Partial<ToolExecutionContext>) =>
-  (httpRequestTools.http_request as unknown as { execute: (input: unknown, options: unknown) => Promise<unknown> }).execute(input, { experimental_context: context, toolCallId: 't1', messages: [] });
+  (httpRequestTools.http_request as unknown as { execute: (input: unknown, options: unknown) => Promise<unknown> }).execute(input, { experimental_context: withActor(context), toolCallId: 't1', messages: [] });
 
 const released = { status: 200, headers: [['content-type', 'application/json']], body: '{"temp":7}', bodyOmitted: null, truncated: false, redacted: false };
 
@@ -70,7 +76,7 @@ describe('http_request tool', () => {
 });
 
 const listAccounts = (context: Partial<ToolExecutionContext>) =>
-  (httpRequestTools.list_accounts as unknown as { execute: (input: unknown, options: unknown) => Promise<unknown> }).execute({}, { experimental_context: context, toolCallId: 't2', messages: [] });
+  (httpRequestTools.list_accounts as unknown as { execute: (input: unknown, options: unknown) => Promise<unknown> }).execute({}, { experimental_context: withActor(context), toolCallId: 't2', messages: [] });
 
 const account = (overrides: Record<string, unknown>) => ({ id: 'acct_1', kind: 'api_key', name: 'Weather', ownerKind: 'agent_page', providerSlug: null, allowedOrigins: ['https://api.weather.example:443'], acknowledgment: 'dedicated_agent_account', status: 'active', upstreamRevocation: null, lastUsedAt: null, createdAt: 1, revokedAt: null, ready: true, ...overrides });
 
@@ -81,7 +87,7 @@ describe('list_accounts tool (Codex P1: the model needs account ids)', () => {
     const actual = { result, call: mockAuthority.listAccounts.mock.calls[0]?.[0] };
     const expected = {
       result: { accounts: [{ accountId: 'acct_1', name: 'Weather', sites: ['https://api.weather.example'], ready: true }, { accountId: 'acct_3', name: 'Pending', sites: ['https://api.weather.example'], ready: false }] },
-      call: { actorUserId: 'user_1', owner: { kind: 'agent_page', agentPageId: 'page_a' }, allowedDriveIds: [] },
+      call: { actor: expect.objectContaining({ userId: 'user_1' }), owner: { kind: 'agent_page', agentPageId: 'page_a' }, allowedDriveIds: [] },
     };
     expect(actual).toEqual(expected);
   });

@@ -16,6 +16,11 @@ vi.mock('@pagespace/lib/services/pending-uploads', () => ({
 
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
+const mockDeleteStoredObject = vi.fn();
+vi.mock('@/lib/upload/s3-effects', () => ({
+  deleteStoredObject: (...args: unknown[]) => mockDeleteStoredObject(...args),
+}));
+
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import { uploadSemaphore } from '@pagespace/lib/services/upload-semaphore';
@@ -42,6 +47,7 @@ beforeEach(() => {
   vi.mocked(uploadSemaphore.verifySlotOwner).mockReturnValue(true);
   vi.mocked(uploadSemaphore.getSlotMetadata).mockReturnValue({ contentHash: 'a'.repeat(64), driveId: 'drive-1', fileSize: 1024, mimeType: 'image/jpeg' });
   vi.mocked(releasePendingUpload).mockResolvedValue(undefined);
+  mockDeleteStoredObject.mockResolvedValue(undefined);
 });
 
 describe('POST /api/upload/cancel', () => {
@@ -69,5 +75,17 @@ describe('POST /api/upload/cancel', () => {
     const res = await POST(makeRequest({ jobId: JOB_ID }));
     expect(res.status).toBe(403);
     expect(uploadSemaphore.releaseUploadSlot).not.toHaveBeenCalled();
+    expect(mockDeleteStoredObject).not.toHaveBeenCalled();
+  });
+
+  it("deletes the job's staging object (nothing serves it; it would only be an orphan)", async () => {
+    await POST(makeRequest({ jobId: JOB_ID }));
+    expect(mockDeleteStoredObject).toHaveBeenCalledWith(`uploads/staging/${JOB_ID}`);
+  });
+
+  it('still succeeds when deleting the staging object fails', async () => {
+    mockDeleteStoredObject.mockRejectedValue(new Error('s3 down'));
+    const res = await POST(makeRequest({ jobId: JOB_ID }));
+    expect(res.status).toBe(200);
   });
 });

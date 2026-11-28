@@ -23,9 +23,9 @@
  * the resulting state, read from `decideObservationRelease` so the two can
  * never disagree.
  */
-import type { HumanControlMode, HumanControlState, HumanPrincipal } from './human-control-state.js';
-import { OBSERVATION_KINDS, type ObservationKind } from './observation-kind.js';
-import { decideObservationRelease } from './decide-observation-release.js';
+import type { HumanControlMode, HumanControlState, HumanPrincipal } from './human-control-state.ts';
+import { OBSERVATION_KINDS, type ObservationKind } from './observation-kind.ts';
+import { decideObservationRelease } from './decide-observation-release.ts';
 
 export type HumanControlEvent =
   | { readonly type: 'take-over'; readonly by: HumanPrincipal }

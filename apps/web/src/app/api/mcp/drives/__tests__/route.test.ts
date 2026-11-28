@@ -23,9 +23,8 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { id: 'id', name: 'name', slug: 'slug', ownerId: 'ownerId', isTrashed: 'isTrashed' },
 }));
 
-vi.mock('@pagespace/lib/utils/utils', () => ({
-  slugify: vi.fn((s: string) => s.toLowerCase().replace(/\s+/g, '-')),
-}));
+vi.mock('@pagespace/lib/services/org-drive-service', () => ({ createOrgDrive: vi.fn() }));
+vi.mock('@pagespace/lib/services/org-drive-service-deps', () => ({ orgDriveServiceDeps: { production: true } }));
 
 vi.mock('@/lib/websocket', () => ({
   broadcastDriveEvent: vi.fn().mockResolvedValue(undefined),
@@ -45,9 +44,10 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   logDriveActivity: vi.fn(),
 }));
 
+const personalDrive = { id: 'drv-1', name: 'My Project', slug: 'my-project', ownerId: 'user-1', orgId: null, isOwned: true, role: 'OWNER', canCreatePages: true, lastAccessedAt: null };
 vi.mock('@pagespace/lib/services/drive-service', () => ({
   listAccessibleDrives: vi.fn().mockResolvedValue([]),
-  allocatePublishSubdomain: vi.fn().mockResolvedValue('test-drive'),
+  createDrive: vi.fn(async () => personalDrive),
 }));
 
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
@@ -61,7 +61,14 @@ vi.mock('@/lib/auth', () => ({
 }));
 
 import { POST } from '../route';
-import { authenticateMCPRequest, isAuthError } from '@/lib/auth';
+import { authenticateMCPRequest, isAuthError, isMCPAuthResult } from '@/lib/auth';
+import { db } from '@pagespace/db/db';
+import { createDrive } from '@pagespace/lib/services/drive-service';
+import { createOrgDrive } from '@pagespace/lib/services/org-drive-service';
+import { orgDriveServiceDeps } from '@pagespace/lib/services/org-drive-service-deps';
+
+const post = (body: unknown) =>
+  POST(new Request('https://example.com/api/mcp/drives', { method: 'POST', body: JSON.stringify(body) }) as Parameters<typeof POST>[0]);
 
 const mockSessionAuth = (userId = 'user-1') => ({
   userId,
@@ -115,5 +122,43 @@ describe('POST /api/mcp/drives — reserved name guard', () => {
     });
     const res = await POST(req as Parameters<typeof POST>[0]);
     expect(res.status).toBe(201);
+  });
+});
+
+describe('POST /api/mcp/drives — creates through the drive service, personal or in an org', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateMCPRequest).mockResolvedValue(mockSessionAuth());
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(isMCPAuthResult).mockReturnValue(true);
+  });
+
+  it('DRV-3 (partial) with no orgId the drive is personal and created by the drive service, never inserted here', async () => {
+    const res = await post({ name: 'My Project' });
+    expect(res.status).toBe(201);
+    expect(createDrive).toHaveBeenCalledWith('user-1', expect.objectContaining({ name: 'My Project' }));
+    expect(createOrgDrive).not.toHaveBeenCalled();
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('DRV-3 (partial) an orgId creates the drive org-owned through createOrgDrive with the production deps, and its refusal is relayed', async () => {
+    vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: true, drive: { ...personalDrive, orgId: 'org_nw' } as never });
+    const res = await post({ name: 'Engineering', orgId: 'org_nw' });
+    expect(res.status).toBe(201);
+    expect(await res.json()).toMatchObject({ orgId: 'org_nw', isOwned: true, role: 'OWNER' });
+    expect(createOrgDrive).toHaveBeenCalledWith('user-1', expect.objectContaining({ name: 'Engineering', orgId: 'org_nw' }), orgDriveServiceDeps);
+    expect(createDrive).not.toHaveBeenCalled();
+
+    vi.mocked(createOrgDrive).mockResolvedValueOnce({ ok: false, code: 'POLICY_FORBIDS_CREATE', status: 403, message: 'Only organization Owners and Admins can create drives in this organization.' });
+    const refused = await post({ name: 'Engineering', orgId: 'org_nw' });
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ code: 'POLICY_FORBIDS_CREATE' });
+  });
+
+  it('DRV-3 (partial) a drive-scoped token creates nothing, in an org or not', async () => {
+    vi.mocked(authenticateMCPRequest).mockResolvedValue({ ...mockSessionAuth(), allowedDriveIds: ['d1'] });
+    expect((await post({ name: 'Engineering', orgId: 'org_nw' })).status).toBe(403);
+    expect(createOrgDrive).not.toHaveBeenCalled();
+    expect(createDrive).not.toHaveBeenCalled();
   });
 });

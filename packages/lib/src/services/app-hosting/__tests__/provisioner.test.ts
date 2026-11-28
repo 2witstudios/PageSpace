@@ -89,6 +89,8 @@ let selectedTables: unknown[] = [];
 let writtenTables: unknown[] = [];
 /** When true, the guarded insert returns nothing — i.e. another publish won the race. */
 let insertConflicts = false;
+/** Every `onConflictDoUpdate` set the destroy path asked for. */
+const conflictUpdates: Array<Record<string, unknown>> = [];
 /** Every `onConflictDoNothing({target})` the insert path asked for, in order. */
 let conflictTargets: unknown[] = [];
 
@@ -109,6 +111,7 @@ function deps(overrides: Partial<ProvisionerDeps> = {}): ProvisionerDeps {
       callLog.push('fly:mintDeployToken');
       return 'FlyV1 fm2_aaa,fm2_bbb';
     },
+    publishedAppsAllowed: async () => true,
     ...overrides,
   };
 }
@@ -229,6 +232,12 @@ beforeEach(() => {
           return {
             returning: () => Promise.resolve(insertConflicts ? [] : [{ ...ROW, ...row }]),
           };
+        },
+        // The destroy path's reclaim outbox upsert: an immediate cancel overrides a pending
+        // period-end release (D-OW-64).
+        onConflictDoUpdate: (config: { set: Record<string, unknown> }) => {
+          conflictUpdates.push(config.set);
+          return Promise.resolve(undefined);
         },
         // mintDeployToken inserts without .returning()
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(undefined).then(resolve),
@@ -437,6 +446,23 @@ describe('createPublishedApp — row before Fly', () => {
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
   });
 
+  it('POL-10 given an org that turned published apps off, should create nothing - no row, no Fly app', async () => {
+    mockSelectQueue([{ rows: [{ id: 'env1', driveId: 'drive1' }], label: 'db:select:env' }]);
+    const allowed = vi.fn(async () => false);
+    const result = await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps({ publishedAppsAllowed: allowed }),
+    });
+    expect(result).toEqual({ ok: false, reason: 'org_policy' });
+    expect(allowed).toHaveBeenCalledWith('drive1');
+    expect(callLog).not.toContain('db:insert');
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
   it("given an env belonging to another drive, should refuse rather than denormalize the wrong drive", async () => {
     mockSelectQueue([{ rows: [{ id: 'env1', driveId: 'other-drive' }], label: 'db:select:env' }]);
     const result = await createPublishedApp({
@@ -562,8 +588,10 @@ describe('destroyPublishedApp', () => {
       'db:delete',
     ]);
     expect(insertedRows).toContainEqual(
-      expect.objectContaining({ stripeSubscriptionId: 'sub_123', publishedAppId: 'app1' }),
+      expect.objectContaining({ stripeSubscriptionId: 'sub_123', publishedAppId: 'app1', cancelAt: 'now' }),
     );
+    // A pending period-end release for the same subscription becomes an immediate cancel (D-OW-64).
+    expect(conflictUpdates).toContainEqual({ cancelAt: 'now' });
   });
 
   it('given the Fly delete fails, should keep the row so the teardown can be retried', async () => {

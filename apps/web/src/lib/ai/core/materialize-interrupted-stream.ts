@@ -5,7 +5,7 @@ import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { broadcastAiStreamComplete } from '@/lib/websocket';
 import { buildAssistantPersistencePayload } from '@/lib/ai/core/persistAssistantParts';
-import { extractStructuredContentFromParts } from '@/lib/ai/core/message-utils';
+import { extractStructuredContentFromParts, screenFilePartsAgainstBlocklist } from '@/lib/ai/core/message-utils';
 import { notifyMentionedUsers } from '@/lib/channels/notify-mentioned-users';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -197,7 +197,14 @@ export const materializeInterruptedStream = async ({
   if (row === null) return false;
 
   try {
-    const payload = buildAssistantPersistencePayload(row.messageId, await recoverParts(row));
+    const recovered = buildAssistantPersistencePayload(row.messageId, await recoverParts(row));
+    // Content blocklist: a blocked attachment is TERMINAL here, not a failure. The
+    // part is dropped and the rest of the reply is materialized, so the row settles
+    // instead of being retried by every later sweep. The audit event is written
+    // here, before the terminal write: if that write then fails, the next sweep
+    // screens — and audits — the same part again.
+    const screened = await screenFilePartsAgainstBlocklist(recovered.uiMessage.parts, { userId: row.userId });
+    const payload = { ...recovered, uiMessage: { ...recovered.uiMessage, parts: screened.parts } };
     const structuredContent = payload.uiMessage.parts.length > 0
       ? await extractStructuredContentFromParts(payload.uiMessage.parts, payload.content)
       : payload.content;

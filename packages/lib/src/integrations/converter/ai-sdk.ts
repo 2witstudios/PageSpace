@@ -36,6 +36,8 @@ export interface GrantWithConnectionAndProvider {
     id: string;
     name: string;
     status: string;
+    /** POL-11: set while the org's integration allowlist suspends this connection. */
+    suspendedByPolicy?: string | null;
     providerId: string;
     provider: {
       id: string;

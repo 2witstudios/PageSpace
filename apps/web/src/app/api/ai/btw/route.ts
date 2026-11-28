@@ -1,3 +1,4 @@
+import { toPersonalSubscriptionTier, type SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -7,22 +8,25 @@ import { eq } from '@pagespace/db/operators';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { users } from '@pagespace/db/schema/auth';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
-import { canConsumeAI } from '@pagespace/lib/billing/credit-gate';
+import { canConsumeAI, resolveEntitlementTier } from '@pagespace/lib/billing/credit-gate';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
+import { spendFallbackHeaders, spendFallbackNotice, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { MAX_CHAT_INFLIGHT } from '@pagespace/lib/billing/credit-pricing';
 import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
 import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
 import { AIMonitoring, estimateTokens, extractOpenRouterCostDollars, extractOpenRouterGenerationIds } from '@pagespace/lib/monitoring/ai-monitoring';
-import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { getActivePlan } from '@/lib/ai/core/plan-binding';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { resolveProviderModel } from '@/lib/ai/core/ai-providers-config';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
+import { conversationSessionDriveId } from '@/lib/ai/core/session-spend';
 import { priceInterruptedStep } from '@/lib/ai/core/interrupted-step-cost';
 import { createAdminRestrictedResponse, createSubscriptionRequiredResponse, requiresProSubscription } from '@/lib/subscription/rate-limit-middleware';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import { buildSideQuestionSnapshot, createSideQuestionStream } from '@/lib/ai/btw/side-question';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 export const maxDuration = 60;
 const MAX_QUESTION_CHARS = 2_000;
@@ -32,6 +36,10 @@ export async function POST(request: Request) {
   // the gate and the stream taking it over; once the stream starts, its settlement
   // (trackUsage) owns the release.
   let holdId: string | undefined;
+  // The wallet the hold was placed on, threaded to settlement with it (WAL-5).
+  let walletId: string | undefined;
+  // SPEND-4: a drive rule that moved the call to another source, reported on the response.
+  let spendFallback: SpendFallbackNotice | null = null;
   let holdHandedOff = false;
   try {
     const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: true });
@@ -48,25 +56,56 @@ export async function POST(request: Request) {
     const { conversationId, question } = body;
     if (typeof conversationId !== 'string' || typeof question !== 'string' || !question.trim() || question.length > MAX_QUESTION_CHARS) return NextResponse.json({ error: 'Invalid side question' }, { status: 400 });
     const [conversation] = await db.select({ userId: conversations.userId, isShared: conversations.isShared, type: conversations.type, contextId: conversations.contextId }).from(conversations).where(eq(conversations.id, conversationId)).limit(1);
-    if (!conversation || !(await canAccessConversation(userId, conversation))) {
+    if (!conversation || !(await canAccessConversation(actorFromAuth(auth), conversation))) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: 'conversation_not_accessible', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json({ error: 'Conversation not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), conversation?.userId === userId ? conversation.contextId : null, NextResponse.json({ error: 'Conversation not found' }, { status: 404 }));
     }
 
     const trimmedQuestion = question.trim();
-    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, userId))?.title ?? null });
+    const snapshot = await buildSideQuestionSnapshot({ conversationId, readMessages: () => messageRepository.getMessagesByConversationId(conversationId), readPlan: async () => (await getActivePlan(conversationId, actorFromAuth(auth)))?.title ?? null });
 
     // Same admission as a chat turn, keyed off the provider that will ACTUALLY run
     // (resolveProviderModel is what createAIProvider resolves too).
     const [user] = await db.select({ subscriptionTier: users.subscriptionTier, role: users.role, currentAiProvider: users.currentAiProvider, currentAiModel: users.currentAiModel }).from(users).where(eq(users.id, userId)).limit(1);
     const { provider: effectiveProvider, model: effectiveModel } = resolveProviderModel(undefined, undefined, user?.currentAiProvider, user?.currentAiModel);
-    // Entitlement exactly as a chat turn decides it: an admin-only provider is a
-    // role block, a paid-tier model is a tier block (a downgraded user's stored
-    // model must not keep running here).
+    const consumerTier = toPersonalSubscriptionTier(user?.subscriptionTier);
+    // A side question spends in the session of the conversation it asks about (SPEND-7):
+    // a page or drive conversation's drive, or personal credits for a global one (SPEND-8).
+    // It spends the source stored on that conversation (SPEND-3), or refuses (SPEND-4).
+    const sessionDriveId = await conversationSessionDriveId(conversation);
+    const spend = conversationSpend(sessionDriveId, conversationId);
+    // The reservation for this call. Also the ceiling on what an aborted run's
+    // estimate may charge (see priceInterruptedStep).
+    const holdCents = estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) });
+    // Prepaid credit gate BEFORE the provider is built: out_of_credits -> 402, the
+    // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
+    // so they skip the gate (no hold) exactly as the chat pipeline does.
+    let entitlementTier: SubscriptionTier | undefined;
+    if (!isMeteringExempt(effectiveProvider)) {
+      const gate = await canConsumeAI(userId, consumerTier, {
+        spend,
+        estCostCents: holdCents,
+        maxInFlight: MAX_CHAT_INFLIGHT,
+      });
+      if (!gate.allowed) {
+        loggers.ai.warn('Side question: AI credit gate denied', { userId, reason: gate.reason });
+        return creditGateErrorResponse(gate.reason, gate.refusal);
+      }
+      holdId = gate.holdId;
+      walletId = gate.walletId;
+      spendFallback = spendFallbackNotice(gate);
+      entitlementTier = gate.entitlementTier;
+    }
+
+    // Entitlement exactly as a chat turn decides it, AFTER the gate: an admin-only provider is a
+    // role block, a paid-tier model a tier block (a downgraded user's stored model must not keep
+    // running here) — for the tier of whoever funds the source the gate just HELD (WAL-8), never a
+    // separate pre-read that could judge a different source. A metering-exempt provider takes no
+    // hold, so its funder is read without one. A refusal frees the hold in the finally below.
     const admission = resolveGenerationAdmission({
       provider: effectiveProvider,
       model: effectiveModel,
-      subscriptionTier: user?.subscriptionTier,
+      subscriptionTier: entitlementTier ?? await resolveEntitlementTier(userId, consumerTier, spend),
       isAdmin: user?.role === 'admin',
       requiresProSubscription,
     });
@@ -74,34 +113,19 @@ export async function POST(request: Request) {
       auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'ai_btw', resourceId: conversationId, details: { reason: admission.reason, provider: effectiveProvider, method: 'POST' }, riskScore: 0.5 });
       return admission.reason === 'provider_admin_only' ? createAdminRestrictedResponse() : createSubscriptionRequiredResponse();
     }
-    // The reservation for this call. Also the ceiling on what an aborted run's
-    // estimate may charge (see priceInterruptedStep).
-    const holdCents = estimateChatHoldCentsForModel(effectiveModel, { inputTokens: estimateTokens(snapshot) + estimateTokens(trimmedQuestion) });
-    // Prepaid credit gate BEFORE the provider is built: out_of_credits -> 402, the
-    // in-flight cap -> 429. Metering-exempt providers bill on a flat external plan,
-    // so they skip the gate (no hold) exactly as the chat pipeline does.
-    if (!isMeteringExempt(effectiveProvider)) {
-      const gate = await canConsumeAI(userId, (user?.subscriptionTier ?? 'free') as SubscriptionTier, {
-        estCostCents: holdCents,
-        maxInFlight: MAX_CHAT_INFLIGHT,
-      });
-      if (!gate.allowed) {
-        loggers.ai.warn('Side question: AI credit gate denied', { userId, reason: gate.reason });
-        return creditGateErrorResponse(gate.reason);
-      }
-      holdId = gate.holdId;
-    }
 
-    const provider = await createAIProvider(userId, {}, { user: user ?? null });
+    const provider = await createAIProvider(userId, {}, { user: user ?? null, driveId: sessionDriveId });
     if ('error' in provider) return NextResponse.json({ error: provider.error }, { status: provider.status });
 
     const startTime = Date.now();
     const settledHoldId = holdId;
+    const settledWalletId = walletId;
     const response = createSideQuestionStream({
       model: provider.model,
       question: trimmedQuestion,
       snapshot,
       abortSignal: request.signal,
+      headers: spendFallbackHeaders(spendFallback),
       onSettle: async ({ outcome, usage, steps, interruptedStep, error }) => {
         // An abort cut the one step off before the provider reported usage: bill
         // the interrupted step by the shared policy, as an estimate. Its row is
@@ -138,6 +162,7 @@ export async function POST(request: Request) {
             conversationId,
             success: outcome === 'finished',
             holdId: settledHoldId,
+            walletId: settledWalletId,
             error: outcome === 'errored' ? (error instanceof Error ? error.message : String(error)) : undefined,
             metadata: {
               feature: 'side_question',

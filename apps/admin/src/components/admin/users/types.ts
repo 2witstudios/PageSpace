@@ -1,4 +1,4 @@
-import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import type { SubscriptionTier, PersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 
 export type { SubscriptionTier };
 
@@ -30,7 +30,7 @@ export interface AdminUser {
   currentAiProvider: string;
   currentAiModel: string;
   tokenVersion: number;
-  subscriptionTier: SubscriptionTier;
+  subscriptionTier: PersonalSubscriptionTier;
   stripeCustomerId: string | null;
   role: 'user' | 'admin';
   suspendedAt: string | null;

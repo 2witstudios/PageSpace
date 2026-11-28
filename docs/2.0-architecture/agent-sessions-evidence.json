@@ -19,7 +19,7 @@
       ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
-        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+        "contains": "web) filters=(--filter='web')"
       }
     },
     "lib-unit": {
@@ -29,7 +29,7 @@
       ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
-        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+        "contains": "lib) filters=(--filter='@pagespace/lib')"
       }
     },
     "realtime-unit": {
@@ -39,7 +39,7 @@
       ],
       "ciEvidence": {
         "workflow": ".github/workflows/ci.yml",
-        "contains": "bunx turbo run test:coverage --filter='!@pagespace/processor'"
+        "contains": "other) filters=(--filter='!@pagespace/lib' --filter='!web' --filter='!@pagespace/processor'"
       }
     },
     "scripts-vitest": {

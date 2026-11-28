@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db'
-import { eq, and, desc, asc, inArray, count, isNotNull, ilike } from '@pagespace/db/operators'
+import { eq, and, desc, asc, inArray, notInArray, count, ilike, gt, lte, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
@@ -13,15 +13,18 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
+import { parseTaskDateInput, isStartAfterDue, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
+import { getSubTaskCountsByPageId } from '@/lib/tasks/subtask-counts';
 import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus, resolveSeedCompletedAt } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { resolveTimezone } from '@/lib/ai/core/personalization-utils';
-import { isNaiveISODatetime, parseDatetimeInTimezone } from '@/lib/ai/core/timestamp-utils';
+import { isNaiveISODatetime } from '@/lib/ai/core/timestamp-utils';
 import { decryptTaskUserRelations, decryptTaskUserRelationsOne } from '@/lib/tasks/decrypt-task-relations';
 import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseTaskQuerySpec } from './query-spec';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -95,9 +98,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // Check view permission
   const canView = await canPrincipalViewPage(auth, pageId);
   if (!canView) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need view permission to access this task list',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   // Get or create task list (also ensures default status configs)
@@ -105,7 +108,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
 
   // Parse query params for filtering + pagination bounds
   const url = new URL(req.url);
-  const { status, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
+  const { status, statusGroup, perStatus, assigneeId, search, sortOrder, limit, offset } = parseTaskQuerySpec(url.searchParams);
 
   // Fetch status configs for this task list
   // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -150,28 +153,71 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   // ordering rail — #2143), filtered, bounded set of task ids — this is what keeps
   // the query from pulling every task into memory (the OOM crash this route caused).
   // Phase 2 hydrates only those ids' relations.
-  // Requesting limit+1 rows and slicing lets the response report `hasMore` (for the
-  // frontend's Load More) without a separate COUNT(*) query.
-  const positionExpr = pages.position;
-  const orderedIdRows = await db
-    .select({ id: taskItems.id })
-    .from(taskItems)
-    .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(and(
-      inArray(taskItems.pageId, childPageIds),
-      status ? eq(taskItems.status, status) : undefined,
-      assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
-      search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
-    ))
-    // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
-    // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
-    // pages that never got a distinct one) have no guaranteed stable order across repeated
-    // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
-    .orderBy(sortOrder === 'desc' ? desc(positionExpr) : asc(positionExpr), asc(taskItems.id))
-    .limit(limit + 1)
-    .offset(offset);
-  const hasMore = orderedIdRows.length > limit;
-  const boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
+  const positionOrder = sortOrder === 'desc' ? desc(pages.position) : asc(pages.position);
+
+  // The Active / Completed tabs filter in SQL so a page of results is a page of
+  // matching tasks — filtering after the fetch let completed rows crowd active ones
+  // out of the first page. A slug no config classifies counts as active, matching the
+  // client's isCompletedStatus.
+  const doneSlugs = statusConfigs.filter(c => c.group === 'done').map(c => c.slug);
+  let statusGroupCondition;
+  if (statusGroup === 'active' && doneSlugs.length > 0) {
+    statusGroupCondition = notInArray(taskItems.status, doneSlugs);
+  } else if (statusGroup === 'completed') {
+    statusGroupCondition = doneSlugs.length > 0 ? inArray(taskItems.status, doneSlugs) : sql`false`;
+  }
+
+  const filterConditions = and(
+    inArray(taskItems.pageId, childPageIds),
+    status ? eq(taskItems.status, status) : undefined,
+    statusGroupCondition,
+    assigneeId ? eq(taskItems.assigneeId, assigneeId) : undefined,
+    search ? ilike(pages.title, `%${escapeLikePattern(search)}%`) : undefined,
+  );
+
+  // Requesting one row past the page lets the response report `hasMore` (for the
+  // frontend's Load More) without a separate COUNT(*) query. In perStatus mode the
+  // window is per column instead — rank within status — so `hasMore` means "some
+  // column has rows beyond this window", which is what the board's Load More needs.
+  // A page is then up to limit × (number of statuses) rows; limit is capped, and a
+  // list's status vocabulary is small.
+  let boundedTaskIds: string[];
+  let hasMore: boolean;
+  if (perStatus) {
+    const ranked = db
+      .select({
+        id: taskItems.id,
+        rank: sql<number>`row_number() over (partition by ${taskItems.status} order by ${positionOrder}, ${taskItems.id})`.as('rank'),
+      })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(filterConditions)
+      .as('ranked');
+    const pageEnd = offset + limit;
+    // One window pass: the row just past the page (rank pageEnd + 1) in any column is the
+    // `hasMore` signal, costing at most one extra row per column.
+    const rankedRows = await db
+      .select({ id: ranked.id, rank: ranked.rank })
+      .from(ranked)
+      .where(and(gt(ranked.rank, offset), lte(ranked.rank, pageEnd + 1)));
+    hasMore = rankedRows.some(r => r.rank > pageEnd);
+    boundedTaskIds = rankedRows.filter(r => r.rank <= pageEnd).map(r => r.id);
+  } else {
+    const orderedIdRows = await db
+      .select({ id: taskItems.id })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(filterConditions)
+      // taskItems.id is a tiebreaker, not a sort key the user chose: without it, two tasks
+      // sharing a position (e.g. a read-then-write race in POST's nextPosition, or backfilled
+      // pages that never got a distinct one) have no guaranteed stable order across repeated
+      // LIMIT/OFFSET calls, so paging (offset=0, then offset=100) can skip or duplicate rows.
+      .orderBy(positionOrder, asc(taskItems.id))
+      .limit(limit + 1)
+      .offset(offset);
+    hasMore = orderedIdRows.length > limit;
+    boundedTaskIds = orderedIdRows.slice(0, limit).map(r => r.id);
+  }
 
   if (boundedTaskIds.length === 0) {
     return emptyTasksResponse();
@@ -192,6 +238,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
       pageId: true,
       status: true,
       priority: true,
+      startDate: true,
       dueDate: true,
       metadata: true,
       completedAt: true,
@@ -277,32 +324,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
   }
 
   // Batch-count sub-tasks (total + completed) for each task's linked page via pages.parentId
-  const subTaskCountByPageId = new Map<string, number>();
-  const subTaskCompletedByPageId = new Map<string, number>();
-  const linkedPageIds = tasks.map(t => t.pageId).filter((id): id is string => !!id);
-  if (linkedPageIds.length > 0) {
-    const baseWhere = and(inArray(pages.parentId, linkedPageIds), eq(pages.isTrashed, false));
-    const [subTaskRows, completedSubTaskRows] = await Promise.all([
-      db
-        .select({ parentId: pages.parentId, total: count() })
-        .from(taskItems)
-        .innerJoin(pages, eq(pages.id, taskItems.pageId))
-        .where(baseWhere)
-        .groupBy(pages.parentId),
-      db
-        .select({ parentId: pages.parentId, total: count() })
-        .from(taskItems)
-        .innerJoin(pages, eq(pages.id, taskItems.pageId))
-        .where(and(baseWhere, isNotNull(taskItems.completedAt)))
-        .groupBy(pages.parentId),
-    ]);
-    for (const row of subTaskRows) {
-      if (row.parentId) subTaskCountByPageId.set(row.parentId, Number(row.total));
-    }
-    for (const row of completedSubTaskRows) {
-      if (row.parentId) subTaskCompletedByPageId.set(row.parentId, Number(row.total));
-    }
-  }
+  const subTaskCountsByPageId = await getSubTaskCountsByPageId(
+    tasks.map(t => t.pageId).filter((id): id is string => !!id),
+  );
 
   const enrichedTasks = tasks.map(({ page, ...t }) => ({
     ...t,
@@ -311,8 +335,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
     title: page?.title ?? '',
     activeTriggerCount: triggerCountByTaskId.get(t.id) ?? 0,
     hasContent: computeHasContent(page?.content),
-    subTaskCount: subTaskCountByPageId.get(t.pageId ?? '') ?? 0,
-    subTaskCompletedCount: subTaskCompletedByPageId.get(t.pageId ?? '') ?? 0,
+    subTaskCount: subTaskCountsByPageId.get(t.pageId ?? '')?.total ?? 0,
+    subTaskCompletedCount: subTaskCountsByPageId.get(t.pageId ?? '')?.completed ?? 0,
     page: page ? { id: page.id, type: page.type, isTrashed: page.isTrashed, position: page.position } : null,
   }));
 
@@ -349,9 +373,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // Check edit permission
   const canEdit = await canPrincipalEditPage(auth, pageId);
   if (!canEdit) {
-    return NextResponse.json({
+    return deniedResponse(actorFromAuth(auth), pageId, NextResponse.json({
       error: 'You need edit permission to add tasks',
-    }, { status: 403 });
+    }, { status: 403 }));
   }
 
   const body = await req.json();
@@ -363,6 +387,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     assigneeAgentId,
     assigneeIds,
     dueDate,
+    startDate,
     note,
     position,
     timezone,
@@ -494,16 +519,27 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
   // zone. Resolving only for the trigger would leave the due date itself read
   // in the server's zone (#2404). An absolute due date needs no zone, so the
   // profile lookup stays skipped in the common case.
-  const dueDateNeedsTimezone = typeof dueDate === 'string' && isNaiveISODatetime(dueDate);
+  const dueDateNeedsTimezone = (typeof dueDate === 'string' && isNaiveISODatetime(dueDate))
+    || (typeof startDate === 'string' && isNaiveISODatetime(startDate));
   const resolvedTimezone = (agentTrigger || dueDateNeedsTimezone)
     ? await resolveTimezone(typeof timezone === 'string' ? timezone : null, userId)
     : 'UTC';
   // Only a string can be naive. Anything else — an epoch number, say — keeps the
   // prior `new Date()` behaviour instead of being stringified into an Invalid
   // Date; this route parses an unvalidated body, so that input is reachable.
-  const parsedDueDate = dueDate
-    ? (typeof dueDate === 'string' ? parseDatetimeInTimezone(dueDate, resolvedTimezone) : new Date(dueDate))
-    : null;
+  const dueDateResult = parseTaskDateInput(dueDate, resolvedTimezone);
+  if (!dueDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid due date' }, { status: 400 });
+  }
+  const parsedDueDate = dueDateResult.value;
+  const startDateResult = parseTaskDateInput(startDate, resolvedTimezone);
+  if (!startDateResult.ok) {
+    return NextResponse.json({ error: 'Invalid start date' }, { status: 400 });
+  }
+  const parsedStartDate = startDateResult.value;
+  if (isStartAfterDue(parsedStartDate, parsedDueDate)) {
+    return NextResponse.json({ error: START_AFTER_DUE_ERROR }, { status: 400 });
+  }
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
@@ -544,6 +580,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
+      startDate: parsedStartDate,
       dueDate: parsedDueDate,
       completedAt: seedCompletedAt,
       metadata: {

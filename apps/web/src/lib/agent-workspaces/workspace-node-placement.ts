@@ -47,6 +47,7 @@ import { move, resize } from '@pagespace/lib/agent-workspaces/workspace-node-alg
 import { childrenOf, findNode, rootOf, type WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { createId } from '@paralleldrive/cuid2';
 import { applyWorkspaceNodeCommand } from './workspace-node-runtime';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * A rearrange's answer. It REPORTS, unlike the placement helpers: a rearrange is
@@ -67,7 +68,7 @@ export type LayoutCommandOutcome =
  */
 export async function applyLayoutCommandForWorkspace(input: {
   workspaceId: string;
-  actingUserId: string;
+  actor: AccessActor;
   run: (nodes: readonly WorkspaceNode[]) => CommandResult;
 }): Promise<LayoutCommandOutcome> {
   try {
@@ -123,7 +124,7 @@ export async function placePagePaneForConversation(input: {
   conversationId: string;
   pageId: string;
   /** The ACTING USER — the page ACL is checked against them, never the model's word. */
-  viewerId: string;
+  viewer: AccessActor;
 }): Promise<void> {
   try {
     const workspaceId = await findWorkspaceOfConversation(input.conversationId);
@@ -140,7 +141,7 @@ export async function placePagePaneForConversation(input: {
     // and logs which page was named, where the funnel's gate is uniform and
     // deliberately says nothing. A prompt-injection attempt is exactly the thing
     // an operator needs to find in a log.
-    if ((await getUserAccessLevel(input.viewerId, input.pageId)) === null) {
+    if ((await getUserAccessLevel(input.viewer, input.pageId)) === null) {
       loggers.api.warn('Refused a page-pane placement for a page the acting user cannot view', {
         conversationId: input.conversationId,
         pageId: input.pageId,
@@ -155,7 +156,7 @@ export async function placePagePaneForConversation(input: {
     // query, and one less place a stale label can be written down.
     const outcome = await applyLayoutCommandForWorkspace({
       workspaceId,
-      actingUserId: input.viewerId,
+      actor: input.viewer,
       run: (nodes) =>
         openPage(nodes, {
           target: { kind: 'page', id: input.pageId },
@@ -195,14 +196,14 @@ export async function placeWorkerPane(input: {
   workspaceId: string;
   conversationId: string;
   /** The ACTING USER, for the binding gate. */
-  actingUserId: string;
+  actor: AccessActor;
   /** The spawning conversation, when it is in the same grid — never evicted by its own spawn. */
   excludeTargetId?: string;
 }): Promise<void> {
   try {
     const outcome = await applyLayoutCommandForWorkspace({
       workspaceId: input.workspaceId,
-      actingUserId: input.actingUserId,
+      actor: input.actor,
       run: (nodes) =>
         openConversation(nodes, {
           target: { kind: 'chat', id: input.conversationId },

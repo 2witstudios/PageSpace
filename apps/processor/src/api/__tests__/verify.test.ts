@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Content safety: the rejected-upload delete skips a hash held for a takedown. Nothing is blocked here.
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ isHashBlocked: vi.fn().mockResolvedValue(false) }));
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import request from 'supertest';

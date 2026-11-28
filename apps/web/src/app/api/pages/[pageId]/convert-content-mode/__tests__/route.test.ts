@@ -79,6 +79,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
 }));
 vi.mock('@pagespace/lib/services/page-version-service', () => ({
@@ -108,6 +109,7 @@ vi.mock('marked', () => ({
 // ── Imports (after mocks) ──────────────────────────────────────────────────
 
 import { POST } from '../../convert-content-mode/route';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -157,15 +159,8 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
     mockCanUserEditPage.mockResolvedValue(true);
     mockTurndown.mockReturnValue('# Converted Markdown');
     mockMarkedParse.mockResolvedValue('<h1>Converted HTML</h1>');
-    mockPagesFindFirst
-      .mockResolvedValueOnce(mockDocPage)       // first call: fetch current page
-      .mockResolvedValueOnce({                   // second call: refetch after update
-        ...mockDocPage,
-        content: '# Converted Markdown',
-        contentMode: 'markdown',
-        revision: 6,
-      });
-    mockApplyPageMutation.mockResolvedValue({});
+    mockPagesFindFirst.mockReset().mockResolvedValue(mockDocPage);
+    mockApplyPageMutation.mockResolvedValue({ nextRevision: 6, nextContentRevision: 1 });
   });
 
   describe('authentication', () => {
@@ -371,6 +366,18 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
     });
   });
 
+  it('acknowledges the conversion rather than a newer post-commit writer', async () => {
+    mockPagesFindFirst.mockReset().mockResolvedValueOnce(mockDocPage).mockResolvedValue({
+      ...mockDocPage, content: 'newer unseen content', contentMode: 'html', revision: 7, contentRevision: 9,
+    });
+    mockApplyPageMutation.mockResolvedValue({ nextRevision: 6, nextContentRevision: 8 });
+    const response = await POST(createRequest({ targetMode: 'markdown' }), mockParams);
+    expect(await response.json()).toMatchObject({
+      content: '# Converted Markdown', contentMode: 'markdown', revision: 6, contentRevision: 8,
+    });
+    expect(mockPagesFindFirst).toHaveBeenCalledTimes(1);
+  });
+
   describe('side effects', () => {
     it('broadcasts content-updated event', async () => {
       await POST(createRequest({ targetMode: 'markdown' }), mockParams);
@@ -413,4 +420,13 @@ describe('POST /api/pages/[pageId]/convert-content-mode', () => {
       expect(Array.isArray(body.error)).toBe(true);
     });
   });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

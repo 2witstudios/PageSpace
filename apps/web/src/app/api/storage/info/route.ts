@@ -20,6 +20,8 @@ import {
   pickRecentFiles,
   buildStorageByDrive,
 } from '@/lib/storage/storage-info-core';
+import { isDriveLead } from '@pagespace/lib/permissions/drive-relationship';
+import { actorFromVerifiedUser } from '@/lib/auth/request-actor';
 
 export async function GET(request: NextRequest) {
   try {
@@ -102,7 +104,7 @@ export async function GET(request: NextRequest) {
     // leaking to a user who no longer has access. Owned drives always pass
     // trivially; only re-check the ones the user doesn't own.
     const accessChecks = await Promise.all(
-      candidateDrives.map(d => d.ownerId === user.id ? Promise.resolve(true) : getUserDriveAccess(user.id, d.id)),
+      candidateDrives.map(d => isDriveLead(user.id, d) ? Promise.resolve(true) : getUserDriveAccess(actorFromVerifiedUser(user), d.id)),
     );
     const userDrives = candidateDrives.filter((_, i) => accessChecks[i]);
 
@@ -127,7 +129,7 @@ export async function GET(request: NextRequest) {
           .filter((id): id is string => id !== null),
       ),
     );
-    const pagePermissions = await getBatchPagePermissions(user.id, candidatePageIds);
+    const pagePermissions = await getBatchPagePermissions(actorFromVerifiedUser(user), candidatePageIds);
     const canShowPage = (f: { pageId: string | null }) =>
       f.pageId !== null && (pagePermissions.get(f.pageId)?.canView ?? false);
 

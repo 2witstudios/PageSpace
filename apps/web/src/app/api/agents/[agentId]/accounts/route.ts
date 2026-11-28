@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
-import type { UserId } from '@pagespace/lib/agent-accounts/grant';
 import { getAccountAuthority } from '@/lib/agent-accounts/account-authority-client';
 import { CREATE_REFUSAL_STATUS, createAgentAccountBody } from '@/lib/agent-accounts/account-request-schemas';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -24,7 +24,7 @@ export async function GET(request: Request, context: RouteContext) {
   const authority = getAccountAuthority();
   if (authority === null) return NextResponse.json({ configured: false, accounts: [] });
   try {
-    const accounts = await authority.listAccounts({ actorUserId: auth.userId as UserId, owner: { kind: 'agent_page', agentPageId: agentId } });
+    const accounts = await authority.listAccounts({ actor: actorFromAuth(auth), owner: { kind: 'agent_page', agentPageId: agentId } });
     if (accounts === null) return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     return NextResponse.json({ configured: true, accounts });
   } catch (error) {
@@ -49,7 +49,7 @@ export async function POST(request: Request, context: RouteContext) {
   if (!parsed.success) return NextResponse.json({ error: 'invalid_request' }, { status: 400 });
 
   try {
-    const result = await authority.createAccount({ actorUserId: auth.userId as UserId, owner: { kind: 'agent_page', agentPageId: agentId }, input: parsed.data });
+    const result = await authority.createAccount({ actor: actorFromAuth(auth), owner: { kind: 'agent_page', agentPageId: agentId }, input: parsed.data });
     if (!result.ok) return NextResponse.json({ error: result.reason }, { status: CREATE_REFUSAL_STATUS[result.reason] ?? 400 });
     auditRequest(request, { eventType: 'auth.token.created', userId: auth.userId, resourceType: 'agent_account', resourceId: result.account.id });
     return NextResponse.json({ account: result.account }, { status: 201 });

@@ -1,4 +1,3 @@
-import type { LocationContext } from './chat-types';
 import type { ContextRef } from './buildContextRef';
 
 /**
@@ -13,13 +12,10 @@ import type { ContextRef } from './buildContextRef';
  * route.ts), so it must reflect the CURRENT conversation on every call, not
  * just whatever the transport's URL still points at.
  *
- * `contextRef` is the synchronous replacement for `locationContext`: callers
- * build it from the current pathname (`buildContextRef`, no fetch, no await)
- * and the server resolves + permission-checks it at request time.
- * `locationContext` stays accepted for at least one release so an old client
- * bundle that never sends a contextRef still gets its trusted client-computed
- * context honored; new callers should pass contextRef and leave
- * locationContext unset.
+ * `contextRef` is where the person is: callers build it from the current
+ * pathname (`buildContextRef`, no fetch, no await) and the server resolves +
+ * permission-checks it at request time. It is the only way a turn is inside a
+ * drive; the server refuses the old client-computed `locationContext` field.
  */
 export interface GlobalChatRequestBodyParams {
   conversationId: string | null;
@@ -27,7 +23,6 @@ export interface GlobalChatRequestBodyParams {
   webSearchEnabled: boolean;
   imageGenEnabled: boolean;
   showPageTree: boolean;
-  locationContext?: LocationContext | null;
   contextRef?: ContextRef;
   selectedProvider: string | null;
   selectedModel: string | null;
@@ -44,7 +39,6 @@ export interface GlobalChatRequestBody {
   webSearchEnabled: boolean;
   imageGenEnabled: boolean;
   showPageTree: boolean;
-  locationContext: LocationContext | undefined;
   contextRef: ContextRef | undefined;
   selectedProvider: string | null;
   selectedModel: string | null;
@@ -60,7 +54,6 @@ export function buildGlobalChatRequestBody(
     webSearchEnabled: params.webSearchEnabled,
     imageGenEnabled: params.imageGenEnabled,
     showPageTree: params.showPageTree,
-    locationContext: params.locationContext || undefined,
     contextRef: params.contextRef,
     selectedProvider: params.selectedProvider,
     selectedModel: params.selectedModel,

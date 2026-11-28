@@ -150,6 +150,8 @@ interface SessionFixture {
   driveId: string | null;
   /** The persistent environment this session runs inside — absent means the ephemeral default. */
   envId?: string | null;
+  /** When the session was spawned — what files an ephemeral one under "Previous sessions" (before Home existed). */
+  createdAt?: string;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: { conversationId: string; title: string | null; agentPageId: string | null }[];
@@ -204,6 +206,9 @@ interface EnvFixture {
   substrate?: 'sprite' | 'local';
   label?: string;
   enrolled?: boolean;
+  /** The owner's default env (single-sandbox model). Absent = an ordinary env. */
+  isHome?: boolean;
+  createdAt?: string;
 }
 
 /**
@@ -950,8 +955,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
       expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
-        envId: null,
-        agentPageId: 'agent-1',
+                agentPageId: 'agent-1',
         name: '',
       });
       await waitFor(() =>
@@ -979,8 +983,7 @@ describe('AgentsSidebar', () => {
       // Drive-scoped, not the global assistant group: driveId stays 'drive-1'.
       expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
         driveId: 'drive-1',
-        envId: null,
-        agentPageId: null,
+                agentPageId: null,
         name: '',
       });
       await waitFor(() =>
@@ -1463,8 +1466,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
-          envId: null,
-          agentPageId: null,
+                    agentPageId: null,
           name: 'my assistant session',
         }),
       );
@@ -1562,7 +1564,11 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText('Alpha')).toBeNull();
       expect(screen.queryByText('Global Assistant')).toBeNull();
       expect(screen.queryByRole('button', { name: /^New session/i })).toBeNull();
-      expect(mockFetchWithAuth).not.toHaveBeenCalled();
+      // The roster/palette fetch (the one that would populate a dead spawn chooser) never
+      // fires for a signed-out visitor; the shell's refused prefetches (orgs, favorites)
+      // may still run — they answer 401 and surface the refusal notice above.
+      const called = mockFetchWithAuth.mock.calls.map(([url]) => String(url));
+      expect(called.some((url) => url.includes('page-agents'))).toBe(false);
     });
 
     test('spawning from a roster drive with zero sessions posts its driveId + the chosen agent + the typed name', async () => {
@@ -1581,8 +1587,7 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: 'drive-1',
-          envId: null,
-          agentPageId: 'agent-1',
+                    agentPageId: 'agent-1',
           name: 'my session',
         }),
       );
@@ -1611,14 +1616,103 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
           driveId: null,
-          envId: null,
-          agentPageId: null,
+                    agentPageId: null,
           name: '',
         }),
       );
       await waitFor(() => expect(useAgentSurfaceStore.getState().selectedSessionId).toBe('ses-a'));
       expect(useAgentSurfaceStore.getState().selectedConversationId).toBe('conv-a');
       expect(useAgentSurfaceStore.getState().selectedAgentId).toBeNull();
+    });
+
+    describe("the Assistant spawn runs in the owner's Home env by default", () => {
+      const HOME_ENV = { id: 'env-home', name: 'Home', status: 'running' as const, isHome: true };
+      const spawned = { session: { workspaceId: 'ses-a', sessionId: 'ses-a' }, conversationId: 'conv-a' };
+
+      beforeEach(() => {
+        useDriveStore.setState({ drives: [driveFixture('drive-1', 'Home', { kind: 'HOME' })] });
+      });
+
+      test("offers the Home drive's environments with Home first as Default, and picking it posts the HOME drive with that env", async () => {
+        mockPost.mockResolvedValue(spawned);
+        respondWithSessions([], [{ id: 'env-1', name: 'scratch', status: 'none' }, HOME_ENV]);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Global Assistant');
+        await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+
+        await screen.findByText('in Home');
+        expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/drives/drive-1/envs');
+        const options = screen.getAllByRole('option').map((el) => el.textContent ?? '');
+        expect(options[0]).toContain('in Home');
+        expect(options[0]).toContain('Default');
+        expect(options[1]).toContain('New sandbox');
+
+        await user.click(screen.getByText('in Home'));
+        fireEvent.submit((await screen.findByPlaceholderText('Global Assistant')).closest('form')!);
+
+        // The Home drive, not null: a driveless spawn may not name an env.
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+            driveId: 'drive-1',
+            envId: 'env-home',
+            agentPageId: null,
+            name: '',
+          }),
+        );
+      });
+
+      test("choosing New sandbox keeps today's global body — no drive, envId null", async () => {
+        mockPost.mockResolvedValue(spawned);
+        respondWithSessions([], [HOME_ENV]);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Global Assistant');
+        await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+        await user.click(await screen.findByText('New sandbox'));
+        fireEvent.submit((await screen.findByPlaceholderText('Global Assistant')).closest('form')!);
+
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+            driveId: null,
+            envId: null,
+            agentPageId: null,
+            name: '',
+          }),
+        );
+      });
+
+      test('a Home drive with no envs yet skips the question and OMITS envId, so the server mints and uses Home', async () => {
+        mockPost.mockResolvedValue(spawned);
+        respondWithSessions([], []);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Global Assistant');
+        await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+        fireEvent.submit((await screen.findByPlaceholderText('Global Assistant')).closest('form')!);
+
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', { driveId: null, agentPageId: null, name: '' }),
+        );
+      });
+
+      test("a failed Home env listing does not strand the spawn: it goes on to naming and OMITS envId for the server's Home default", async () => {
+        mockPost.mockResolvedValue(spawned);
+        respondWithSessions([], [HOME_ENV], () => true);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        await screen.findByText('Global Assistant');
+        await user.click(within(groupContainer('Global Assistant')).getByRole('button', { name: /^New session/i }));
+        fireEvent.submit((await screen.findByPlaceholderText('Global Assistant')).closest('form')!);
+
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', { driveId: null, agentPageId: null, name: '' }),
+        );
+      });
     });
 
     test('the Assistant group sorts first even when a drive session arrives before it in the fetch', async () => {
@@ -1827,6 +1921,88 @@ describe('AgentsSidebar', () => {
 
     beforeEach(() => {
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha')] });
+    });
+
+    describe('previous sessions (single-sandbox migration)', () => {
+      const HOME_ENV = { id: 'env-home', name: 'Home', status: 'running' as const, isHome: true, createdAt: '2026-11-01T00:00:00.000Z' };
+      const old = (workspaceId: string, name: string): SessionFixture => ({ ...envSession(workspaceId, null, name), createdAt: '2026-10-01T00:00:00.000Z' });
+
+      test('in a drive with a Home env, lists the ephemeral sessions from before Home under "Previous sessions"; a later ephemeral one stays put', async () => {
+        respondWithSessions(
+          [old('ses-old-1', 'stale one'), old('ses-old-2', 'stale two'), { ...envSession('ses-new', null, 'chosen sandbox'), createdAt: '2026-11-02T00:00:00.000Z' }],
+          [HOME_ENV],
+        );
+        renderSidebar();
+
+        const previous = await screen.findByTestId('sidebar-previous-sessions-drive-1');
+        expect(within(previous).getByText('Previous sessions')).toBeDefined();
+        expect(within(previous).getByText('stale one')).toBeDefined();
+        expect(within(previous).getByText('stale two')).toBeDefined();
+        expect(within(previous).queryByText('chosen sandbox')).toBeNull();
+        expect(screen.getByText('chosen sandbox')).toBeDefined();
+      });
+
+      test('a drive with no Home env has no "Previous sessions" section — its ephemeral sessions are just sessions', async () => {
+        respondWithSessions([old('ses-old-1', 'stale one')], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+        renderSidebar();
+
+        expect(await screen.findByText('stale one')).toBeDefined();
+        expect(screen.queryByText('Previous sessions')).toBeNull();
+      });
+
+      test('"End all" confirms that their files will be lost, then ends EACH previous session through the same DELETE the row uses, and refetches', async () => {
+        mockDel.mockResolvedValue(undefined);
+        respondWithSessions([old('ses-old-1', 'stale one'), old('ses-old-2', 'stale two')], [HOME_ENV]);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        const previous = await screen.findByTestId('sidebar-previous-sessions-drive-1');
+        await user.click(within(previous).getByRole('button', { name: 'End all previous sessions' }));
+        const dialog = await screen.findByRole('alertdialog');
+        expect(within(dialog).getByText(/files.*lost/i)).toBeDefined();
+        const fetchesBefore = mockFetchWithAuth.mock.calls.length;
+        await user.click(within(dialog).getByRole('button', { name: 'End all' }));
+
+        await waitFor(() => expect(mockDel).toHaveBeenCalledTimes(2));
+        // Each is RELEASED first (its global threads move to Home rather than
+        // re-provisioning the session's own Sprite when reopened), then ended.
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1/release');
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2/release');
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-1');
+        expect(mockDel).toHaveBeenCalledWith('/api/agent-workspaces/ses-old-2');
+        for (const id of ['ses-old-1', 'ses-old-2']) {
+          const released = mockPost.mock.invocationCallOrder[mockPost.mock.calls.findIndex(([url]) => url === `/api/agent-workspaces/${id}/release`)];
+          const ended = mockDel.mock.invocationCallOrder[mockDel.mock.calls.findIndex(([url]) => url === `/api/agent-workspaces/${id}`)];
+          expect(released).toBeLessThan(ended);
+        }
+        await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(fetchesBefore));
+      });
+
+      test('cancelling "End all" ends nothing', async () => {
+        respondWithSessions([old('ses-old-1', 'stale one')], [HOME_ENV]);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        const previous = await screen.findByTestId('sidebar-previous-sessions-drive-1');
+        await user.click(within(previous).getByRole('button', { name: 'End all previous sessions' }));
+        await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Cancel' }));
+
+        expect(mockDel).not.toHaveBeenCalled();
+      });
+
+      test('a failed end is reported, and the listing is refetched so the survivors come back', async () => {
+        mockDel.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(undefined);
+        respondWithSessions([old('ses-old-1', 'stale one'), old('ses-old-2', 'stale two')], [HOME_ENV]);
+        const user = userEvent.setup();
+        renderSidebar();
+
+        const previous = await screen.findByTestId('sidebar-previous-sessions-drive-1');
+        await user.click(within(previous).getByRole('button', { name: 'End all previous sessions' }));
+        await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'End all' }));
+
+        await waitFor(() => expect(mockToastError).toHaveBeenCalled());
+        expect(mockDel).toHaveBeenCalledTimes(2);
+      });
     });
 
     test('renders an environment with no sessions in it — infrastructure does not disappear when idle', async () => {
@@ -2242,6 +2418,18 @@ describe('AgentsSidebar', () => {
       );
     });
 
+    test('the Home env offers Rename and Rebuild but never Delete — Home is wiped, not removed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'Home', status: 'running', isHome: true }]);
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('Environment actions'));
+      expect(await screen.findByText('Rebuild to blank')).toBeDefined();
+      expect(screen.getByText('Rename')).toBeDefined();
+      expect(screen.queryByText('Delete environment')).toBeNull();
+    });
+
     test('deleting refuses first, then escalates to the forced delete only after the server says sessions are live', async () => {
       const user = userEvent.setup();
       respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
@@ -2438,6 +2626,66 @@ describe('AgentsSidebar', () => {
           name: '',
         }),
       );
+    });
+
+    describe('Home is the default env (single-sandbox model)', () => {
+      const HOME_ENV = { id: 'env-home', name: 'Home', status: 'running' as const, isHome: true };
+      const spawned = { session: { workspaceId: 'ses-new', sessionId: 'ses-new' }, conversationId: 'conv-new' };
+
+      test("in a drive with a Home env, an agent with no default of its own gets Home FIRST, tagged Default, then New sandbox — preselected, and picking it spawns into Home", async () => {
+        const user = userEvent.setup();
+        respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }, HOME_ENV]);
+        mockPost.mockResolvedValue(spawned);
+        renderSidebar();
+
+        await screen.findByTestId('sidebar-env-env-home');
+        await user.click(screen.getByLabelText('New session'));
+        await user.click(await screen.findByText('Researcher'));
+
+        await screen.findByText('in Home');
+        const options = screen.getAllByRole('option').map((el) => el.textContent ?? '');
+        expect(options[0]).toContain('in Home');
+        expect(options[0]).toContain('Default');
+        expect(options[1]).toContain('New sandbox');
+        expect(options[2]).toContain('in staging');
+        // cmdk highlights the first rendered item, so this ordering IS the
+        // preselection (see the palette's comment on why order decides it).
+
+        await user.click(screen.getByText('in Home'));
+        const nameInput = await screen.findByPlaceholderText('Researcher');
+        fireEvent.submit(nameInput.closest('form')!);
+
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+            driveId: 'drive-1',
+            envId: 'env-home',
+            agentPageId: 'agent-1',
+            name: '',
+          }),
+        );
+      });
+
+      test('New sandbox stays an explicit choice beside Home, and posts envId null', async () => {
+        const user = userEvent.setup();
+        respondWithSessions([], [HOME_ENV]);
+        mockPost.mockResolvedValue(spawned);
+        renderSidebar();
+
+        await screen.findByTestId('sidebar-env-env-home');
+        await user.click(screen.getByLabelText('New session'));
+        await user.click(await screen.findByText('Researcher'));
+        await user.click(await screen.findByText('New sandbox'));
+        fireEvent.submit((await screen.findByPlaceholderText('Researcher')).closest('form')!);
+
+        await waitFor(() =>
+          expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+            driveId: 'drive-1',
+            envId: null,
+            agentPageId: 'agent-1',
+            name: '',
+          }),
+        );
+      });
     });
 
     test('WAITS for the environments listing rather than treating an in-flight fetch as "this drive has none"', async () => {

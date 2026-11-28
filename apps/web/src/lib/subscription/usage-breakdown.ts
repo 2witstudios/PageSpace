@@ -10,6 +10,7 @@
  * precision; never the raw provider `cost` on aiUsageLogs.
  */
 
+import { centsFromMillicents } from '@pagespace/lib/billing/money-model';
 import {
   normalizeUsageSource,
   SANDBOX_STORAGE_MODELS,
@@ -148,8 +149,10 @@ interface Bucket {
   calls: number;
 }
 
+// Cents to the nearest hundredth of a cent (10 millicents), so a sub-cent row still
+// shows real spend. Rounded in millicents, then converted by the money model.
 const millicentsToCents = (millicents: number): number =>
-  Math.round((millicents / 1000) * 100) / 100;
+  centsFromMillicents(Math.round(millicents / 10) * 10);
 
 // Share of total spend, 0–100. A row with real (nonzero) spend never rounds down to a
 // bare "0%" with an empty bar — it floors at 1% so the UI reflects that it cost something.

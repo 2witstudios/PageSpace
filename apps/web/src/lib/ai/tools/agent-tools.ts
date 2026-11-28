@@ -1,6 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { canActorEditPage, isMcpScoped } from './actor-permissions';
+import { canActorEditPage, isMcpScoped, toolActor } from './actor-permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -66,7 +66,7 @@ export const agentTools = {
         // account, so it's gated stricter than general edit access — only the
         // drive owner may toggle it, mirroring the issue's "owner-only" flag.
         if (userScopedAccess !== undefined) {
-          const driveAccess = await checkDriveAccess(agent.driveId, userId);
+          const driveAccess = await checkDriveAccess(agent.driveId, toolActor(context as ToolExecutionContext));
           if (!driveAccess.isOwner) {
             throw new Error('Only the drive owner can change this agent\'s user-scoped access setting');
           }

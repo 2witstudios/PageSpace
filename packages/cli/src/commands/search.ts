@@ -128,7 +128,7 @@ export const searchTextHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.search.multiDrive({ searchQuery: query, searchType: 'text', maxResultsPerDrive: maxResults.value }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -176,7 +176,7 @@ export const searchRegexHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.search.regex({ driveId, pattern, searchIn: rawSearchIn as SearchIn | undefined, maxResults: maxResults.value }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -218,7 +218,7 @@ export const searchGlobHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.search.glob({ driveId, pattern, maxResults: maxResults.value }));
+  const result = await callSdk(ctx, () => ctx.sdk.search.glob({ driveId, pattern, maxResults: maxResults.value }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

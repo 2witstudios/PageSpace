@@ -5,7 +5,9 @@ const {
   mockDeleteRecords,
   mockCreateSystemFileDeleteToken,
   mockUpdateStorageUsage,
+  mockFindDriveBillingFactsMap,
 } = vi.hoisted(() => ({
+  mockFindDriveBillingFactsMap: vi.fn(),
   mockFindOrphans: vi.fn(),
   mockDeleteRecords: vi.fn(),
   mockCreateSystemFileDeleteToken: vi.fn(),
@@ -23,19 +25,27 @@ vi.mock('@pagespace/lib/services/validated-service-token', () => ({
 
 vi.mock('@pagespace/lib/services/storage-limits', () => ({
   updateStorageUsage: mockUpdateStorageUsage,
-  // Real (pure) impl so the reaper's credit rules are exercised, not stubbed.
+  findDriveBillingFactsMap: mockFindDriveBillingFactsMap,
+  // Mirrors the pure impl so the reaper's credit rules are exercised, not stubbed.
   computeStorageCreditOnUnlink: (input: {
     createdBy: string | null;
+    drive: { ownerId: string; orgId: string | null } | null;
     sizeBytes: number | string | null;
     deletedByThisCall: boolean;
     hadPhysicalBlob: boolean;
   }) => {
-    if (!input.deletedByThisCall || !input.hadPhysicalBlob || !input.createdBy) return null;
+    if (!input.deletedByThisCall || !input.hadPhysicalBlob) return null;
+    if (input.drive?.orgId) return null;
+    const payer = input.drive ? input.drive.ownerId : input.createdBy;
+    if (!payer) return null;
     const n = typeof input.sizeBytes === 'string' ? Number(input.sizeBytes) : (input.sizeBytes ?? 0);
     if (!Number.isFinite(n) || n <= 0) return null;
-    return { userId: input.createdBy, deltaBytes: -Math.floor(n) };
+    return { userId: payer, deltaBytes: -Math.floor(n) };
   },
 }));
+
+const mockFindBlockedHashes = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({ findBlockedHashes: mockFindBlockedHashes }));
 
 import { reapOrphanedFiles } from '../reap-orphaned-files';
 
@@ -51,11 +61,14 @@ const orphan = (overrides: Partial<{ id: string; storagePath: string; driveId: s
 
 describe('reapOrphanedFiles', () => {
   beforeEach(() => {
+    mockFindBlockedHashes.mockReset();
+    mockFindBlockedHashes.mockResolvedValue(new Set());
     vi.clearAllMocks();
     mockFindOrphans.mockResolvedValue([]);
     mockDeleteRecords.mockResolvedValue([]);
     mockCreateSystemFileDeleteToken.mockResolvedValue({ token: 'sys-tok' });
     mockUpdateStorageUsage.mockResolvedValue(undefined);
+    mockFindDriveBillingFactsMap.mockResolvedValue(new Map([['d1', { ownerId: 'u1', orgId: null }]]));
   });
 
   it('forwards an explicit fileIds list to findOrphanedFileRecords (scoped reap)', async () => {
@@ -82,6 +95,74 @@ describe('reapOrphanedFiles', () => {
     vi.unstubAllGlobals();
   });
 
+  // A hash on the content blocklist belongs to its takedown. While a CSAM case waits for evidence
+  // storage the private original is the ONLY copy, so nothing but the takedown may delete it.
+  it('never asks the processor to delete a blocked hash, but still reaps the row and releases the quota', async () => {
+    const hash = 'b'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash, sizeBytes: 4096, createdBy: 'u1' })]);
+    mockFindBlockedHashes.mockResolvedValue(new Set([hash]));
+    mockDeleteRecords.mockResolvedValue([hash]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([hash]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockCreateSystemFileDeleteToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 0, dbRecordsDeleted: 1, failedPhysicalDeletes: [] });
+    expect(mockUpdateStorageUsage).toHaveBeenCalledWith('u1', -4096, expect.objectContaining({ eventType: 'delete' }));
+
+    vi.unstubAllGlobals();
+  });
+
+  it('resolves the legacy files/<hash>/original form before checking the blocklist', async () => {
+    const hash = 'd'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: 'legacy', storagePath: `files/${hash}/original` })]);
+    mockFindBlockedHashes.mockResolvedValue(new Set([hash]));
+    mockDeleteRecords.mockResolvedValue(['legacy']);
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await reapOrphanedFiles(db, { fileIds: ['legacy'] });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  // After a takedown has finished, a hash that is no longer blocked cannot exist, but a blob can be
+  // missing for other reasons: the processor answers 200 for the (idempotent) deletes and the row is reaped.
+  it('reaps a row whose blob is already gone: the processor answers 200 for the missing objects', async () => {
+    const hash = 'e'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash, sizeBytes: 4096, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue([hash]);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ success: true, contentHash: hash, originalDeleted: true, cacheDeleted: true }), { status: 200 }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`/api/files/${hash}`);
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 1, dbRecordsDeleted: 1, failedPhysicalDeletes: [] });
+
+    vi.unstubAllGlobals();
+  });
+
+  it('keeps the row for the next run, without failing the sweep, if the processor cannot confirm the delete', async () => {
+    const hash = 'c'.repeat(64);
+    mockFindOrphans.mockResolvedValue([orphan({ id: hash, storagePath: hash })]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 404 })));
+
+    const result = await reapOrphanedFiles(db, { fileIds: [hash] });
+
+    expect(result).toEqual({ orphansFound: 1, physicalFilesDeleted: 0, dbRecordsDeleted: 0, failedPhysicalDeletes: [hash] });
+    expect(mockDeleteRecords).not.toHaveBeenCalled();
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
+
+    vi.unstubAllGlobals();
+  });
+
   it('credits the uploader only for rows this call actually deleted (race-safe)', async () => {
     mockFindOrphans.mockResolvedValue([orphan({ id: 'f1', sizeBytes: 2048, createdBy: 'u1' })]);
     mockDeleteRecords.mockResolvedValue(['f1']);
@@ -91,6 +172,21 @@ describe('reapOrphanedFiles', () => {
 
     expect(mockUpdateStorageUsage).toHaveBeenCalledWith('u1', -2048, expect.objectContaining({ eventType: 'delete' }));
     expect(result.physicalFilesDeleted).toBe(1);
+    expect(result.dbRecordsDeleted).toBe(1);
+
+    vi.unstubAllGlobals();
+  });
+
+  it('WAL-9 (partial) does NOT credit the uploader for a reaped file in an org drive: the org was billed, not them', async () => {
+    mockFindOrphans.mockResolvedValue([orphan({ id: 'f1', driveId: 'org-drive', sizeBytes: 2048, createdBy: 'u1' })]);
+    mockDeleteRecords.mockResolvedValue(['f1']);
+    mockFindDriveBillingFactsMap.mockResolvedValue(new Map([['org-drive', { ownerId: 'lead-1', orgId: 'org-northwind' }]]));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 200 })));
+
+    const result = await reapOrphanedFiles(db, { fileIds: ['f1'] });
+
+    expect(mockFindDriveBillingFactsMap).toHaveBeenCalledWith(['org-drive']);
+    expect(mockUpdateStorageUsage).not.toHaveBeenCalled();
     expect(result.dbRecordsDeleted).toBe(1);
 
     vi.unstubAllGlobals();

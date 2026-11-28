@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { PAGE_TYPE_VALUES } from '@pagespace/lib/utils/enums';
 
 const {
@@ -43,6 +43,7 @@ vi.mock('@pagespace/db/operators', () => ({
   asc: vi.fn((field) => ({ op: 'asc', field })),
 }));
 vi.mock('../actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorAccessDrive: mockCanActorAccessDrive,
   getActorAccessiblePagesInDrive: mockGetActorAccessiblePagesInDrive,
 }));

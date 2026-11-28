@@ -51,7 +51,7 @@ export const AGENT_DISPATCH_SIGNATURE_HEADER = 'x-broadcast-signature';
 
 export const agentDispatchPayloadSchema = z.object({
   /** Bumped only for a wire-incompatible change; the route refuses anything else. */
-  v: z.literal(1),
+  v: z.literal(2),
   /** WHO the turn runs as. Every downstream permission check resolves against this id. */
   actingUserId: z.string().min(1),
   /** The worker's conversation. */
@@ -73,6 +73,15 @@ export const agentDispatchPayloadSchema = z.object({
   /** The user message this dispatch delivers. */
   messageId: z.string().min(1),
   text: z.string(),
+  /**
+   * The dispatching credential's ceremony evidence (SEC-2/3), carried unchanged like every derived credential's:
+   * the worker opens org drives exactly as far as the person who dispatched it could. `null` when that credential
+   * carried none, which every org sign-in policy refuses. Re-parsed by the receiver, never trusted as shaped.
+   */
+  authentication: z.object({
+    authenticatedAtMs: z.number().int().nonnegative(),
+    assurance: z.enum(['single_factor', 'user_verified_passkey']),
+  }).nullable(),
 });
 
 export type AgentDispatchPayload = z.infer<typeof agentDispatchPayloadSchema>;

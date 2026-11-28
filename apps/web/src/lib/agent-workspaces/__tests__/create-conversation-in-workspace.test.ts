@@ -68,7 +68,7 @@ function makeDeps(overrides: Partial<Record<keyof MockDeps, unknown>> = {}): Moc
     findConversationIn: vi.fn(async () => ({ userId: OWNER, type: 'page', contextId: AGENT })),
     findWorkspaceOfConversation: vi.fn(async () => null),
     findAgentDriveId: vi.fn(async () => 'drive-1'),
-    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null })),
+    findSession: vi.fn(async () => ({ driveId: 'drive-1', endedAt: null, hostsAgentsFromAnyDrive: false })),
     admitConversation: fakeAdmit(),
     ...overrides,
   } as MockDeps;
@@ -85,6 +85,22 @@ describe('the conversation and its membership are one transaction', () => {
   let deps: MockDeps;
   beforeEach(() => {
     deps = makeDeps();
+  });
+
+  it('Given a validated initial source, should carry it into the page creator on the membership transaction', async () => {
+    await createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' });
+    expect(deps.createPageConversation).toHaveBeenCalledWith(expect.objectContaining({ initialChosenWalletId: 'wallet-own' }), TX);
+  });
+
+  it('Given an already-bound row that skips creation, should refuse an initial source instead of acknowledging an unstored choice', async () => {
+    deps.admitConversation = vi.fn(async () => 'already_a_member');
+    await expect(createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' })).rejects.toBeInstanceOf(ConversationUnavailableError);
+    expect(deps.createPageConversation).not.toHaveBeenCalled();
+  });
+
+  it('Given an existing row, should refuse initial-source creation instead of ignoring the requested choice', async () => {
+    deps.createPageConversation.mockResolvedValue('exists');
+    await expect(createConversationInSessionWith(deps, { ...input, initialChosenWalletId: 'wallet-own' })).rejects.toBeInstanceOf(ConversationUnavailableError);
   });
 
   it('creates the row on the TRANSACTION the membership write supplied', async () => {
@@ -165,7 +181,7 @@ describe('the gates that refuse before a transaction is opened', () => {
   });
 
   it('admits into an ENDED workspace — lifecycle state never refuses a permitted create', async () => {
-    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date() });
+    deps.findSession.mockResolvedValue({ driveId: 'drive-1', endedAt: new Date(), hostsAgentsFromAnyDrive: false });
     await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
   });
 
@@ -188,7 +204,14 @@ describe('the gates that refuse before a transaction is opened', () => {
   });
 
   it('exempts a GLOBAL workspace from the cross-drive rule', async () => {
-    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null });
+    deps.findSession.mockResolvedValue({ driveId: null, endedAt: null, hostsAgentsFromAnyDrive: true });
+    deps.findAgentDriveId.mockResolvedValue('drive-9');
+
+    await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();
+  });
+
+  it("exempts a global session in its owner's Home drive from the cross-drive rule (IMG-5.1)", async () => {
+    deps.findSession.mockResolvedValue({ driveId: 'home-1', endedAt: null, hostsAgentsFromAnyDrive: true });
     deps.findAgentDriveId.mockResolvedValue('drive-9');
 
     await expect(createConversationInSessionWith(deps, input)).resolves.toBeUndefined();

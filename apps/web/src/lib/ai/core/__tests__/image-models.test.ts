@@ -1,5 +1,5 @@
 import { describe, it, afterEach, vi } from 'vitest';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { isImageOutputModel, DEFAULT_IMAGE_MODEL } from '../model-capabilities';
 
 describe('isImageOutputModel (pure)', () => {

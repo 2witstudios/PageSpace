@@ -1,0 +1,166 @@
+/**
+ * wallet-access — who may see and run a drive wallet (Spec SPEND-9, SPEND-10, UI-9, WAL-4).
+ *
+ * PURE: the caller (the drive-wallet service) loads the person's standing through the
+ * permissions module (drive relationship, org role) and asks here. No route decides wallet
+ * access on its own.
+ *
+ * Roles, strongest first:
+ *   - org_admin: an Owner or Admin of the drive's org (ORG-4: full access on every org-owned
+ *                drive). Sees every wallet field, the pool and the unallocated balance (SPEND-10).
+ *   - lead:      the drive lead (drives.ownerId). Sees the wallet and spend by member (SPEND-10).
+ *   - member:    an effective member of the drive who is in its org (or any member of a
+ *                personal drive). A consumer: the remaining amount and their own cap (SPEND-9).
+ *   - guest:     a drive member not in the drive's org (DRV-8). The consumer projection.
+ *   - none:      no access to the drive (including an org member who has not joined a
+ *                Restricted or Private org drive). Answered as 404.
+ *
+ * Money authority: on an ORG drive the drive wallet is funded by the org pool, so creating,
+ * allocating, topping up and deleting it move org money and are for org admins only (A-1: the
+ * org pool allocates into drive wallets). The lead runs it: pause (the kill switch, WAL-7) and
+ * rules (fallback, donations on/off per WAL-4, the drive's default source per SPEND-3). On a
+ * PERSONAL drive the lead's own wallet funds it, so the lead does everything. Anyone who can
+ * see the drive may donate (WAL-4); the donation service re-checks visibility itself.
+ *
+ * A HOME drive is the owner's own private space (drive-guards): AI usage there is the owner's own
+ * spend, so nothing may fund it — no wallet is created, topped up or donated to. A wallet made
+ * before this rule keeps working until it is spent: what is left in it is the owner's own credits
+ * and only the owner spends in Home. It can be paused, ruled, deleted, and its allocation lowered
+ * to 0 (the service refuses a positive one), so nothing is stranded and nothing new comes in.
+ */
+import { decideOrgRole, holdsOrgRole } from '../organizations/authorize-core';
+
+export type WalletViewer = 'org_admin' | 'lead' | 'member' | 'guest' | 'none';
+
+export const WALLET_ACTIONS = [
+  'view',
+  'view_spend_by_member',
+  'create',
+  'allocate',
+  'top_up',
+  'pause',
+  'set_rules',
+  'delete',
+  'donate',
+  // WAL-7: write a consumer's per-consumer caps on the wallet. Money authority, so org admins on
+  // an org drive and the lead (the wallet's owner) on a personal drive — never the org drive lead.
+  'set_caps',
+] as const;
+export type WalletAction = (typeof WALLET_ACTIONS)[number];
+
+/** A person's standing in one drive, as the permissions module answers it. */
+export interface WalletStanding {
+  /** The drive's org, or null for a personal drive. */
+  orgId: string | null;
+  /** The person leads the drive (drives.ownerId). */
+  isLead: boolean;
+  /** The person is an effective member of the drive (the one org-aware access model). */
+  isDriveMember: boolean;
+  /** Their accepted role in the drive's org; null when not in it (a pending invite is not a role). */
+  orgRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  /** The drive is its owner's Home drive (drives.kind === 'HOME'); absent reads as a standard drive. */
+  isHome?: boolean;
+}
+
+export function walletViewerRole(standing: WalletStanding): WalletViewer {
+  if (standing.orgId !== null && holdsOrgRole(standing.orgRole, 'ADMIN')) return 'org_admin';
+  if (standing.isLead) return 'lead';
+  if (!standing.isDriveMember) return 'none';
+  if (standing.orgId !== null && standing.orgRole === null) return 'guest';
+  return 'member';
+}
+
+const CONSUMER_ACTIONS: readonly WalletAction[] = ['view', 'donate'];
+const ORG_LEAD_ACTIONS: readonly WalletAction[] = ['view', 'view_spend_by_member', 'pause', 'set_rules', 'donate'];
+/** The actions that put credits INTO a wallet: refused on a Home drive, whose spend is its owner's own. */
+const FUNDING_ACTIONS: readonly WalletAction[] = ['create', 'top_up', 'donate'];
+
+/** The drive facts wallet access turns on. `homeDrive` absent reads as a standard drive. */
+export interface WalletDriveFacts {
+  orgDrive: boolean;
+  homeDrive?: boolean;
+}
+
+/** Every action `role` may take on a drive wallet, in WALLET_ACTIONS order. */
+export function walletActionsFor(role: WalletViewer, drive: WalletDriveFacts): WalletAction[] {
+  const allowed: readonly WalletAction[] =
+    role === 'org_admin' ? WALLET_ACTIONS
+      : role === 'lead' ? (drive.orgDrive ? ORG_LEAD_ACTIONS : WALLET_ACTIONS)
+        : role === 'member' || role === 'guest' ? CONSUMER_ACTIONS
+          : [];
+  return WALLET_ACTIONS.filter((action) => allowed.includes(action) && !(drive.homeDrive === true && FUNDING_ACTIONS.includes(action)));
+}
+
+export function mayTakeWalletAction(role: WalletViewer, action: WalletAction, drive: WalletDriveFacts): boolean {
+  return walletActionsFor(role, drive).includes(action);
+}
+
+// ---------------------------------------------------------------------------
+// The credential (D-OW-26)
+// ---------------------------------------------------------------------------
+
+/** How the caller authenticated: a real session, or a delegated MCP/CLI token. */
+export type WalletCredential = 'session' | 'mcp';
+
+/** Every write the wallet surfaces offer: each wallet action but `view`, and the source choices. */
+export type WalletWrite =
+  | Exclude<WalletAction, 'view' | 'view_spend_by_member'>
+  | 'transfer'
+  | 'set_conversation_source'
+  | 'set_default_source'
+  /** SPEND-5 "Always my own credits", globally or for one drive. */
+  | 'set_spend_override';
+
+export interface CredentialRefusal {
+  code: 'mcp_token_cannot_move_money' | 'mcp_token_cannot_change_spend_source';
+  message: string;
+}
+
+/**
+ * [D-OW-26] A delegated MCP/CLI token never moves money and never redirects spend: every
+ * wallet write (create, allocate, top-up, donate, delete, pause, rules) and every source
+ * choice (a conversation's source, the personal default) needs a real session. Changing a
+ * source moves no money by itself, but it silently redirects every future call's spend — the
+ * same harm one step removed — and a long-lived delegated token is the wrong authority for it.
+ * Null when the credential may make the write (the role check still applies).
+ */
+export function credentialRefusalFor(credential: WalletCredential, write: WalletWrite): CredentialRefusal | null {
+  if (credential === 'session') return null;
+  if (write === 'set_conversation_source' || write === 'set_default_source' || write === 'set_spend_override') {
+    return { code: 'mcp_token_cannot_change_spend_source', message: 'An access token cannot change what a conversation or account spends from; sign in to change it' };
+  }
+  return { code: 'mcp_token_cannot_move_money', message: 'An access token cannot move money or change a wallet; sign in to do this' };
+}
+
+/**
+ * [D-OW-26] What a token may read of a drive wallet: exactly the consumer projection a member
+ * or guest gets in a session (D-OW-5), whatever the person's own role — no pool balance, no
+ * other person's spend, no funder. A session reads as its role.
+ */
+export function viewerForCredential(viewer: Exclude<WalletViewer, 'none'>, credential: WalletCredential): Exclude<WalletViewer, 'none'> {
+  if (credential === 'session') return viewer;
+  return viewer === 'guest' ? 'guest' : 'member';
+}
+
+// ---------------------------------------------------------------------------
+// Seat caps on the org pool (WAL-7)
+// ---------------------------------------------------------------------------
+
+export type SeatCapWriteDecision =
+  | { ok: true }
+  | { ok: false; status: 403 | 404; code: 'org_not_found' | 'insufficient_role' | 'not_org_member' };
+
+/**
+ * Who may write a member's caps on the org pool leg (their seat): the org's Owner or an Admin
+ * (the pool's money authority, as for every org leg), for a person who holds an ACCEPTED role in
+ * that org. A non-member caller learns nothing about the org (404).
+ */
+export function decideSeatCapWrite(input: {
+  actorRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  consumerRole: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+}): SeatCapWriteDecision {
+  const actor = decideOrgRole({ membershipRole: input.actorRole, minRole: 'ADMIN' });
+  if (!actor.ok) return actor.status === 404 ? { ok: false, status: 404, code: 'org_not_found' } : { ok: false, status: 403, code: 'insufficient_role' };
+  if (input.consumerRole === null) return { ok: false, status: 404, code: 'not_org_member' };
+  return { ok: true };
+}

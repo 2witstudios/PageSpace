@@ -15,7 +15,7 @@ import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-type
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { StoredCellValue } from '@pagespace/db/schema/sheets-types';
 import type { ToolExecutionContext } from '../core/types';
-import { getSuggestedVisionModels } from '../core/model-capabilities';
+import { getSuggestedVisionModels, type ModelCapabilities } from '../core/model-capabilities';
 import { describeContentModeMismatch, serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import {
@@ -32,6 +32,9 @@ import {
 } from './sheet-view';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
+import { deliverPdfPage, describePdfPages, readRenderedPages, PDF_VISUAL_LIMITS } from './read-page-pdf';
+import { fileBytesFetcherFor } from './processor-file-fetch-runtime';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { modelContextUserLabel } from '@pagespace/lib/auth/agent/display-name';
@@ -39,6 +42,33 @@ import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveDriveScope } from './drive-context-defaults';
 
 const pageReadLogger = loggers.ai.child({ module: 'page-read-tools' });
+
+/**
+ * Why read_page can't show this model a file's images, or null when it can: no
+ * vision, or a provider whose SDK would send tool-result media as base64 text
+ * (getToolMediaCapabilities).
+ */
+function describeMediaRefusal(
+  capabilities: ModelCapabilities | undefined,
+  mimeType: string | null,
+): { type: 'visual_requires_vision_model' | 'visual_requires_media_provider'; message: string } | null {
+  const kind = mimeType || 'image';
+  if (!capabilities?.hasVision) {
+    return {
+      type: 'visual_requires_vision_model',
+      message: `This is a visual file (${kind}). read_page shows images and PDFs only to vision-capable models, and the current model has no vision. To see this file, switch this chat to a vision model (for example ${getSuggestedVisionModels().join(', ')}).`,
+    };
+  }
+  if (!capabilities.hasToolResultMedia) {
+    return {
+      type: 'visual_requires_media_provider',
+      message: isOnPrem()
+        ? `This is a visual file (${kind}). This model can see images, but its provider can't receive images or PDFs in tool results, so read_page can't show this file in this deployment.`
+        : `This is a visual file (${kind}). This model can see images, but its provider can't receive images or PDFs in tool results, so read_page can't show this file here. To see it, switch this chat to a vision model from PageSpace's cloud models (for example ${getSuggestedVisionModels().join(', ')}).`,
+    };
+  }
+  return null;
+}
 
 // Batching raw content onto list_pages has no pagination to lean on (recursive
 // listing is already unbounded), so this caps how many pages can have content
@@ -426,15 +456,16 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view. For FILE pages, read_page shows images and PDFs to you directly when your model has vision: an image arrives as an image, and a scanned or image-only PDF arrives as the PDF itself (models that read PDFs) or as page images — use `pages` to page through a long PDF, and lineStart/lineEnd to read a PDF\'s text layer. Text-only models get the file\'s details and any extracted text instead.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
       lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning. On a SHEET this is a sheet ROW number.'),
       lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end. On a SHEET this is a sheet ROW number.'),
+      pages: z.string().optional().describe(`PDF FILE pages only: which pages to see as images, 1-indexed, e.g. "3", "1-5" or "2,4,7-9". Omit to get the whole PDF when your model reads PDFs, otherwise the first ${PDF_VISUAL_LIMITS.defaultPageBatch} pages. At most ${PDF_VISUAL_LIMITS.maxPagesPerRead} pages per call; the result says which pages to ask for next.`),
     }),
     toModelOutput: ({ output }) => toModelOutputForReadPage(output),
-    execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd, pages: pdfPages }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -466,10 +497,46 @@ export const pageReadTools = {
         });
         const isTaskLinked = !!taskLink;
 
+        // Set when a FILE page is read as text but has more to it (page images
+        // this model can't be shown, or can ask for); carried on the text result.
+        let fileNote: string | undefined;
+
         // Handle FILE type pages
         if (page.type === 'FILE') {
+          const executionContext = context as ToolExecutionContext;
+          const modelCapabilities = executionContext?.modelCapabilities;
+          const isPdf = page.mimeType === 'application/pdf';
+          const extractedText = (page.content ?? '').trim();
+          const refusal = describeMediaRefusal(modelCapabilities, page.mimeType);
+          // A PDF processed before scans were marked visual is "completed" with no
+          // text: a scan. It is read the way a visual PDF is.
+          const isUnmarkedScan = isPdf && page.processingStatus === 'completed' && !extractedText;
+          // A visual PDF with a text layer is read as text whenever images are not
+          // what this read can give: lines were asked for, or the model can't be
+          // shown images. No text reader loses a PDF's text.
+          const visualPdfWithText = isPdf && page.processingStatus === 'visual' && !!extractedText;
+          const readsTextLayer = visualPdfWithText && (lineStart !== undefined || lineEnd !== undefined || refusal !== null);
+          if (visualPdfWithText && refusal) fileNote = refusal.message;
+          // A text PDF can have rendered pages too (its scans, figures, blanks):
+          // a vision model gets them when it asks with `pages`, and is told so.
+          const textPdfImagePages = isPdf && page.processingStatus === 'completed' && !!extractedText
+            ? readRenderedPages(page.extractionMetadata) ?? []
+            : [];
+          const showsTextPdfImages = textPdfImagePages.length > 0 && pdfPages !== undefined && refusal === null;
+          // `pages` names page images; a text PDF without any gets its text, and is told so.
+          if (isPdf && page.processingStatus === 'completed' && !!extractedText && pdfPages !== undefined && textPdfImagePages.length === 0) {
+            fileNote = 'This PDF has no page images, so `pages` was ignored; this is its text.';
+          }
+          if (textPdfImagePages.length > 0 && !showsTextPdfImages && refusal === null) {
+            const pages = describePdfPages(textPdfImagePages);
+            const firstBatch = describePdfPages(textPdfImagePages.slice(0, PDF_VISUAL_LIMITS.defaultPageBatch));
+            fileNote = `Page images exist for pages ${pages} (scans, figures or blank pages with little or no text): call read_page with pages: "${firstBatch}" to see them.`;
+          }
+          const fileStatus = isUnmarkedScan || showsTextPdfImages
+            ? 'visual'
+            : readsTextLayer ? 'completed' : page.processingStatus;
           // Check processing status
-          switch (page.processingStatus) {
+          switch (fileStatus) {
             case 'pending':
             case 'processing':
               return {
@@ -481,33 +548,73 @@ export const pageReadTools = {
                 suggestion: 'Please try again in a moment'
               };
             
-            case 'visual':
-              // Pure visual content - check if current model supports vision
-              const modelCapabilities = (context as ToolExecutionContext)?.modelCapabilities;
-              
-              if (!modelCapabilities?.hasVision) {
-                // Model doesn't support vision - provide helpful guidance
+            case 'visual': {
+              const textOnly = extractedText ? { extractedText: extractedText.slice(0, MAX_CONTENT_CHARS_PER_PAGE) } : {};
+
+              if (refusal) {
+                // No text layer to fall back to (that case was read as text above).
                 return {
                   success: true,
-                  type: 'visual_requires_vision_model',
+                  type: refusal.type,
                   title: page.title,
                   mimeType: page.mimeType,
-                  message: `This is a visual file (${page.mimeType || 'image'}). To view its content, please switch to a vision-capable model.`,
-                  suggestedModels: getSuggestedVisionModels(),
-                  metadata: {
-                    fileType: page.mimeType,
-                    requiresVision: true
-                  }
+                  message: refusal.message,
+                  ...(refusal.type === 'visual_requires_vision_model' ? { suggestedModels: getSuggestedVisionModels() } : {}),
+                  ...textOnly,
+                  metadata: refusal.type === 'visual_requires_vision_model'
+                    ? { fileType: page.mimeType, requiresVision: true }
+                    : { fileType: page.mimeType, requiresToolResultMedia: true },
                 };
               }
-              
-              // Model supports vision - try to deliver actual image bytes from the
-              // processor's cached presets. Falls back to metadata-only (today's
-              // behavior) when no preset in the fallback chain is usable.
+              // refusal === null means the model has vision and tool-result media.
+              const capabilities = modelCapabilities!;
+
+              // Bytes are read through the processor, which decrypts them and
+              // re-checks access with a page-scoped service token.
               if (page.contentHash) {
+                const fetchBytes = await fileBytesFetcherFor(executionContext, page.id);
+                if (!fetchBytes) {
+                  // A page agent can reach a page through its own drive membership
+                  // that the person it runs for cannot; the processor only serves
+                  // that person's files. The text is still the agent's to read.
+                  const unavailable = `"${page.title}" isn't available to you as an image: the person this chat runs for can't open this file, so its bytes can't be fetched.`;
+                  if (extractedText) {
+                    fileNote = unavailable;
+                    break;
+                  }
+                  return {
+                    success: true,
+                    type: 'visual_unavailable_to_actor',
+                    title: page.title,
+                    mimeType: page.mimeType,
+                    message: unavailable,
+                    metadata: { fileType: page.mimeType, bytesUnavailable: true },
+                  };
+                }
+
+                if (isPdf) {
+                  return deliverPdfPage({
+                    page: {
+                      id: page.id,
+                      title: page.title,
+                      contentHash: page.contentHash,
+                      fileSize: page.fileSize ?? null,
+                      originalFileName: page.originalFileName ?? null,
+                      extractionMetadata: page.extractionMetadata,
+                    },
+                    hasPdfInput: capabilities.hasPdfInput === true,
+                    pages: pdfPages,
+                    fetchBytes,
+                    textLayerChars: extractedText.length,
+                  });
+                }
+
+                // Images: deliver the processor's cached presets. Falls back to
+                // metadata-only when no preset in the fallback chain is usable.
                 const deliveredImage = await fetchCachedImagePreset(
                   page.contentHash,
-                  page.mimeType || 'application/octet-stream'
+                  page.mimeType || 'application/octet-stream',
+                  { fetchBytes },
                 );
                 if (deliveredImage) {
                   return {
@@ -541,7 +648,8 @@ export const pageReadTools = {
                   originalFileName: page.originalFileName
                 }
               });
-            
+            }
+
             case 'failed':
               return {
                 success: false,
@@ -1363,6 +1471,7 @@ export const pageReadTools = {
           ...(contentModeWarning && { contentModeWarning }),
           content: numberedContent,
           rawContent,
+          ...(fileNote && { fileNote }),
           summary: isRangeRequest
             ? `Read lines ${effectiveStart}-${effectiveEnd} of "${page.title}" (${selectedLines.length} of ${totalLines} lines)`
             : `Read "${page.title}" (${totalLines} lines, ${page.type.toLowerCase()})${isTaskLinked ? ' - linked to task' : ''}`,

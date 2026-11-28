@@ -17,8 +17,8 @@
  * (watching the agent work is the point of the pane) and never the
  * agent-shaped surfaces. Nobody gets the clipboard.
  */
-import type { HumanControlState } from './human-control-state.js';
-import type { ObservationAudience, ObservationKind, ObservationRelease } from './observation-kind.js';
+import type { HumanControlState } from './human-control-state.ts';
+import type { ObservationAudience, ObservationKind, ObservationRelease } from './observation-kind.ts';
 
 export type DecideObservationReleaseOptions = {
   readonly mode: HumanControlState;

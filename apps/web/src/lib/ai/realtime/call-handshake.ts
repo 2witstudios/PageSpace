@@ -29,6 +29,7 @@
  * handshake is testable without a live call.
  */
 
+import { readSpendFallbackBody, type SpendFallbackNotice } from '@pagespace/lib/billing/spend-fallback';
 import {
   CLIENT_SECRETS_URL,
   REALTIME_CALLS_URL,
@@ -89,6 +90,11 @@ export type HandshakeSuccess = {
    * gets a working audio call with no server-side features — see `handOff`.
    */
   readonly attached: boolean;
+  /**
+   * The realtime server's report that the call's opening gate fell back to another source
+   * (SPEND-4), for the caller to show; null when it spent what it named or did not attach.
+   */
+  readonly spendFallback: SpendFallbackNotice | null;
 };
 
 export type HandshakeResult = HandshakeSuccess | HandshakeFailure;
@@ -124,6 +130,8 @@ export type HandshakeDeps = {
 export type HandshakeInput = {
   readonly offerSdp: string;
   readonly userId: string;
+  /** The starting session's ceremony evidence, carried on the attach and echoed on every bridge hop (SEC-2/3). */
+  readonly authentication: RealtimeAttachPayload['authentication'];
   readonly conversationId?: string;
   /**
    * The bound conversation's history, already loaded and capped
@@ -144,6 +152,11 @@ export type HandshakeInput = {
   readonly instructions?: string;
   /** The bound page agent, for tool execution. Absent for the Global Assistant. */
   readonly assistant?: VoiceAssistant;
+  /**
+   * The drive the call spends in, from the same authorized conversation read (SPEND-1).
+   * Absent for a call with no drive, which spends personal credits (SPEND-8).
+   */
+  readonly spendDriveId?: string;
 };
 
 /** Upstream calls are short; a hung one must not hold the request open. */
@@ -190,7 +203,7 @@ export const parseCallId = (location: string | null): string | undefined => {
  * the call went ahead unmetered.
  */
 type HandoffOutcome =
-  | { readonly kind: 'attached' }
+  | { readonly kind: 'attached'; readonly spendFallback: SpendFallbackNotice | null }
   /** The tool/transcript/metering plane is unreachable. Degrade, do not fail. */
   | { readonly kind: 'degraded' }
   /** A policy said no: out of credit, or on the concurrency limit. */
@@ -245,6 +258,7 @@ const handOff = async (
     callId,
     secret,
     userId: input.userId,
+    authentication: input.authentication,
     ...(input.conversationId === undefined ? {} : { conversationId: input.conversationId }),
     tools: [...deps.tools],
     model: deps.model,
@@ -256,6 +270,7 @@ const handOff = async (
     seed: [...(input.seed ?? [])],
     ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
     ...(input.assistant === undefined ? {} : { assistant: input.assistant }),
+    ...(input.spendDriveId === undefined ? {} : { spendDriveId: input.spendDriveId }),
   };
   const body = JSON.stringify(payload);
 
@@ -288,7 +303,11 @@ const handOff = async (
           }
         : { kind: 'degraded' };
     }
-    return { kind: 'attached' };
+    const answer: unknown = await response.json().catch(() => undefined);
+    return {
+      kind: 'attached',
+      spendFallback: readSpendFallbackBody((answer as { spendFallback?: unknown } | undefined)?.spendFallback),
+    };
   } catch (error) {
     // An unreachable realtime server is an outage, not a refusal: nothing
     // decided anything about this call, so the caller keeps the degraded one.
@@ -435,5 +454,11 @@ export const runCallHandshake = async (
     };
   }
 
-  return { ok: true, callId, answerSdp, attached: outcome.kind === 'attached' };
+  return {
+    ok: true,
+    callId,
+    answerSdp,
+    attached: outcome.kind === 'attached',
+    spendFallback: outcome.kind === 'attached' ? outcome.spendFallback : null,
+  };
 };

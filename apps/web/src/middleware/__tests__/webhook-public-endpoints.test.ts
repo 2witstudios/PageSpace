@@ -51,6 +51,9 @@ const { middleware } = await import('../../middleware');
 describe('middleware — third-party webhooks are public (own signature/HMAC auth, no session)', () => {
   it.each([
     '/api/stripe/webhook',
+    // App Store Server Notifications V2: Apple posts with no session; the route verifies
+    // the JWS against Apple's root itself.
+    '/api/iap/apple/notifications',
     '/api/integrations/google-calendar/webhook',
     '/api/integrations/zoom/webhook',
     // Page incoming-webhook intake: the caller is an external system (CI,

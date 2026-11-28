@@ -3,6 +3,7 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
 import { publishedApps } from './published-apps';
+import { organizations } from './organizations';
 
 /**
  * publishedAppSubscriptions — the Stripe mirror for the DEDICATED hosting SKU:
@@ -19,13 +20,12 @@ import { publishedApps } from './published-apps';
  *
  *   1. The Stripe webhook derives from the SINGLE row in the event it just
  *      received. A hosting subscription's `customer.subscription.created` would
- *      therefore derive `free` and write it straight over a Pro / Founder /
+ *      therefore derive `free` and write it straight over a Pro /
  *      Business customer's tier — a paying user demoted by buying more.
  *   2. The reconcile cron would then see `indeterminate: true` (an entitled row
- *      on an unmapped price) for that user forever, and `isTierDriftRepairable`
- *      deliberately refuses to auto-repair such a user. The demotion in (1)
- *      would be permanent AND invisible to the repair path built for exactly
- *      that failure.
+ *      on an unmapped price) for that user forever. Dedicated hosting belongs
+ *      outside account-plan entitlement derivation, even though strict price
+ *      reconciliation can restore a separately verified personal plan.
  *
  * Hosting spend is not a plan. It hangs off a published app, it is bought and
  * cancelled per app, and it says nothing about what the account is entitled to —
@@ -60,12 +60,23 @@ export const publishedAppSubscriptions = pgTable('published_app_subscriptions', 
     .references(() => publishedApps.id, { onDelete: 'cascade' }),
 
   /**
-   * Who is billed. Denormalized from the app's payer at purchase time so a
-   * customer-id lookup from a webhook lands on a user without joining through
-   * the app and its drive — and so the row survives as an attributable record if
-   * the drive later changes hands.
+   * The person who bought it. For a PERSONAL drive's app this is also who is
+   * billed — the drive owner, on their own Stripe customer. For an ORG drive's app
+   * it is the org Owner or Admin who made the purchase, and the org pays
+   * (`orgId`). Denormalized at purchase time so the row survives as an
+   * attributable record if the drive later changes hands. SET NULL, never cascade:
+   * the buyer leaving or deleting their account must not drop the only local
+   * pointer to a subscription that keeps billing the org.
    */
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: text('userId').references(() => users.id, { onDelete: 'set null' }),
+
+  /**
+   * WAL-9: the organization billed, for an ORG drive's app — the payer seam's
+   * "org if drives.orgId" — on the org's own Stripe customer
+   * (`organizations.stripeCustomerId`), never the buyer's card. Null for a
+   * personal drive's app, which bills its owner (`userId`).
+   */
+  orgId: text('orgId').references(() => organizations.id, { onDelete: 'set null' }),
 
   /** Stripe's id for the subscription. Unique — the webhook's upsert target. */
   stripeSubscriptionId: text('stripeSubscriptionId').notNull().unique(),
@@ -118,6 +129,7 @@ export const publishedAppSubscriptions = pgTable('published_app_subscriptions', 
     .$onUpdate(() => new Date()),
 }, (table) => ({
   userIdx: index('published_app_subscriptions_user_idx').on(table.userId),
+  orgIdx: index('published_app_subscriptions_org_idx').on(table.orgId),
   stripeSubscriptionIdx: index('published_app_subscriptions_stripe_subscription_idx')
     .on(table.stripeSubscriptionId),
   // A status column that can be empty is a status column the entitlement read

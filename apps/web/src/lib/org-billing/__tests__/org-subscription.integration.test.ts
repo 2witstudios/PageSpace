@@ -1,0 +1,1031 @@
+// @vitest-environment node
+/**
+ * The org Business subscription shell against a REAL Postgres, with an in-memory
+ * Stripe (FakeOrgStripe) that honours idempotency keys, lags search, and can lose a
+ * response after executing a write. Proves what the database and the lock guarantee:
+ * one customer and one subscription per org under concurrent and replayed calls, the
+ * linkage stored on the org, the extra-seat quantity, and a failure that leaves the
+ * org retryable. The same shell against the real Stripe test API is
+ * org-subscription.stripe.integration.test.ts.
+ *
+ * Requires DATABASE_URL → a migrated Postgres; fails loudly without one (requireDb).
+ * Deletes every row it creates, children first, users last.
+ */
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { db } from '@pagespace/db/db';
+import { eq, inArray } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { organizations, orgMembers, orgSubscriptionFunding, orgSubscriptions } from '@pagespace/db/schema/organizations';
+import { creditLedger } from '@pagespace/db/schema/credits';
+import { wallets } from '@pagespace/db/schema/wallets';
+import { factories } from '@pagespace/db/test/factories';
+import { requireDb } from '@pagespace/db/test/require-db';
+import { createOrganization } from '@pagespace/lib/organizations/repository';
+import { deleteOrganization } from '@pagespace/lib/organizations/deletion';
+import { applyOrgPoolRefill } from '@pagespace/lib/billing/wallet-funding-shell';
+import { checkOrgActive, getOrgStatus } from '@pagespace/lib/organizations/status';
+import { ORG_FUNDING_PENDING_WINDOW_SECONDS, ORG_ID_METADATA_KEY, type OrgBusinessPrices } from '@pagespace/lib/billing/org-subscription-core';
+import {
+  ensureOrgStripeCustomer,
+  endOrgSubscriptionPort,
+  createOrgBillingPortalSession,
+  listOrgInvoices,
+  provisionOrgSubscription,
+  startOrgBusinessSubscription,
+  syncOrgSeatQuantity,
+  type OrgBillingDeps,
+} from '../org-subscription';
+
+/** The provisioning result alone, for the tests that do not look at the payment step. */
+const ensureOrgBusinessSubscription = async (orgId: string, deps: OrgBillingDeps) => (await provisionOrgSubscription(orgId, deps)).result;
+import { FakeOrgStripe } from './fake-org-stripe';
+import { createRequire } from 'node:module';
+import type { AuditEvent, SecurityAuditService } from '@pagespace/lib/audit/security-audit';
+import type { drainOrgAuditOutbox as DrainOrgAuditOutbox } from '@pagespace/lib/audit/org-audit';
+import { orgAuditOutbox } from '@pagespace/db/schema/organizations';
+
+// The org-subscription shell reaches lib's BUILT (CommonJS) audit modules, a different instance from what an ESM import
+// here would give, so the chain append is captured on that instance.
+const requireLib = createRequire(import.meta.url);
+const { securityAudit } = requireLib('@pagespace/lib/audit/security-audit') as { securityAudit: SecurityAuditService };
+const { drainOrgAuditOutbox } = requireLib('@pagespace/lib/audit/org-audit') as { drainOrgAuditOutbox: typeof DrainOrgAuditOutbox };
+
+const PRICES: OrgBusinessPrices = { basePriceId: 'price_base_test', seatPriceId: 'price_seat_test' };
+
+let dbAvailable = false;
+const originalMode = process.env.DEPLOYMENT_MODE;
+const orgIds: string[] = [];
+const userIds: string[] = [];
+
+interface Northwind {
+  orgId: string;
+  ownerId: string;
+  deps: OrgBillingDeps;
+  stripe: FakeOrgStripe;
+  /** SEAT-3's count as the org would report it now. */
+  seats: { count: number };
+}
+
+async function northwind(initialSeats = 1): Promise<Northwind> {
+  const owner = await factories.createUser({ email: `jono+${Date.now()}${Math.random().toString(36).slice(2, 8)}@northwind.test`, name: 'Jono' });
+  userIds.push(owner.id);
+  const slug = `northwind-${Math.random().toString(36).slice(2, 10)}`;
+  const created = await createOrganization({ name: 'Northwind Labs', slug, ownerId: owner.id });
+  if (!created.ok) throw new Error(`org create failed: ${created.reason}`);
+  orgIds.push(created.organization.id);
+  const stripe = new FakeOrgStripe();
+  const seats = { count: initialSeats };
+  const deps: OrgBillingDeps = {
+    stripe,
+    prices: () => PRICES,
+    countSeats: async () => seats.count,
+  };
+  return { orgId: created.organization.id, ownerId: owner.id, deps, stripe, seats };
+}
+
+async function rowsFor(orgId: string) {
+  return db.select().from(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+}
+
+async function orgRow(orgId: string) {
+  const [org] = await db.select().from(organizations).where(eq(organizations.id, orgId));
+  return org;
+}
+
+describe('org Business subscription shell (real Postgres, in-memory Stripe)', () => {
+  beforeAll(async () => {
+    try {
+      await db.select({ id: orgSubscriptions.id }).from(orgSubscriptions).limit(1);
+      dbAvailable = true;
+    } catch (error) {
+      requireDb('org-subscription.integration.test.ts', error);
+      dbAvailable = false;
+    }
+  });
+
+  afterEach(() => {
+    if (originalMode === undefined) delete process.env.DEPLOYMENT_MODE;
+    else process.env.DEPLOYMENT_MODE = originalMode;
+  });
+
+  afterAll(async () => {
+    if (!dbAvailable) return;
+    if (userIds.length > 0) await db.delete(creditLedger).where(inArray(creditLedger.userId, userIds));
+    if (orgIds.length > 0) {
+      await db.delete(wallets).where(inArray(wallets.orgId, orgIds));
+      await db.delete(orgSubscriptionFunding).where(inArray(orgSubscriptionFunding.orgId, orgIds));
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
+      await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+
+  it('SEAT-1 SEAT-8 (partial) A-8 D-OW-30 creating the subscription makes one org customer and one Business subscription awaiting its first payment (no trial), with the seat item at quantity 0, and stores the linkage on the org', async () => {
+    if (!dbAvailable) return;
+    const { orgId, ownerId, deps, stripe } = await northwind(1);
+
+    const result = await ensureOrgBusinessSubscription(orgId, deps);
+
+    expect(result.kind).toBe('created');
+    expect(stripe.customers.size).toBe(1);
+    const [customer] = [...stripe.customers.values()];
+    // The org's own customer: named for the org, tagged with the org id — not the Owner's personal customer.
+    expect(customer.params.metadata).toEqual({ [ORG_ID_METADATA_KEY]: orgId, kind: 'organization' });
+    expect(customer.details?.name).toBe('Northwind Labs');
+    const [owner] = await db.select({ stripeCustomerId: users.stripeCustomerId }).from(users).where(eq(users.id, ownerId));
+    expect(owner.stripeCustomerId).toBeNull();
+
+    const org = await orgRow(orgId);
+    expect(org.stripeCustomerId).toBe(customer.id);
+    const [sub] = [...stripe.subscriptions.values()];
+    expect(org.stripeSubscriptionId).toBe(sub.id);
+    expect(sub.status).toBe('incomplete');
+    expect(sub.items.map((i) => [i.priceId, i.quantity])).toEqual([
+      [PRICES.basePriceId, 1],
+      [PRICES.seatPriceId, 0],
+    ]);
+
+    const rows = await rowsFor(orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      stripeSubscriptionId: sub.id,
+      stripeBasePriceId: PRICES.basePriceId,
+      stripeBaseItemId: sub.items[0].id,
+      stripeSeatPriceId: PRICES.seatPriceId,
+      stripeSeatItemId: sub.items[1].id,
+      extraSeatQuantity: 0,
+      status: 'incomplete',
+    });
+    expect(rows[0].collectionMethod).toBe('charge_automatically');
+  });
+
+  it('A-8 an org created with 7 seats starts at extra-seat quantity 2', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(7);
+    await ensureOrgBusinessSubscription(orgId, deps);
+    const [sub] = [...stripe.subscriptions.values()];
+    expect(stripe.seatQuantity(sub.id, PRICES.seatPriceId)).toBe(2);
+    expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(2);
+  });
+
+  it('SEAT-1 a replayed call on a provisioned org makes no Stripe write — it re-reads Stripe\'s subscriptions and the open invoice — and changes nothing', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const writesAfterFirst = { ...stripe.writes };
+    const readsAfterFirst = { ...stripe.reads };
+    stripe.expireIdempotencyKeys(); // even long after Stripe forgot the keys
+
+    const replay = await ensureOrgBusinessSubscription(orgId, deps);
+
+    expect(replay.kind).toBe('existing');
+    expect(replay.linkage.stripeSubscriptionId).toBe(first.linkage.stripeSubscriptionId);
+    expect(stripe.writes).toEqual(writesAfterFirst);
+    expect(stripe.reads).toEqual({
+      ...readsAfterFirst,
+      listCustomerSubscriptions: readsAfterFirst.listCustomerSubscriptions + 1,
+      latestInvoice: readsAfterFirst.latestInvoice + 1,
+    });
+    expect(stripe.customers.size).toBe(1);
+    expect(stripe.subscriptions.size).toBe(1);
+    expect(await rowsFor(orgId)).toHaveLength(1);
+  });
+
+  describe('D-OW-44: reactivation only repairs states PageSpace itself creates', () => {
+    /** An org whose first invoice was paid: active in Stripe and in the mirror. */
+    /**
+     * An org whose first invoice was paid: active in Stripe and in the mirror. `funded` (the
+     * default) also delivers that invoice.paid, so the funding proof is recorded; `false` stops
+     * before the webhook, the window in which the org is paid but not yet proven.
+     */
+    async function paidNorthwind(seats = 1, opts: { funded?: boolean } = {}) {
+      const org = await northwind(seats);
+      const { result } = await provisionOrgSubscription(org.orgId, org.deps);
+      const subscriptionId = result.linkage.stripeSubscriptionId;
+      org.stripe.payLatestInvoice(subscriptionId);
+      if (opts.funded ?? true) await applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
+      await provisionOrgSubscription(org.orgId, org.deps);
+      const sub = org.stripe.subscriptions.get(subscriptionId)!;
+      return { ...org, sub, writes: () => ({ ...org.stripe.writes }) };
+    }
+
+    const requiresSupport = { code: 'billing_requires_support' };
+
+    it.each(['trialing', 'paused'])('SEAT-9 (partial) a %s subscription (changed in Stripe) is refused for support: no Stripe write, nothing bought, nothing ended', async (status) => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      sub.status = status;
+      const before = writes();
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+      expect(stripe.subscriptions.get(sub.id)?.status).toBe(status);
+      // The refusal still commits Stripe's truth to the mirror: the org reads as lapsed.
+      expect((await rowsFor(orgId))[0].status).toBe(status);
+    });
+
+    it.each(['active', 'past_due'])('P1: a %s subscription switched to send_invoice is refused for support and never returned as active', async (status) => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      if (status === 'past_due') stripe.openRenewalInvoice(sub.id, 'past_due');
+      sub.collectionMethod = 'send_invoice';
+      const before = writes();
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+    });
+
+    it.each([
+      ['incomplete', 'void'],
+      ['past_due', 'void'],
+      ['past_due', 'uncollectible'],
+      ['unpaid', 'uncollectible'],
+      ['unpaid', 'missing'],
+    ] as const)('P2: a %s subscription whose latest invoice is %s is refused for support, never a success with nothing to pay', async (status, invoice) => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      const renewal = stripe.openRenewalInvoice(sub.id, status === 'incomplete' ? 'past_due' : status);
+      sub.status = status;
+      if (invoice === 'missing') stripe.invoices.delete(sub.id);
+      else renewal.status = invoice;
+      const before = writes();
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+      expect((await rowsFor(orgId))[0].status).toBe(status);
+    });
+
+    it('SEAT-9 (partial) P2: after a send_invoice refusal the stored mirror lapses the org and its capabilities stay refused', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, sub } = await paidNorthwind();
+      expect(await getOrgStatus(orgId)).toEqual({ status: 'active', reason: null });
+      sub.collectionMethod = 'send_invoice';
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'active', collectionMethod: 'send_invoice' });
+      expect(await getOrgStatus(orgId)).toEqual({ status: 'lapsed', reason: 'manual_collection' });
+      expect(await checkOrgActive(orgId)).toMatchObject({ ok: false, code: 'org_lapsed' });
+    });
+
+    it('P1 zero trust on metadata: a live stored subscription whose org stamp was removed is refused for support, never bought again', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      stripe.openRenewalInvoice(sub.id, 'past_due');
+      sub.metadata = {};
+      const before = writes();
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+      expect(stripe.liveSubscriptions(sub.customerId)).toHaveLength(1);
+    });
+
+    it('P1 zero trust on metadata: an unstamped live subscription made by hand on the org customer is refused for support, never bought around', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      stripe.subscriptions.set(`${sub.id}_manual`, { ...structuredClone(sub), id: `${sub.id}_manual`, created: sub.created + 1, metadata: null });
+      for (const storedEnded of [false, true]) {
+        // Even with the stored subscription ended, the hand-made one still blocks a new checkout.
+        if (storedEnded) stripe.endSubscription(sub.id);
+        const before = writes();
+        await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+        expect(stripe.writes).toEqual(before);
+      }
+    });
+
+    it('a second live subscription stamped with the org is refused for support; nothing is bought or canceled', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      stripe.subscriptions.set(`${sub.id}_second`, { ...structuredClone(sub), id: `${sub.id}_second`, created: sub.created + 1 });
+      for (const lostMirror of [false, true]) {
+        if (lostMirror) await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+        const before = writes();
+        await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+        expect(stripe.writes).toEqual(before);
+      }
+    });
+
+    it('SEAT-1 (partial) an active subscription whose row was lost is adopted with no Stripe write and no payment step', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+      const before = writes();
+      const adopted = await provisionOrgSubscription(orgId, deps);
+      expect(adopted).toMatchObject({ result: { kind: 'adopted', linkage: { stripeSubscriptionId: sub.id, status: 'active' } }, payment: { kind: 'none' } });
+      expect(stripe.writes).toEqual(before);
+    });
+
+    it('SEAT-9 (partial) an unpaid org with a payable renewal invoice gets its secret with no Stripe write', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, sub, writes } = await paidNorthwind();
+      const renewal = stripe.openRenewalInvoice(sub.id, 'unpaid');
+      const before = writes();
+      const owed = await provisionOrgSubscription(orgId, deps);
+      expect(owed).toMatchObject({ result: { kind: 'existing', linkage: { status: 'unpaid' } }, payment: { kind: 'confirm_payment', clientSecret: renewal.clientSecret } });
+      expect(stripe.writes).toEqual(before);
+    });
+
+    /** What the invoice.paid webhook does with the paid invoice: the real funding shell, recording the proof. */
+    async function deliverInvoicePaid(org: { stripe: FakeOrgStripe }, subscriptionId: string) {
+      return applyOrgPoolRefill(org.stripe.invoiceEvidence(subscriptionId), PRICES);
+    }
+
+    it('SEAT-9 (partial) an active subscription with verified funding is existing: no invoice read, no write, no payment step', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind(1, { funded: false });
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('granted');
+      const before = org.writes();
+      const invoiceReads = org.stripe.reads.latestInvoice;
+      const call = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(call).toMatchObject({ result: { kind: 'existing', linkage: { status: 'active' } }, payment: { kind: 'none' }, activation: 'active' });
+      expect(org.stripe.writes).toEqual(before);
+      expect(org.stripe.reads.latestInvoice).toBe(invoiceReads);
+    });
+
+    it('SEAT-8 (partial) SEAT-9 (partial) never funded, but Stripe has the payment: funding_pending with no Stripe write; the webhook records the proof and the next call is active', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind(1, { funded: false });
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+      const before = org.writes();
+      const pending = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(pending).toMatchObject({ result: { kind: 'existing', linkage: { status: 'active' } }, payment: { kind: 'none' }, activation: 'funding_pending' });
+      expect(org.stripe.writes).toEqual(before);
+      expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.orgId))).toHaveLength(0);
+
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('granted');
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'active', reason: null });
+      const active = await provisionOrgSubscription(org.orgId, org.deps);
+      expect(active).toMatchObject({ result: { kind: 'existing' }, payment: { kind: 'none' }, activation: 'active' });
+      expect(org.stripe.writes).toEqual(before);
+    });
+
+    it('SEAT-9 (partial) D-OW-30: active but nothing ever funded it (a $0 non-gift invoice) is refused for support — never existing, never a payment that cannot come', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind(1, { funded: false });
+      org.stripe.invoiceFor(org.sub.id)!.amountPaidCents = 0;
+      const before = org.writes();
+      await expect(provisionOrgSubscription(org.orgId, org.deps)).rejects.toMatchObject(requiresSupport);
+      expect(org.stripe.writes).toEqual(before);
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('nothing');
+      expect(await db.select().from(orgSubscriptionFunding).where(eq(orgSubscriptionFunding.orgId, org.orgId))).toHaveLength(0);
+      expect(await getOrgStatus(org.orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+    });
+
+    it('SEAT-9 (partial) funding_pending is time-boxed: paid longer ago than ORG_FUNDING_PENDING_WINDOW_SECONDS with still no proof is refused for support, with no write', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const org = await paidNorthwind(1, { funded: false });
+      const paidAt = org.stripe.invoiceFor(org.sub.id)!.paidAt!;
+      const before = org.writes();
+      org.deps.now = () => new Date((paidAt + ORG_FUNDING_PENDING_WINDOW_SECONDS) * 1000);
+      expect((await provisionOrgSubscription(org.orgId, org.deps)).activation).toBe('funding_pending');
+      org.deps.now = () => new Date((paidAt + ORG_FUNDING_PENDING_WINDOW_SECONDS + 1) * 1000);
+      await expect(provisionOrgSubscription(org.orgId, org.deps)).rejects.toMatchObject(requiresSupport);
+      expect(org.stripe.writes).toEqual(before);
+      // A late invoice.paid still records the proof and activates the org.
+      expect((await deliverInvoicePaid(org, org.sub.id)).kind).toBe('granted');
+      expect((await provisionOrgSubscription(org.orgId, org.deps)).activation).toBe('active');
+    });
+
+    it('SEAT-9 (partial) a subscription Stripe creates already active at $0 (customer credit or coupon) is refused for support but STORED, so the mirror and support can see it', async () => {
+      if (!dbAvailable) return;
+      process.env.DEPLOYMENT_MODE = 'cloud';
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await provisionOrgSubscription(orgId, deps);
+      stripe.endSubscription(first.result.linkage.stripeSubscriptionId);
+      const create = stripe.createSubscription.bind(stripe);
+      stripe.createSubscription = async (params, key) => {
+        const sub = await create(params, key);
+        const invoice = stripe.invoiceFor(sub.id)!;
+        Object.assign(invoice, { status: 'paid', amountPaidCents: 0, paidAt: sub.created });
+        stripe.subscriptions.get(sub.id)!.status = 'active';
+        return { ...sub, status: 'active' };
+      };
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      const created = stripe.liveSubscriptions(stripe.subscriptions.get(first.result.linkage.stripeSubscriptionId)!.customerId);
+      expect(created).toHaveLength(1);
+      const [row] = await rowsFor(orgId);
+      expect(row).toMatchObject({ stripeSubscriptionId: created[0].id, status: 'active' });
+      expect((await orgRow(orgId)).stripeSubscriptionId).toBe(created[0].id);
+      expect(await getOrgStatus(orgId)).toEqual({ status: 'lapsed', reason: 'never_funded' });
+    });
+
+    it('a lost row whose subscription lacks the seat item (not a plan PageSpace creates) is refused for support, never repaired', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(8);
+      stripe.loseNextResponse('createSubscription');
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toThrow();
+      const [sub] = [...stripe.subscriptions.values()];
+      sub.items = sub.items.filter((i) => i.priceId === PRICES.basePriceId);
+      const before = { ...stripe.writes };
+      await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject(requiresSupport);
+      expect(stripe.writes).toEqual(before);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+  });
+
+  it('refuses to buy a second subscription when a lost mirror has an unrecognized live org plan', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    live.status = 'active';
+    live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown' } : item);
+    await db.delete(orgSubscriptions).where(eq(orgSubscriptions.orgId, orgId));
+    const writes = { ...stripe.writes };
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toMatchObject({ code: 'billing_requires_support' });
+    expect(stripe.writes).toEqual(writes);
+    expect(await rowsFor(orgId)).toHaveLength(0);
+  });
+
+  it('invalidates an existing subscription on refresh without buying another, and serves it again only after its prices are repaired', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    stripe.payLatestInvoice(first.linkage.stripeSubscriptionId);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    const originalItems = live.items.map(item => ({ ...item }));
+    live.items = live.items.map(item => item.priceId === PRICES.basePriceId ? { ...item, priceId: 'price_unknown' } : item);
+    const writes = { ...stripe.writes };
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toMatchObject({ code: 'billing_requires_support' });
+    expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'unverified_price', stripeBasePriceId: '', stripeSeatPriceId: '' });
+    seats.count = 9;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'no_subscription' });
+    expect(stripe.writes).toEqual(writes);
+    live.items = originalItems;
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0]).toMatchObject({ status: 'active', stripeBasePriceId: PRICES.basePriceId, stripeSeatPriceId: PRICES.seatPriceId });
+    expect(stripe.writes).toEqual(writes);
+  });
+
+  it('mirrors verified gift identity during provisioning and each existing-subscription refresh', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(false);
+    const live = stripe.subscriptions.get(first.linkage.stripeSubscriptionId)!;
+    live.metadata = { ...live.metadata, type: 'gift_subscription' };
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(true);
+    delete live.metadata.type;
+    await ensureOrgBusinessSubscription(orgId, deps);
+    expect((await rowsFor(orgId))[0].gifted).toBe(false);
+  });
+
+  it('SEAT-1 two concurrent first calls for one org create one customer and one subscription, and both see the same linkage', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.writeDelayMs = 30;
+    stripe.searchLag = true;
+
+    const [a, b] = await Promise.all([ensureOrgBusinessSubscription(orgId, deps), ensureOrgBusinessSubscription(orgId, deps)]);
+
+    expect(stripe.writes.createCustomer).toBe(1);
+    expect(stripe.writes.createSubscription).toBe(1);
+    expect(a.linkage.stripeSubscriptionId).toBe(b.linkage.stripeSubscriptionId);
+    expect([a.kind, b.kind].sort()).toEqual(['created', 'existing']);
+    expect(await rowsFor(orgId)).toHaveLength(1);
+  });
+
+  it('SEAT-1 concurrent customer lookups for one org never make two customers', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.writeDelayMs = 30;
+    stripe.searchLag = true;
+    const ids = await Promise.all([1, 2, 3].map(() => ensureOrgStripeCustomer(orgId, deps)));
+    expect(new Set(ids.map((r) => r.customerId)).size).toBe(1);
+    expect(stripe.writes.createCustomer).toBe(1);
+  });
+
+  it('SEAT-1 a customer create whose response was lost is replayed with the same key: the retry gets the same customer, never a second', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.searchLag = true; // the new customer is not searchable yet
+    stripe.loseNextResponse('createCustomer');
+
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow(/connection to Stripe/);
+    // The failure left no half-written linkage that would block a retry.
+    expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
+    expect(await rowsFor(orgId)).toHaveLength(0);
+
+    const retry = await ensureOrgBusinessSubscription(orgId, deps);
+    expect(retry.kind).toBe('created');
+    expect(stripe.writes.createCustomer).toBe(1);
+    expect(stripe.customers.size).toBe(1);
+    expect(new Set(stripe.keysSeen.filter((k) => k.includes(':customer.create:'))).size).toBe(1);
+  });
+
+  it('SEAT-1 a customer Stripe created but the database never recorded is found again after the key window, not duplicated', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.loseNextResponse('createCustomer');
+    await expect(ensureOrgStripeCustomer(orgId, deps)).rejects.toThrow();
+    stripe.expireIdempotencyKeys();
+    stripe.indexSearch();
+
+    const again = await ensureOrgStripeCustomer(orgId, deps);
+    expect(again.created).toBe(false);
+    expect(stripe.customers.size).toBe(1);
+    expect((await orgRow(orgId)).stripeCustomerId).toBe(again.customerId);
+  });
+
+  it('SEAT-1 a subscription Stripe created but the database never recorded is adopted on retry, not duplicated — even after the key window', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.loseNextResponse('createSubscription');
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow(/connection to Stripe/);
+    // The customer committed on its own; the subscription row did not.
+    expect((await orgRow(orgId)).stripeCustomerId).not.toBeNull();
+    expect(await rowsFor(orgId)).toHaveLength(0);
+    stripe.expireIdempotencyKeys();
+
+    const retry = await ensureOrgBusinessSubscription(orgId, deps);
+    expect(retry.kind).toBe('adopted');
+    expect(stripe.writes.createSubscription).toBe(1);
+    expect(stripe.subscriptions.size).toBe(1);
+    expect((await rowsFor(orgId))[0].stripeSubscriptionId).toBe([...stripe.subscriptions.keys()][0]);
+  });
+
+  it('SEAT-1 a Stripe outage on subscription create leaves the org retryable: no subscription row, and the next call provisions', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.failNext('createSubscription', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
+    await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow(/unavailable/);
+    expect(await rowsFor(orgId)).toHaveLength(0);
+
+    const retry = await ensureOrgBusinessSubscription(orgId, deps);
+    expect(retry.kind).toBe('created');
+    expect(stripe.subscriptions.size).toBe(1);
+  });
+
+  it('SEAT-9 (partial) an org whose subscription was canceled gets a new one, awaiting payment like the first', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await ensureOrgBusinessSubscription(orgId, deps);
+    await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, orgId));
+    const sub = stripe.subscriptions.get(first.linkage.stripeSubscriptionId);
+    if (sub) sub.status = 'canceled';
+
+    const again = await ensureOrgBusinessSubscription(orgId, deps);
+    expect(again.kind).toBe('created');
+    expect(again.linkage.stripeSubscriptionId).not.toBe(first.linkage.stripeSubscriptionId);
+    const fresh = stripe.subscriptions.get(again.linkage.stripeSubscriptionId);
+    expect(fresh?.status).toBe('incomplete');
+    const rows = await rowsFor(orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].stripeSubscriptionId).toBe(again.linkage.stripeSubscriptionId);
+    expect((await orgRow(orgId)).stripeSubscriptionId).toBe(again.linkage.stripeSubscriptionId);
+  });
+
+  it('A-8 adding a 6th seat raises the extra-seat quantity to 1; 7 seats to 2; back to 5 seats to 0; a replay is a no-op', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+
+    seats.count = 6;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 1 });
+    expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(1);
+    seats.count = 7;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 2 });
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'noop', quantity: 2 });
+    seats.count = 5;
+    expect(await syncOrgSeatQuantity(orgId, { prorationBehavior: 'none' }, deps)).toEqual({ kind: 'updated', quantity: 0 });
+    expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(0);
+    expect(stripe.writes.updateSubscriptionItemQuantity).toBe(3);
+    const [row] = await rowsFor(orgId);
+    expect(row).toMatchObject({ extraSeatQuantity: 0, seatRevision: 3 });
+  });
+
+  it('A-8 a seat change whose response was lost is replayed with the same key and applied once', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+    stripe.loseNextResponse('updateSubscriptionItemQuantity');
+    seats.count = 8;
+    await expect(syncOrgSeatQuantity(orgId, {}, deps)).rejects.toThrow();
+    expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(0);
+
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'updated', quantity: 3 });
+    expect(stripe.writes.updateSubscriptionItemQuantity).toBe(1);
+    expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(3);
+  });
+
+  it('A-8 syncing seats for an org with no subscription does nothing and says so', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe, seats } = await northwind(1);
+    seats.count = 9;
+    expect(await syncOrgSeatQuantity(orgId, {}, deps)).toEqual({ kind: 'no_subscription' });
+    expect(stripe.writes.updateSubscriptionItemQuantity).toBe(0);
+  });
+
+  it('refuses an unknown org and refuses to run with an unconfigured price, before any Stripe write', async () => {
+    if (!dbAvailable) return;
+    const { orgId, deps, stripe } = await northwind(1);
+    await expect(ensureOrgBusinessSubscription('org_does_not_exist', deps)).rejects.toMatchObject({ code: 'org_not_found' });
+    const unconfigured: OrgBillingDeps = { ...deps, prices: () => ({ basePriceId: '', seatPriceId: PRICES.seatPriceId }) };
+    await expect(ensureOrgBusinessSubscription(orgId, unconfigured)).rejects.toMatchObject({ code: 'prices_not_configured' });
+    expect(Object.values(stripe.writes).every((n) => n === 0)).toBe(true);
+  });
+
+  it('SEAT-8 (partial) D-OW-30 creating an org asks for a card: a cloud org gets a subscription awaiting payment and the client secret to confirm it, with no Stripe id in what the route sees', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps, stripe } = await northwind(1);
+    const start = await startOrgBusinessSubscription(orgId, deps);
+    const [sub] = [...stripe.subscriptions.values()];
+    expect(start).toEqual({
+      state: 'payment_required',
+      subscription: { status: 'incomplete', currentPeriodEnd: expect.any(String), extraSeatQuantity: 0 },
+      payment: { kind: 'confirm_payment', clientSecret: stripe.invoiceFor(sub.id)?.clientSecret },
+    });
+    expect(JSON.stringify(start)).not.toMatch(/cus_|sub_|si_|in_/);
+  });
+
+  it('SEAT-8 (partial) where billing is off (onprem, tenant) no org is billed and Stripe is never called', async () => {
+    if (!dbAvailable) return;
+    for (const mode of ['onprem', 'tenant']) {
+      process.env.DEPLOYMENT_MODE = mode;
+      const { orgId, deps, stripe } = await northwind(1);
+      expect(await startOrgBusinessSubscription(orgId, deps)).toEqual({ state: 'not_billed' });
+      expect(stripe.writes.createCustomer + stripe.reads.findCustomerByOrgId).toBe(0);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    }
+  });
+
+  it('SEAT-8 (partial) a Stripe outage while the org is created leaves it pending and unsubscribed, and a later call provisions it', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps, stripe } = await northwind(1);
+    stripe.failNext('createCustomer', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
+    expect(await startOrgBusinessSubscription(orgId, deps)).toEqual({ state: 'pending' });
+    expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
+    expect(await rowsFor(orgId)).toHaveLength(0);
+    const later = await provisionOrgSubscription(orgId, deps);
+    expect(later.result.linkage.status).toBe('incomplete');
+    expect(later.payment.kind).toBe('confirm_payment');
+  });
+
+  describe('paying for the org (review 3+4 P1-1: an org can pay)', () => {
+    it('SEAT-8 (partial) SEAT-9 (partial) asking again while the first invoice is unpaid returns the SAME client secret and creates nothing', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await provisionOrgSubscription(orgId, deps);
+      const writes = { ...stripe.writes };
+      const again = await provisionOrgSubscription(orgId, deps);
+      expect(again.result.kind).toBe('existing');
+      expect(again.payment).toEqual(first.payment);
+      expect(first.payment.kind).toBe('confirm_payment');
+      expect(stripe.writes).toEqual(writes);
+    });
+
+    it('SEAT-9 (partial) re-subscribing a lapsed (canceled) org returns the NEW subscription\'s client secret; once Stripe has the payment, no payment step is left', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(6);
+      const first = await provisionOrgSubscription(orgId, deps);
+      stripe.payLatestInvoice(first.result.linkage.stripeSubscriptionId);
+      stripe.endSubscription(first.result.linkage.stripeSubscriptionId);
+
+      const resub = await provisionOrgSubscription(orgId, deps);
+      expect(resub.result.kind).toBe('created');
+      const fresh = resub.result.linkage.stripeSubscriptionId;
+      expect(fresh).not.toBe(first.result.linkage.stripeSubscriptionId);
+      expect(resub.payment).toEqual({ kind: 'confirm_payment', clientSecret: stripe.invoiceFor(fresh)?.clientSecret });
+      expect(stripe.seatQuantity(fresh, PRICES.seatPriceId)).toBe(1);
+
+      stripe.payLatestInvoice(fresh);
+      const paid = await provisionOrgSubscription(orgId, deps);
+      expect(paid.result).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
+      expect(paid.payment).toEqual({ kind: 'none' });
+    });
+
+    it('SEAT-9 (partial) a past_due org whose card failed gets the open invoice\'s secret, so a new card pays what is owed', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await provisionOrgSubscription(orgId, deps);
+      stripe.payLatestInvoice(first.result.linkage.stripeSubscriptionId);
+      const renewal = stripe.openRenewalInvoice(first.result.linkage.stripeSubscriptionId, 'past_due');
+      const due = await provisionOrgSubscription(orgId, deps);
+      expect(due.result.linkage.status).toBe('past_due');
+      expect(due.payment).toEqual({ kind: 'confirm_payment', clientSecret: renewal.clientSecret });
+    });
+
+    it('SEAT-6 (partial) the billing portal opens on the ORG\'s Stripe customer, never the Owner\'s personal one; an org with no customer is refused without a Stripe call', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await db.update(users).set({ stripeCustomerId: `cus_personal_${orgId}` }).where(eq(users.id, ownerId));
+      await expect(createOrgBillingPortalSession(orgId, 'https://app.test/back', deps)).rejects.toMatchObject({ code: 'no_billing_customer' });
+      expect(stripe.portalSessions).toHaveLength(0);
+
+      const { customerId } = await ensureOrgStripeCustomer(orgId, deps);
+      const session = await createOrgBillingPortalSession(orgId, 'https://app.test/back', deps);
+      expect(stripe.portalSessions).toEqual([{ customerId, returnUrl: 'https://app.test/back' }]);
+      expect(customerId).not.toBe(`cus_personal_${orgId}`);
+      expect(session.url).toMatch(/^https:\/\//);
+    });
+
+    it('SEAT-6 (partial) org invoices are listed from the ORG\'s customer only; an org with no customer has none', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await db.update(users).set({ stripeCustomerId: `cus_personal_${orgId}` }).where(eq(users.id, ownerId));
+      expect(await listOrgInvoices(orgId, { limit: 10 }, deps)).toEqual({ invoices: [], hasMore: false });
+
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.payLatestInvoice(linkage.stripeSubscriptionId);
+      const listed = await listOrgInvoices(orgId, { limit: 10 }, deps);
+      expect(stripe.invoiceListCalls).toEqual([{ customerId: linkage.stripeCustomerId, limit: 10, startingAfter: undefined }]);
+      expect(listed.hasMore).toBe(false);
+      expect(listed.invoices).toEqual([
+        expect.objectContaining({ id: stripe.invoiceFor(linkage.stripeSubscriptionId)?.id, status: 'paid', amountPaid: 5000, currency: 'usd' }),
+      ]);
+    });
+  });
+
+  describe('deleting an org that has a subscription (ORG-6 meets the org subscription)', () => {
+    const noKick = { broadcast: async () => {}, kick: async () => {} };
+
+    it('SEAT-1 (partial) cancels the live Stripe subscription and removes its row with the org, so nothing keeps billing a deleted org', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+
+      const result = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+
+      expect(result.ok).toBe(true);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+      expect(await rowsFor(orgId)).toHaveLength(0);
+      expect(await orgRow(orgId)).toBeUndefined();
+    });
+
+    it('SEAT-1 (partial) a Stripe failure while canceling refuses the whole delete: the org, its row and its subscription all stay, and a retry completes', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.failNext('cancelSubscription', Object.assign(new Error('Stripe is unavailable'), { type: 'StripeAPIError' }));
+
+      await expect(
+        deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) }),
+      ).rejects.toThrow(/unavailable/);
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(await rowsFor(orgId)).toHaveLength(1);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('incomplete');
+
+      const retry = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: noKick, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+      expect(retry.ok).toBe(true);
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+    });
+
+    it('SEAT-1 (partial) a caller with no way to end the subscription cannot delete a subscribed org (fails closed, nothing changes)', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps } = await northwind(1);
+      await ensureOrgBusinessSubscription(orgId, deps);
+      await expect(deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick })).rejects.toThrow(
+        /subscription/,
+      );
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(await rowsFor(orgId)).toHaveLength(1);
+    });
+
+    it('an org whose subscription already ended is deleted without a Stripe call', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await ensureOrgBusinessSubscription(orgId, deps);
+      await db.update(orgSubscriptions).set({ status: 'canceled' }).where(eq(orgSubscriptions.orgId, orgId));
+      const result = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick });
+      expect(result.ok).toBe(true);
+      expect(stripe.writes.cancelSubscription).toBe(0);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+  });
+
+  describe('review 5328226999 on #2733', () => {
+    it('SEAT-1 (P1-A) a customer create whose response was lost, then an org rename and an owner email change while search cannot see it: exactly ONE customer, carrying the new details', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      stripe.searchLag = true;
+      stripe.loseNextResponse('createCustomer');
+      await expect(ensureOrgStripeCustomer(orgId, deps)).rejects.toThrow(/connection to Stripe/);
+
+      await db.update(organizations).set({ name: 'Northwind Labs Inc' }).where(eq(organizations.id, orgId));
+      await db.update(users).set({ email: `billing+${ownerId}@northwind.test` }).where(eq(users.id, ownerId));
+
+      const again = await ensureOrgStripeCustomer(orgId, deps);
+      expect(stripe.customers.size).toBe(1);
+      expect(stripe.writes.createCustomer).toBe(1);
+      const [customer] = [...stripe.customers.values()];
+      expect(again.customerId).toBe(customer.id);
+      expect(customer.details).toEqual({ name: 'Northwind Labs Inc', email: `billing+${ownerId}@northwind.test` });
+    });
+
+    it('SEAT-1 (P1-B) re-subscribing within 24h after an ended subscription creates a NEW live subscription instead of replaying the dead one', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      // Each end is mirrored on the row as a webhook would (D3), so this isolates the KEY.
+      const end = async (id: string, status: 'canceled' | 'incomplete_expired') => {
+        stripe.endSubscription(id, status);
+        await db.update(orgSubscriptions).set({ status }).where(eq(orgSubscriptions.orgId, orgId));
+      };
+      const a = await ensureOrgBusinessSubscription(orgId, deps);
+      await end(a.linkage.stripeSubscriptionId, 'canceled');
+      const b = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(b.linkage.stripeSubscriptionId).not.toBe(a.linkage.stripeSubscriptionId);
+      // B (same params: same seats, same customer) ends inside Stripe's key window.
+      await end(b.linkage.stripeSubscriptionId, 'incomplete_expired');
+
+      const c = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(c.kind).toBe('created');
+      expect(c.linkage.stripeSubscriptionId).not.toBe(b.linkage.stripeSubscriptionId);
+      expect(stripe.liveSubscriptions(a.linkage.stripeCustomerId).map((x) => x.id)).toEqual([c.linkage.stripeSubscriptionId]);
+      const [row] = await rowsFor(orgId);
+      expect(row.stripeSubscriptionId).toBe(c.linkage.stripeSubscriptionId);
+    });
+
+    it('SEAT-1 (P1-B) a create that Stripe answers with an ended subscription is never stored as live', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const real = stripe.createSubscription.bind(stripe);
+      stripe.createSubscription = async (params, key) => ({ ...(await real(params, key)), status: 'incomplete_expired' });
+      await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toMatchObject({ code: 'subscription_not_live' });
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+
+    it('SEAT-1 (Codex P1 / P2-3) a stored subscription that Stripe already ended is refreshed from Stripe, and the org can subscribe again', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.endSubscription(first.linkage.stripeSubscriptionId); // ended in Stripe; no webhook yet (D3)
+
+      const again = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(again.kind).toBe('created');
+      expect(again.linkage.stripeSubscriptionId).not.toBe(first.linkage.stripeSubscriptionId);
+      expect(stripe.subscriptions.get(again.linkage.stripeSubscriptionId)?.status).toBe('incomplete');
+    });
+
+    it('SEAT-1 a stored subscription still live in Stripe has its mirrored status refreshed (incomplete → active)', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      const first = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.payLatestInvoice(first.linkage.stripeSubscriptionId);
+      const again = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(again).toMatchObject({ kind: 'existing', linkage: { status: 'active' } });
+      expect((await rowsFor(orgId))[0].status).toBe('active');
+    });
+
+    it('SEAT-1 (partial) Codex P2: a lost create whose subscription ended before the retry is followed by a new subscription, never stored as the dead one', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe } = await northwind(1);
+      stripe.loseNextResponse('createSubscription');
+      await expect(ensureOrgBusinessSubscription(orgId, deps)).rejects.toThrow();
+      const [lost] = [...stripe.subscriptions.values()];
+      stripe.endSubscription(lost.id);
+      stripe.expireIdempotencyKeys();
+
+      const retry = await ensureOrgBusinessSubscription(orgId, deps);
+      expect(retry.linkage.stripeSubscriptionId).not.toBe(lost.id);
+      expect(stripe.subscriptions.get(retry.linkage.stripeSubscriptionId)?.status).toBe('incomplete');
+    });
+
+    it('A-8 (P2-2) the seat count is taken under the billing lock: two concurrent changes end at the LATER count', async () => {
+      if (!dbAvailable) return;
+      const { orgId, deps, stripe, seats } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      stripe.writeDelayMs = 30;
+      seats.count = 9;
+      const first = syncOrgSeatQuantity(orgId, {}, deps);
+      await new Promise((r) => setTimeout(r, 5));
+      seats.count = 7; // a member left while the first change was in flight
+      const second = syncOrgSeatQuantity(orgId, {}, deps);
+      await Promise.all([first, second]);
+      expect(stripe.seatQuantity(linkage.stripeSubscriptionId, PRICES.seatPriceId)).toBe(2);
+      expect((await rowsFor(orgId))[0].extraSeatQuantity).toBe(2);
+    });
+
+    it('SEAT-1 (P2-1) an org delete racing an in-flight provisioning never leaves a live Stripe subscription for a deleted org', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      await ensureOrgStripeCustomer(orgId, deps);
+      const customerId = (await orgRow(orgId)).stripeCustomerId as string;
+      stripe.writeDelayMs = 60;
+      const provisioning = ensureOrgBusinessSubscription(orgId, deps).catch((e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 15));
+      const deleted = await deleteOrganization(
+        { actorId: ownerId, orgId, choices: [], now: new Date() },
+        { ports: { broadcast: async () => {}, kick: async () => {} }, endSubscription: endOrgSubscriptionPort(deps) },
+      );
+      await provisioning;
+      expect(deleted.ok).toBe(true);
+      expect(await orgRow(orgId)).toBeUndefined();
+      expect(stripe.liveSubscriptions(customerId)).toHaveLength(0);
+    });
+
+    it('SEAT-1 (Codex P2) Stripe canceled but the delete transaction failed: the org stays, and the retried delete completes without a second cancel', async () => {
+      if (!dbAvailable) return;
+      const { orgId, ownerId, deps, stripe } = await northwind(1);
+      const { linkage } = await ensureOrgBusinessSubscription(orgId, deps);
+      const port = endOrgSubscriptionPort(deps);
+      const noKick = { broadcast: async () => {}, kick: async () => {} };
+      await expect(
+        deleteOrganization(
+          { actorId: ownerId, orgId, choices: [], now: new Date() },
+          { ports: noKick, endSubscription: async (sub) => { await port(sub); throw new Error('connection lost after the cancel'); } },
+        ),
+      ).rejects.toThrow(/connection lost/);
+      expect(await orgRow(orgId)).toBeDefined();
+      expect(stripe.subscriptions.get(linkage.stripeSubscriptionId)?.status).toBe('canceled');
+
+      const retry = await deleteOrganization({ actorId: ownerId, orgId, choices: [], now: new Date() }, { ports: noKick, endSubscription: port });
+      expect(retry.ok).toBe(true);
+      expect(stripe.writes.cancelSubscription).toBe(1);
+      expect(await rowsFor(orgId)).toHaveLength(0);
+    });
+  });
+});
+
+/**
+ * AUD-1: provisioning's billing event is staged in its own transaction (the outbox), so it exists exactly when the
+ * subscription row does, and publishing it can never fail a call whose Stripe create has committed. The chain append
+ * is captured here; `refuse` makes it fail.
+ */
+describe('org subscription provisioning audit (real Postgres, in-memory Stripe)', () => {
+  const chain = { appended: [] as AuditEvent[], refuse: false };
+  const billingEvents = (orgId: string) =>
+    chain.appended.filter((e) => e.details?.orgId === orgId && e.eventType === 'org.billing.subscription_changed').map((e) => e.details);
+  const queued = (orgId: string) => db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).where(eq(orgAuditOutbox.orgId, orgId));
+
+  beforeAll(async () => {
+    try {
+      await db.select({ id: orgAuditOutbox.id }).from(orgAuditOutbox).limit(1);
+      dbAvailable = true;
+    } catch (error) {
+      requireDb('org-subscription.integration.test.ts (audit)', error);
+    }
+    vi.spyOn(securityAudit, 'logEvent').mockImplementation(async (entry) => {
+      if (chain.refuse) throw new Error('audit chain unavailable');
+      chain.appended.push(entry);
+    });
+  });
+  afterAll(async () => {
+    vi.restoreAllMocks();
+    // This suite runs after the first one's cleanup: remove what IT created the same way.
+    if (!dbAvailable) return;
+    if (orgIds.length > 0) {
+      await db.delete(wallets).where(inArray(wallets.orgId, orgIds));
+      await db.delete(orgSubscriptionFunding).where(inArray(orgSubscriptionFunding.orgId, orgIds));
+      await db.delete(orgSubscriptions).where(inArray(orgSubscriptions.orgId, orgIds));
+      await db.delete(orgMembers).where(inArray(orgMembers.orgId, orgIds));
+      await db.delete(organizations).where(inArray(organizations.id, orgIds));
+    }
+    if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  });
+  afterEach(() => {
+    chain.appended.length = 0;
+    chain.refuse = false;
+  });
+
+  it('AUD-1 (partial) the subscription a provisioning creates is audited with its row; a replay that changes nothing writes nothing', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps } = await northwind(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    expect(billingEvents(orgId)).toEqual([expect.objectContaining({ source: 'provisioning', kind: 'created', to: first.result.linkage.status })]);
+    await provisionOrgSubscription(orgId, deps);
+    expect(billingEvents(orgId)).toHaveLength(1);
+    expect(await queued(orgId)).toEqual([]);
+  });
+
+  it('AUD-1 (partial) with the audit chain down, a committed Stripe create still succeeds for the caller; its event stays queued and the drainer delivers it', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps } = await northwind(1);
+    chain.refuse = true;
+    const provisioned = await provisionOrgSubscription(orgId, deps);
+    expect(provisioned.result.kind).toBe('created');
+    expect(await rowsFor(orgId)).toHaveLength(1);
+    expect(billingEvents(orgId)).toEqual([]);
+    expect(await queued(orgId)).not.toEqual([]);
+    chain.refuse = false;
+    await drainOrgAuditOutbox({ now: new Date(Date.now() + 2 * 60 * 60_000), limit: 10_000 });
+    expect(billingEvents(orgId)).toEqual([expect.objectContaining({ source: 'provisioning', kind: 'created' })]);
+  });
+
+  it('AUD-1 (partial) a subscription PageSpace just created that is refused for support is stored AND audited, so the org log shows a live subscription that only the app log showed before', async () => {
+    if (!dbAvailable) return;
+    process.env.DEPLOYMENT_MODE = 'cloud';
+    const { orgId, deps, stripe } = await northwind(1);
+    const first = await provisionOrgSubscription(orgId, deps);
+    stripe.endSubscription(first.result.linkage.stripeSubscriptionId);
+    const create = stripe.createSubscription.bind(stripe);
+    stripe.createSubscription = async (params, key) => {
+      const sub = await create(params, key);
+      const invoice = stripe.invoiceFor(sub.id)!;
+      Object.assign(invoice, { status: 'paid', amountPaidCents: 0, paidAt: sub.created });
+      stripe.subscriptions.get(sub.id)!.status = 'active';
+      return { ...sub, status: 'active' };
+    };
+    await expect(provisionOrgSubscription(orgId, deps)).rejects.toMatchObject({ code: 'billing_requires_support' });
+    expect(billingEvents(orgId)).toContainEqual(expect.objectContaining({ source: 'provisioning', kind: 'created_requires_support', reason: 'unfunded_active', to: 'active', stored: true }));
+  });
+});

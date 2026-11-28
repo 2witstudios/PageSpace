@@ -24,12 +24,13 @@ import {
 } from '@pagespace/lib/services/sandbox/quota';
 import { writeCodeExecutionAudit } from '@pagespace/lib/services/sandbox/audit';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
-import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
+import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { findSessionRecord, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export type ResolveSessionSandboxHandleResult =
   | { ok: true; handle: SandboxHandle }
@@ -49,7 +50,7 @@ export type ResolveSessionSandboxHandleDenial = 'not_found' | 'not_started' | 'v
 /**
  * Attach (never provision) to the machine a session's work runs on.
  *
- * **`requesterId` is REQUIRED, and this function applies the code-execution
+ * **`requester` is REQUIRED, and this function applies the code-execution
  * gate itself.** `decideAgentSessionAccess` is deliberately capability-free —
  * the session SURFACE (list, detail, panes) is free to any drive member, and
  * every chokepoint that SPENDS COMPUTE consults `canRunCode` on its own
@@ -66,7 +67,7 @@ export type ResolveSessionSandboxHandleDenial = 'not_found' | 'not_started' | 'v
  */
 export async function resolveSessionSandboxHandle(
   workspaceId: string,
-  requesterId: string,
+  requester: AccessActor,
 ): Promise<ResolveSessionSandboxHandleResult> {
   const session = await findSessionRecord(workspaceId);
   if (!session) return { ok: false, reason: 'not_found' };
@@ -84,7 +85,7 @@ export async function resolveSessionSandboxHandle(
   // — and these three browse routes were not among them. The UI hid the
   // controls; nothing stopped the request.
   const eligible = await canRunCodeForSession({
-    userId: requesterId,
+    actor: requester,
     driveId: session.driveId,
     ownerId: session.ownerId,
   });
@@ -117,7 +118,7 @@ export interface SessionActorContext {
   tenantId: string;
   actorEmail: string;
   actorDisplayName?: string;
-  tier: ReturnType<typeof toSubscriptionTier>;
+  tier: ReturnType<typeof toPersonalSubscriptionTier>;
 }
 
 /** The acting user's identity/tier facts for a git read run's actor context. */
@@ -131,7 +132,7 @@ export async function resolveSessionActorContext(userId: string): Promise<Sessio
     tenantId: userId,
     actorEmail: actorInfo.actorEmail,
     actorDisplayName: actorInfo.actorDisplayName,
-    tier: toSubscriptionTier(user?.subscriptionTier),
+    tier: toPersonalSubscriptionTier(user?.subscriptionTier),
   };
 }
 

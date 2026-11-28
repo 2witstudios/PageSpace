@@ -1,9 +1,10 @@
 import { describe, test } from 'vitest';
 import { z } from 'zod';
-import { assert } from '@/lib/ai/core/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { defineRow, type GitToolRow } from '../../tools/types';
 import { generateSandboxGitTools, deriveToolNames, type GeneratorSeams } from '../../generate-tools';
 import { SANDBOX_GIT_TOOL_ROWS } from '../../tools/registry';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 // The generator is now the single place that could violate the exec contract:
 // cmd must stay a literal 'git' | 'gh', args must stay string[], and nothing is
@@ -20,7 +21,7 @@ function makeSeams() {
   const calls: Captured[] = [];
   const ctx = { userId: 'u1' } as never;
   const seams: GeneratorSeams = {
-    open: async () => ({ ok: true, userId: 'u1', ctx }),
+    open: async () => ({ ok: true, userId: 'u1', ctx, actor: credentialActor('u1', null) }),
     git: async (cmd, args, _ctx, cwd) => {
       calls.push({ cmd, args, cwd });
       return { success: true };

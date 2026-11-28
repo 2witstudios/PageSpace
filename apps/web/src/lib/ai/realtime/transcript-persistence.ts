@@ -44,6 +44,8 @@ export type TranscriptConversation = {
 export type TranscriptRequest = {
   readonly callId: string;
   readonly userId: string;
+  /** The calling credential's ceremony evidence as the bridge carried it; re-parsed, never trusted as shaped (SEC-2/3). */
+  readonly authentication?: unknown;
   readonly conversationId: string;
   readonly role: 'user' | 'assistant';
   readonly text: string;
@@ -106,6 +108,7 @@ export type TranscriptPersistenceDeps = {
   readonly canAccess: (
     userId: string,
     conversation: TranscriptConversation,
+    authentication?: unknown,
   ) => Promise<boolean>;
   readonly saveGlobalMessage: (
     args: SaveArgs & { readonly userId: string },
@@ -188,7 +191,7 @@ export const persistVoiceTranscript = async (
     return { ...NOTHING, skipped: 'history_deleted' };
   }
 
-  if (!(await deps.canAccess(request.userId, existing))) {
+  if (!(await deps.canAccess(request.userId, existing, request.authentication))) {
     deps.logger.warn('Voice transcript refused: caller cannot access the conversation', {
       callId: request.callId,
       userId: request.userId,

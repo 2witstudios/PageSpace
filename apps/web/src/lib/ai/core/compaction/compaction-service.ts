@@ -8,7 +8,13 @@ import { normalizeMessageParts, type NormalizableMessage } from '@pagespace/lib/
 import { buildSummarizationPrompt } from '@pagespace/lib/ai/summarization-prompt';
 import { estimateTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pricing';
+import { isMeteringExempt } from '@pagespace/lib/ai/model-defaults';
+import { callAdmission } from '@pagespace/lib/billing/call-admission';
+import { releaseHold } from '@pagespace/lib/billing/credit-consume';
+import { spendDriveId, type SpendTarget } from '@pagespace/lib/billing/spend-target';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
+import { gateUserCall } from '@/lib/ai/core/user-credit-hold';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { getState, upsertState } from './compaction-repository';
 
@@ -23,6 +29,22 @@ export interface RunCompactionParams {
   provider: string;
   model: string;
   plan: CompactionPlan;
+  /**
+   * Where the turn this compaction belongs to spent (SPEND-1), with the source its gate
+   * resolved pinned (resolvedSpend). A compaction is a model call of its own, so it is gated
+   * and reserved on this same target before the model runs, and settles once on the wallet
+   * that reservation names: a mention reply's compaction on the drive wallet or not at all,
+   * never the sender's own credits (SPEND-6).
+   */
+  spend: SpendTarget;
+  /**
+   * The consumer the turn's gate bound, when it is not `userId` (a manual workflow Run's presser): the compaction is
+   * gated and its usage recorded as them, so it counts toward their cap (review #2817 P2-3). `userId` still picks the
+   * provider and owns the conversation.
+   */
+  billedUserId?: string;
+  /** SPEND-10: the automation (its stored reference, automation-attribution) the turn ran for when no person was present; its usage is listed as it. */
+  automationRef?: string;
 }
 
 async function summarize(
@@ -72,7 +94,14 @@ async function summarize(
 }
 
 export async function runCompaction(params: RunCompactionParams): Promise<void> {
-  const { conversationId, source, pageId, userId, provider, model, plan } = params;
+  const { conversationId, source, pageId, userId, provider, model, plan, spend } = params;
+  const billedUserId = params.billedUserId ?? userId;
+
+  // The reservation this compaction runs against. trackUsage takes it over at settle; every
+  // path that ends before that releases it in `finally`, so a refused, failed or empty run
+  // never strands a hold.
+  let holdId: string | undefined;
+  let holdHandedOff = false;
 
   try {
     const compactionModel = process.env.COMPACTION_MODEL ?? model;
@@ -89,12 +118,17 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
     const providerResult = await createAIProvider(userId, {
       selectedProvider: provider,
       selectedModel: compactionModel,
-    });
+    }, { driveId: spendDriveId(spend) });
 
     if (isProviderError(providerResult)) {
       console.warn('[compaction] provider unavailable:', providerResult.error);
       return;
     }
+    // What actually runs: the factory can substitute the metered default when the compaction
+    // model does not fit the requested provider, so admission and the settle key on this,
+    // never on the requested (possibly exempt) provider.
+    const runProvider = providerResult.provider;
+    const runModel = providerResult.modelName;
 
     const previousSummary = plan.previousSummary ?? currentState?.summary ?? null;
     const messagesToSummarize = plan.messagesToSummarize;
@@ -111,41 +145,84 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
       return; // Nothing to summarize
     }
 
-    let summaryResult = await summarize(
-      providerResult,
-      transcriptMessages,
-      plan.reason === 'summary-over-cap' ? null : previousSummary,
-      MAX_SUMMARY_TOKENS
-    );
-    let totalInputTokens = summaryResult.inputTokens;
-    let totalOutputTokens = summaryResult.outputTokens;
-
-    // One re-condense pass if output still exceeds cap
-    const outputTokens = summaryResult.outputTokens || estimateTokens(summaryResult.text);
-    if (outputTokens > MAX_SUMMARY_TOKENS) {
-      summaryResult = await summarize(
-        providerResult,
-        [{ role: 'user', parts: [{ type: 'text', text: summaryResult.text }] }],
-        null,
-        MAX_SUMMARY_TOKENS
-      );
-      totalInputTokens += summaryResult.inputTokens;
-      totalOutputTokens += summaryResult.outputTokens;
+    // Gate BEFORE the model (SPEND-1): reserve on the turn's own target. A refusal (an empty
+    // or paused wallet, an exhausted balance) skips the compaction entirely: no model call,
+    // no charge, and the stored summary and pointer stay exactly as they were, so the
+    // conversation keeps working from the context it already had.
+    const admission = callAdmission({
+      meteringExempt: isMeteringExempt(runProvider),
+      spend,
+      estCostCents: estimateChatHoldCentsForModel(runModel, {
+        inputTokens: estimateTokens(JSON.stringify(transcriptMessages)) + (previousSummary ? estimateTokens(previousSummary) : 0),
+      }),
+    });
+    let walletId: string | undefined;
+    if (admission.gate) {
+      const gate = await gateUserCall(billedUserId, { spend: admission.spend, estCostCents: admission.estCostCents });
+      if (!gate.allowed) {
+        console.info('[compaction] refused by the credit gate, state unchanged:', gate.reason, maskIdentifier(conversationId));
+        return;
+      }
+      holdId = gate.holdId;
+      walletId = gate.walletId;
     }
 
-    // Provider spend has happened — record it now, regardless of whether the
-    // summary below wins persistence, passes validation, or loses the race.
-    await AIMonitoring.trackUsage({
-      userId,
-      provider,
-      model: compactionModel,
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      conversationId,
-      pageId: pageId ?? undefined,
-      source: 'compaction',
-      success: true,
-    });
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let settled = false;
+    // One settle per compaction, on the hold and wallet the gate named. Provider spend that
+    // happened is recorded whether or not the summary below wins persistence, passes
+    // validation, loses the race, or a re-condense pass fails after the first one was paid.
+    const settle = async (): Promise<void> => {
+      if (settled) return;
+      settled = true;
+      holdHandedOff = true;
+      await AIMonitoring.trackUsage({
+        userId: billedUserId,
+        provider: runProvider,
+        model: runModel,
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        conversationId,
+        pageId: pageId ?? undefined,
+        source: 'compaction',
+        holdId,
+        walletId,
+        automationRef: params.automationRef,
+        success: true,
+      });
+    };
+
+    let summaryResult: Awaited<ReturnType<typeof summarize>>;
+    try {
+      summaryResult = await summarize(
+        providerResult,
+        transcriptMessages,
+        plan.reason === 'summary-over-cap' ? null : previousSummary,
+        MAX_SUMMARY_TOKENS
+      );
+      totalInputTokens = summaryResult.inputTokens;
+      totalOutputTokens = summaryResult.outputTokens;
+
+      // One re-condense pass if output still exceeds cap
+      const outputTokens = summaryResult.outputTokens || estimateTokens(summaryResult.text);
+      if (outputTokens > MAX_SUMMARY_TOKENS) {
+        summaryResult = await summarize(
+          providerResult,
+          [{ role: 'user', parts: [{ type: 'text', text: summaryResult.text }] }],
+          null,
+          MAX_SUMMARY_TOKENS
+        );
+        totalInputTokens += summaryResult.inputTokens;
+        totalOutputTokens += summaryResult.outputTokens;
+      }
+    } catch (err) {
+      // A pass that was paid for before a later one failed still settles; nothing persists.
+      if (totalInputTokens + totalOutputTokens > 0) await settle();
+      throw err;
+    }
+
+    await settle();
 
     // Never persist an empty summary: advancing the pointer with falsy summary
     // text would silently discard all pre-pointer history from the model's view.
@@ -199,5 +276,7 @@ export async function runCompaction(params: RunCompactionParams): Promise<void> 
   } catch (err) {
     // Never throw — compaction failures are non-fatal
     console.error('[compaction] failed silently:', err);
+  } finally {
+    if (holdId && !holdHandedOff) void releaseHold(holdId).catch(() => {});
   }
 }

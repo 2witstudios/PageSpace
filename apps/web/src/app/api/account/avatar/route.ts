@@ -4,9 +4,12 @@ import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { AVATAR_NOT_AN_IMAGE_MESSAGE, AVATAR_REJECTED_MESSAGE } from '@pagespace/lib/content-safety/avatar-gate';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 import { createUserServiceToken, type ServiceScope } from '@pagespace/lib/services/validated-service-token';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 // Maximum file size: 5MB
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
@@ -20,12 +23,12 @@ const PROCESSOR_URL = process.env.PROCESSOR_URL || 'http://processor:3003';
 const REQUIRED_AVATAR_SCOPES: ServiceScope[] = ['avatars:write'];
 
 async function createAvatarServiceToken(
-  userId: string,
+  actor: AccessActor,
   expirationTime: string
 ): Promise<{ token: string }> {
   // createUserServiceToken validates that the user is accessing their own resources
   const { token } = await createUserServiceToken(
-    userId,
+    actor,
     REQUIRED_AVATAR_SCOPES,
     expirationTime
   );
@@ -65,29 +68,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Delete old avatar if it exists and is a local file
-    const oldUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-    if (oldUser[0]?.image) {
-      // Check if it's a local file (not an external URL)
-      if (!oldUser[0].image.startsWith('http://') && !oldUser[0].image.startsWith('https://')) {
-        // Send delete request to processor
-        try {
-          const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
-
-          await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${serviceToken}`
-            },
-            // Best-effort cleanup; bounded so a stalled processor can't pin
-            // the request slot before the upload fetch below is reached.
-            signal: AbortSignal.timeout(10_000),
-          });
-        } catch (error) {
-          console.log('Could not delete old avatar:', error);
-        }
-      }
-    }
+    // The old avatar is NOT deleted here. The processor replaces it only after the new upload passes
+    // the content-safety gate, so a refused upload leaves the current avatar in place.
 
     // Forward the file to processor service
     const processorFormData = new FormData();
@@ -95,7 +77,7 @@ export async function POST(request: NextRequest) {
     processorFormData.append('userId', userId);
 
     // Create opaque service token for processor authentication
-    const { token: serviceToken } = await createAvatarServiceToken(userId, '5m');
+    const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '5m');
 
     const uploadUrl = `${PROCESSOR_URL}/api/avatar/upload`;
     console.log('Uploading avatar to processor', {
@@ -124,6 +106,19 @@ export async function POST(request: NextRequest) {
         );
       }
       throw err;
+    }
+
+    // A refusal by the processor's gate. The message is fixed here, never the processor's text, and
+    // never says why (not an image, or refused by the content-safety gate).
+    const refusal = processorResponse.status === 400 || processorResponse.status === 422
+      ? ((await processorResponse.clone().json().catch(() => ({}))) as { code?: unknown })
+      : null;
+    if (processorResponse.status === 422 || refusal?.code === 'not_an_image') {
+      const notAnImage = refusal?.code === 'not_an_image';
+      return NextResponse.json(
+        { error: notAnImage ? AVATAR_NOT_AN_IMAGE_MESSAGE : AVATAR_REJECTED_MESSAGE },
+        { status: processorResponse.status },
+      );
     }
 
     if (!processorResponse.ok) {
@@ -181,7 +176,7 @@ export async function DELETE(request: NextRequest) {
     if (!currentUser[0].image.startsWith('http://') && !currentUser[0].image.startsWith('https://')) {
       // Send delete request to processor
       try {
-        const { token: serviceToken } = await createAvatarServiceToken(userId, '2m');
+        const { token: serviceToken } = await createAvatarServiceToken(actorFromAuth(auth), '2m');
 
         await fetch(`${PROCESSOR_URL}/api/avatar/${userId}`, {
           method: 'DELETE',

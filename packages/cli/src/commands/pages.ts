@@ -62,7 +62,7 @@ export const pagesListHandler: CommandHandler = async (ctx, intent) => {
   }
   const [parentId] = extracted.rest;
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.list({ driveId: extracted.driveId as string, parentId, ls: true }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.list({ driveId: extracted.driveId as string, parentId, ls: true }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -86,7 +86,7 @@ export const pagesTreeHandler: CommandHandler = async (ctx, intent) => {
   const [parentId] = extracted.rest;
   const driveId = extracted.driveId;
 
-  const recursive = await callSdk(ctx.stderr, () => ctx.sdk.pages.list({ driveId, parentId, recursive: true, ls: true }));
+  const recursive = await callSdk(ctx, () => ctx.sdk.pages.list({ driveId, parentId, recursive: true, ls: true }));
   if (!recursive.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -94,7 +94,7 @@ export const pagesTreeHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_SUCCESS;
   }
 
-  const direct = await callSdk(ctx.stderr, () => ctx.sdk.pages.list({ driveId, parentId, recursive: false, ls: true }));
+  const direct = await callSdk(ctx, () => ctx.sdk.pages.list({ driveId, parentId, recursive: false, ls: true }));
   if (!direct.ok) return EXIT_RUNTIME_ERROR;
 
   const rootIds = new Set(direct.value.pages.map((page) => page.id));
@@ -109,7 +109,7 @@ export const pagesReadDetailsHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.details({ pageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.details({ pageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -145,7 +145,7 @@ export const pagesCreateHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.pages.create({ driveId: extracted.driveId as string, title, type: parsedType.data, parentId: parentId ?? null }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -165,7 +165,7 @@ export const pagesRenameHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.rename({ pageId, title }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.rename({ pageId, title }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -193,7 +193,7 @@ export const pagesMoveHandler: CommandHandler = async (ctx, intent) => {
   }
 
   const newParentId = rawNewParentId === ROOT_PARENT_KEYWORD ? null : rawNewParentId;
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.move({ pageId, newParentId, newPosition }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.move({ pageId, newParentId, newPosition }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -221,7 +221,7 @@ export const pagesTrashHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.trash({ pageId, trash_children: trashChildren }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.trash({ pageId, trash_children: trashChildren }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -239,7 +239,7 @@ export const pagesRestoreHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.pages.restore({ pageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.pages.restore({ pageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

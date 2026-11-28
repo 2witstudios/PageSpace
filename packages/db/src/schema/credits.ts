@@ -2,54 +2,27 @@ import { pgTable, text, integer, timestamp, index, uniqueIndex, check } from 'dr
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
+import { wallets } from './wallets';
 
 /**
- * creditBalances — denormalized, one row per user. The fast pre-request gate and
- * the dashboard read this. Two buckets plus a debt counter:
- *   - monthly: tier allowance. Paid tiers: re-granted each renewal and ACCUMULATES
- *              across periods (rollover). Free: a ONE-TIME starter grant, never refilled
- *              (TIER_ALLOWANCE_REFILLS in credit-pricing)
- *   - topup:   purchased packs, NEVER expire
- *   - debt:    overage owed (a NON-NEGATIVE magnitude). Accrues when a call's real
- *              cost can't be covered; paid down by a purchase; FORGIVEN (zeroed) at
- *              the next renewal so it never reduces next period's allowance.
- * Net spendable = monthlyRemainingCents + topupRemainingCents − debtCents (may be < 0).
+ * What a hold or ledger row's money is FOR (point-guard ruling on ow-c7b; fe9db1nm):
+ *   - 'ai'            an AI call.
+ *   - 'compute'       compute a PERSON ran (WAL-9): sandbox runtime, the terminal, browsers, their
+ *                     session's machine storage. On an org pool it is that member's draw on the
+ *                     pool, so it counts toward their per-consumer cap with their AI (WAL-2).
+ *   - 'drive_compute' an ENVIRONMENT's or published APP's accrual: its storage, wakes and awake
+ *                     time. On an org drive it is recorded under the env's cost owner — the member
+ *                     who created it, else the drive lead ([D-OW-28]) — and counts toward their cap.
+ * The seat reads (seat-allowance `loadSeatCapFacts`, credit-consume `recordSeatOvershoot`) test
+ * this column against SEAT_COUNTED_SPEND_KINDS. Every row written before the column existed was
+ * AI spend, hence the default; compute rows written before 'drive_compute' existed carry 'compute'.
+ *
+ * No CHECK constraint, deliberately: validating one scans the whole (hot, growing) ledger under
+ * an ACCESS EXCLUSIVE lock at deploy, whereas a NOT NULL column with a constant default is a
+ * metadata-only change on PostgreSQL 11+. The type is enforced by `SpendKind` at every writer.
  */
-export const creditBalances = pgTable('credit_balances', {
-  userId: text('userId').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
-  monthlyRemainingCents: integer('monthlyRemainingCents').default(0).notNull(),
-  monthlyAllowanceCents: integer('monthlyAllowanceCents').default(0).notNull(),
-  topupRemainingCents: integer('topupRemainingCents').default(0).notNull(),
-  // Outstanding overage owed, as a non-negative magnitude (the net goes negative via
-  // subtraction, not by storing a negative bucket). Raised at settle when a call's
-  // cost exceeds the buckets, lowered by a purchase (debt paid first), reset to 0 at
-  // each renewal (overage is forgiven, never carried into the next period).
-  debtCents: integer('debtCents').default(0).notNull(),
-  // Sub-cent carry: a single AI call can cost a fraction of a cent (high-volume
-  // cheap models). We charge in millicents (1/1000 cent) and bank the leftover
-  // fraction here so those calls don't silently round to $0. Always in [0, 1000):
-  // each settle debits floor((pending + charge)/1000) whole cents and keeps the
-  // remainder. Never a float — integer millicents only.
-  pendingMillicents: integer('pendingMillicents').default(0).notNull(),
-  monthlyPeriodStart: timestamp('monthlyPeriodStart', { mode: 'date', withTimezone: true }),
-  monthlyPeriodEnd: timestamp('monthlyPeriodEnd', { mode: 'date', withTimezone: true }),
-  updatedAt: timestamp('updatedAt', { mode: 'date', withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
-}, (table) => ({
-  // The prepaid source of truth: enforce the invariants in the DB so a single bad
-  // write can't manufacture negative balances or an inverted billing window that
-  // the gate would treat as real spendable state.
-  monthlyNonNeg: check('credit_balances_monthly_remaining_nonneg', sql`${table.monthlyRemainingCents} >= 0`),
-  allowanceNonNeg: check('credit_balances_monthly_allowance_nonneg', sql`${table.monthlyAllowanceCents} >= 0`),
-  topupNonNeg: check('credit_balances_topup_remaining_nonneg', sql`${table.topupRemainingCents} >= 0`),
-  debtNonNeg: check('credit_balances_debt_cents_nonneg', sql`${table.debtCents} >= 0`),
-  // The carry is a sub-cent fraction by construction; bound it so a bad write
-  // can't park whole cents of unbilled value here, out of sight of the balance.
-  pendingRange: check('credit_balances_pending_millicents_range', sql`${table.pendingMillicents} >= 0 AND ${table.pendingMillicents} < 1000`),
-  periodOrder: check(
-    'credit_balances_period_order',
-    sql`${table.monthlyPeriodStart} IS NULL OR ${table.monthlyPeriodEnd} IS NULL OR ${table.monthlyPeriodStart} <= ${table.monthlyPeriodEnd}`,
-  ),
-}));
+export const SPEND_KINDS = ['ai', 'compute', 'drive_compute'] as const;
+export type SpendKind = (typeof SPEND_KINDS)[number];
 
 /**
  * creditLedger — append-only audit/provenance. One row per grant, purchase, or
@@ -63,8 +36,18 @@ export const creditBalances = pgTable('credit_balances', {
  */
 export const creditLedger = pgTable('credit_ledger', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment'
+  /**
+   * The person the row is recorded under (the consumer of a call, the funder of a transfer).
+   * [D-OW-58] ledger rows are the WALLET's financial records: when the person deletes their
+   * account, rows on wallets they do not own (an org pool, a drive wallet) are kept with this
+   * reference anonymised (SET NULL — readers show a "former member"); rows on their own
+   * personal root go with that wallet (walletId cascades).
+   */
+  userId: text('userId').references(() => users.id, { onDelete: 'set null' }),
+  // WAL-5: the wallet this row moved money in or out of. For every row written before
+  // wallets existed it is the user's personal root wallet (backfilled by 0303/0304).
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  entryType: text('entryType').notNull(), // 'monthly_grant' | 'topup_purchase' | 'usage' | 'adjustment' | 'missed_grant' (a paid invoice whose tier had no ratio: amountCents 0, for the reconcile cron to re-grant) | 'donation' / 'wallet_topup' (a transfer pair: out of the payer, into the drive wallet) | 'allocation_draw' (a transfer pair: what a child wallet's spend drew from its parent's allocation, out of the parent and into the child) | 'debt_forgiven' (a renewal's clamp forgave debt) | 'allocation_reset' (a drive wallet's debt netted from its next allocation) | 'leg_refund' (an owner leg refunded out of a drive wallet) | 'opening_balance' (the WAL-5 cutover's one row per wallet, migration 0350) | 'seat_overshoot_month' / 'seat_overshoot_day' (attribution only, no money)
   bucket: text('bucket').notNull(), // 'monthly' | 'topup'
   amountCents: integer('amountCents').notNull(), // signed full intended charge: grants/purchases +, usage/debt -
   appliedCents: integer('appliedCents'), // signed amount actually decremented from the balance (usage rows). |applied| <= |amount|; the gap is debt recorded as an adjustment row.
@@ -73,6 +56,7 @@ export const creditLedger = pgTable('credit_ledger', {
   realCostCents: integer('realCostCents'), // round(cost*100) pre-markup, for audit
   markupBps: integer('markupBps').default(15000).notNull(),
   stripeRef: text('stripeRef'), // invoice id / checkout session id for grants & purchases
+  paidCents: integer('paidCents'), // what the Stripe invoice actually paid (monthly_grant rows) — the grant is derived from it (MON-2), so the ratio is auditable per row
   consumeStatus: text('consumeStatus').default('pending').notNull(), // 'pending' | 'applied' | 'skipped'
   consumeError: text('consumeError'),
   // Idempotency arbiter for the async cost-reconcile cron's correction rows. The usage
@@ -80,9 +64,28 @@ export const creditLedger = pgTable('credit_ledger', {
   // 'adjustment' for the same aiUsageLogId; this key (the sorted-joined OpenRouter
   // generation ids) does. Set only on reconcile adjustment rows; NULL everywhere else.
   reconcileGenerationKey: text('reconcileGenerationKey'),
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
+  /**
+   * WAL-6b, on a usage CLAIM row: the chosen source's wallet a drive rule moved this call off (the
+   * hold's fallbackFromWalletId, or the turn's for a hold-less follow-on), recorded with the claim so
+   * a settle the backfill cron retries lands overshoot exactly where the in-line settle would have —
+   * never on the consumer. Null on every other row and on a call that did not fall back.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
+  /**
+   * SPEND-10, on usage and reconcile rows: the automation the call ran for when no person was present
+   * (a cron, a trigger, a scheduled run, Zoom enrichment; [D-OW-34]: recorded as its creator in userId),
+   * a typed reference encoded and parsed ONLY by lib billing/automation-attribution (`workflow:<id>` |
+   * `zoom:<connectionId>`). The lead's spend view groups by it, so automation spend is listed as the
+   * automation rather than merged into its creator. A soft link (no FK): deleting a workflow keeps its
+   * spend history. Null for a person's own call, a channel mention or a manual Run (SPEND-6).
+   */
+  automationRef: text('automationRef'),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   userIdx: index('credit_ledger_user_idx').on(table.userId, table.createdAt),
+  walletIdx: index('credit_ledger_wallet_idx').on(table.walletId, table.createdAt),
   usageLogUnique: uniqueIndex('credit_ledger_usage_log_unique')
     .on(table.aiUsageLogId)
     .where(sql`${table.aiUsageLogId} IS NOT NULL AND ${table.entryType} = 'usage'`),
@@ -112,8 +115,19 @@ export const creditLedger = pgTable('credit_ledger', {
 export const creditHolds = pgTable('credit_holds', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   userId: text('userId').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // WAL-5: holds are per wallet — the wallet this reservation is against.
+  walletId: text('walletId').notNull().references(() => wallets.id, { onDelete: 'cascade' }),
+  /**
+   * WAL-6b: set only when a drive's fallback rule moved the call off the source it chose — the
+   * chosen source's wallet. The settle lands any overshoot where THAT choice would have put it,
+   * so a fallback onto the consumer's own credits never leaves them the overshoot. Null when the
+   * call spends what it named; set null if that wallet is deleted before the settle.
+   */
+  fallbackFromWalletId: text('fallbackFromWalletId').references(() => wallets.id, { onDelete: 'set null' }),
   estCents: integer('estCents').notNull(),
   aiUsageLogId: text('aiUsageLogId'),
+  /** AI spend, person-run compute or an env/app accrual — see {@link SPEND_KINDS}. Every kind counts toward the recorded person's seat. */
+  spendKind: text('spendKind').$type<SpendKind>().default('ai').notNull(),
   createdAt: timestamp('createdAt', { mode: 'date', withTimezone: true }).defaultNow().notNull(),
   expiresAt: timestamp('expiresAt', { mode: 'date', withTimezone: true }).notNull(),
 }, (table) => ({
@@ -121,21 +135,32 @@ export const creditHolds = pgTable('credit_holds', {
   // hot lookup. The expiry index keeps the reconcile sweep (DELETE WHERE expiresAt
   // < now) cheap as the table grows.
   userIdx: index('credit_holds_user_idx').on(table.userId),
+  walletIdx: index('credit_holds_wallet_idx').on(table.walletId),
   expiresIdx: index('credit_holds_expires_idx').on(table.expiresAt),
   estNonNeg: check('credit_holds_est_cents_nonneg', sql`${table.estCents} >= 0`),
 }));
 
-export const creditBalancesRelations = relations(creditBalances, ({ one }) => ({
-  user: one(users, {
-    fields: [creditBalances.userId],
-    references: [users.id],
-  }),
-}));
+/**
+ * billing_epochs — instants a billing rule went live on THIS deployment, stamped once by the first
+ * code path that needs one and never moved (INSERT … ON CONFLICT DO NOTHING).
+ *
+ * 'org_compute': when org drives' compute (WAL-9) began charging the org pool. Before it, every
+ * compute meter refused an org payer and left the row's watermark behind; accrual from before the
+ * epoch is forgiven, never charged (`billing/org-compute-epoch-core.ts`).
+ */
+export const billingEpochs = pgTable('billing_epochs', {
+  key: text('key').primaryKey(),
+  startedAt: timestamp('startedAt', { mode: 'date', withTimezone: true }).notNull(),
+});
 
 export const creditLedgerRelations = relations(creditLedger, ({ one }) => ({
   user: one(users, {
     fields: [creditLedger.userId],
     references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [creditLedger.walletId],
+    references: [wallets.id],
   }),
 }));
 
@@ -143,5 +168,9 @@ export const creditHoldsRelations = relations(creditHolds, ({ one }) => ({
   user: one(users, {
     fields: [creditHolds.userId],
     references: [users.id],
+  }),
+  wallet: one(wallets, {
+    fields: [creditHolds.walletId],
+    references: [wallets.id],
   }),
 }));

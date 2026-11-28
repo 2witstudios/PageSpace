@@ -1,0 +1,53 @@
+import { useRef } from 'react';
+import useSWR from 'swr';
+import { fetchWithAuth } from '@/retained/lib/auth/auth-fetch';
+import { useEditingStore } from '@/retained/stores/useEditingStore';
+
+export interface Device {
+  id: string;
+  platform: 'web' | 'desktop' | 'ios' | 'android';
+  deviceName: string | null;
+  deviceId: string;
+  lastUsedAt: string;
+  trustScore: number;
+  suspiciousActivityCount: number;
+  ipAddress: string | null;
+  lastIpAddress: string | null;
+  location: string | null;
+  userAgent: string | null;
+  createdAt: string;
+  expiresAt: string;
+  isCurrent: boolean;
+}
+
+const fetcher = async (url: string): Promise<Device[]> => {
+  const response = await fetchWithAuth(url);
+  if (!response.ok) {
+    throw new Error('Failed to fetch devices');
+  }
+  return response.json();
+};
+
+export function useDevices() {
+  const hasLoadedRef = useRef(false);
+  const isAnyEditing = useEditingStore((state) => state.isAnyEditing());
+
+  const { data, error, mutate } = useSWR<Device[]>(
+    '/api/account/devices',
+    fetcher,
+    {
+      isPaused: () => hasLoadedRef.current && isAnyEditing,
+      onSuccess: () => { hasLoadedRef.current = true; },
+      refreshInterval: 60000,
+      revalidateOnFocus: true,
+      revalidateOnReconnect: true,
+    }
+  );
+
+  return {
+    devices: data,
+    isLoading: !error && !data,
+    isError: error,
+    refetch: mutate,
+  };
+}

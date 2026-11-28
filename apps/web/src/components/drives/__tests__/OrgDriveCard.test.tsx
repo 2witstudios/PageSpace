@@ -1,0 +1,161 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
+import { SWRConfig } from 'swr';
+import type { Drive } from '@pagespace/lib/types';
+
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const api = vi.hoisted(() => ({ patch: vi.fn(async () => ({})), put: vi.fn(async () => ({})), del: vi.fn(async () => ({})), fetchWithAuth: vi.fn() }));
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => ({ ...(await importOriginal<object>()), ...api }));
+const orgs = vi.hoisted(() => ({ role: 'MEMBER' as 'OWNER' | 'ADMIN' | 'MEMBER', lapsed: false }));
+vi.mock('@/hooks/useMyOrganizations', () => ({
+  useMyOrganizations: () => {
+    const list = [{ id: 'o-northwind', name: 'Northwind Labs', slug: 'nw', avatarUrl: null, role: orgs.role, lapsed: orgs.lapsed }];
+    return { organizations: list, orgById: (id: string | null) => list.find((o) => o.id === id) ?? null };
+  },
+}));
+const walletState = vi.hoisted(() => ({ wallet: null as unknown }));
+vi.mock('@/hooks/useDriveWallet', () => ({ useDriveWallet: () => ({ wallet: walletState.wallet }) }));
+
+import { OrgDriveCard } from '../OrgDriveCard';
+
+const drive = (o: Partial<Drive>): Drive => ({
+  id: 'd-product', name: 'Product', slug: 'product', ownerId: 'u-priya', isTrashed: false, trashedAt: null,
+  createdAt: '', updatedAt: '', isOwned: false, orgId: 'o-northwind', orgVisibility: 'OPEN', ...o,
+});
+const renderCard = (d: Drive) =>
+  render(<SWRConfig value={{ provider: () => new Map() }}><OrgDriveCard drive={d} leadName="Priya Nair" onChanged={vi.fn()} /></SWRConfig>);
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  orgs.role = 'MEMBER';
+  orgs.lapsed = false;
+  walletState.wallet = null;
+  api.fetchWithAuth.mockResolvedValue({ ok: true, json: async () => ({ members: [{ userId: 'u-priya', name: 'Priya Nair', email: 'p@n.co' }, { userId: 'u-lena', name: 'Lena Schulz', email: 'l@n.co' }] }) });
+});
+
+describe('OrgDriveCard on Drive Settings › General', () => {
+  it('UI-4 (partial) the lead sees who owns and pays, the wallet summary with its allocation, and can change visibility', async () => {
+    walletState.wallet = { viewer: 'lead', allocationCredits: '1,200', spentCredits: '1,008', fallbackRule: 'seat_allowance' };
+    renderCard(drive({ isOwned: true }));
+    expect(screen.getByText('Owned by Northwind Labs')).toBeTruthy();
+    expect(screen.getByText(/1,200 credits a month from the org pool, 1,008 credits spent/)).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /Open/ }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('radio', { name: /Restricted/ }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/api/drives/d-product/org', { orgVisibility: 'RESTRICTED' }));
+    expect(screen.getByRole('link', { name: /Org settings/ }).getAttribute('href')).toBe('/orgs/o-northwind/settings');
+  });
+
+  it('UI-4 (partial) the card shows the drive\'s current visibility, so a change broadcast as drive:updated (drive list refetch) is reflected', () => {
+    const { rerender } = renderCard(drive({ isOwned: true }));
+    rerender(<SWRConfig value={{ provider: () => new Map() }}><OrgDriveCard drive={drive({ isOwned: true, orgVisibility: 'PRIVATE' })} leadName="Priya Nair" onChanged={vi.fn()} /></SWRConfig>);
+    expect(screen.getByRole('radio', { name: /Private/ }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('SEAT-9 (partial) DRV-4 (partial) [D-OW-33] while the org is lapsed the lead may only make the drive less open and cannot change its lead; paid, both are offered', async () => {
+    orgs.lapsed = true;
+    const { unmount } = renderCard(drive({ isOwned: true, orgVisibility: 'RESTRICTED' }));
+    expect(screen.getByRole('radio', { name: /Open/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('radio', { name: /Private/ }).hasAttribute('disabled')).toBe(false);
+    expect(screen.getByTestId('lapsed-loosen-note').textContent).toContain('Making it less open still works');
+    expect(await screen.findByRole('combobox', { name: 'Drive lead' })).toHaveProperty('disabled', true);
+    fireEvent.click(screen.getByRole('radio', { name: /Private/ }));
+    await waitFor(() => expect(api.patch).toHaveBeenCalledWith('/api/drives/d-product/org', { orgVisibility: 'PRIVATE' }));
+    unmount();
+
+    orgs.lapsed = false;
+    renderCard(drive({ isOwned: true, orgVisibility: 'RESTRICTED' }));
+    expect(screen.getByRole('radio', { name: /Open/ }).hasAttribute('disabled')).toBe(false);
+    expect(await screen.findByRole('combobox', { name: 'Drive lead' })).toHaveProperty('disabled', false);
+  });
+
+  it('UI-4 (partial) a plain org member reads the card but cannot change visibility, the lead, or move the drive', () => {
+    renderCard(drive({}));
+    expect(screen.getByRole('radio', { name: /Restricted/ }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('combobox', { name: 'Drive lead' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Move out/ })).toBeNull();
+    expect(screen.getByText('Priya Nair')).toBeTruthy();
+  });
+
+  it('DRV-2 (partial) an org Admin can move the drive out, choosing to keep or remove implicit members (D-OW-10)', async () => {
+    orgs.role = 'ADMIN';
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Keep them as invited' }));
+    await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/drives/d-product/org', { implicitMembers: 'keep' }));
+  });
+
+  it('DRV-2 (partial) "Remove them" moves the drive out removing the implicit members, and closes the dialog (D-OW-10)', async () => {
+    orgs.role = 'ADMIN';
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove them' }));
+    await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/drives/d-product/org', { implicitMembers: 'remove' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  });
+
+  it('DRV-2 (partial) a move that fails keeps the dialog open and says why in it, so the choice can be retried', async () => {
+    orgs.role = 'ADMIN';
+    api.del.mockRejectedValueOnce(new ApiRequestError('raw', 402, { error: 'raw', code: 'org_lapsed' }));
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove them' }));
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toContain('This organization is unpaid'));
+    expect((within(dialog).getByRole('button', { name: 'Remove them' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('D-OW-60 the move-out dialog says the wallet\'s top-ups and donations travel with the drive; a move refused for calls in flight says to retry', async () => {
+    orgs.role = 'ADMIN';
+    api.del.mockRejectedValueOnce(new ApiRequestError('raw', 409, { error: 'raw', code: 'drive_wallet_calls_in_flight' }));
+    renderCard(drive({}));
+    fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByTestId('org-move-out-wallet-note').textContent).toMatch(/top-ups and donations it holds, including credits Northwind Labs added, travel with the drive/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Keep them as invited' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toContain('AI calls in progress. Try moving the drive again'));
+  });
+
+  it('D-OW-60 moving a personal drive in says its wallet\'s top-ups and donations travel with it', () => {
+    renderCard(drive({ orgId: null, isOwned: true }));
+    expect(screen.getByTestId('org-move-in-card').textContent).toMatch(/top-ups and donations it holds travel with the drive/);
+  });
+
+  it('UI-4 the Organization card shows owner, billing summary, visibility and drive lead; changes the lead; moves a drive in, and out keeping or removing implicit members', async () => {
+    // Owner, billing summary, visibility, lead: an org Admin on an org drive.
+    orgs.role = 'ADMIN';
+    walletState.wallet = { viewer: 'org_admin', allocationCredits: '1,200', spentCredits: '1,008', fallbackRule: 'seat_allowance' };
+    const card = renderCard(drive({}));
+    expect(screen.getByText('Owned by Northwind Labs')).toBeTruthy();
+    expect(screen.getByText(/1,200 credits a month from the org pool, 1,008 credits spent/)).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /Open/ }).getAttribute('aria-checked')).toBe('true');
+
+    // Change lead.
+    await userEvent.click(await screen.findByRole('combobox', { name: 'Drive lead' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Lena Schulz' }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/drives/d-product/org/lead', { userId: 'u-lena' }));
+
+    // Move out: keep, then remove.
+    for (const [choice, implicitMembers] of [['Keep them as invited', 'keep'], ['Remove them', 'remove']] as const) {
+      fireEvent.click(screen.getByRole('button', { name: 'Move out of Northwind Labs' }));
+      fireEvent.click(await screen.findByRole('button', { name: choice }));
+      await waitFor(() => expect(api.del).toHaveBeenCalledWith('/api/drives/d-product/org', { implicitMembers }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    }
+    card.unmount();
+
+    // Move in: a personal drive its owner holds.
+    renderCard(drive({ orgId: null, isOwned: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move into organization' }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/drives/d-product/org', { orgId: 'o-northwind' }));
+  });
+
+  it('DRV-2 (partial) the owner of a personal drive can move it into one of their orgs; Home never offers it', async () => {
+    renderCard(drive({ orgId: null, isOwned: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Move into organization' }));
+    await waitFor(() => expect(api.put).toHaveBeenCalledWith('/api/drives/d-product/org', { orgId: 'o-northwind' }));
+    const { container } = renderCard(drive({ id: 'd-home', orgId: null, isOwned: true, kind: 'HOME' }));
+    expect(container.innerHTML).toBe('');
+  });
+});

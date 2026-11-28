@@ -22,6 +22,7 @@ import {
   type SessionToolsDeps,
 } from '../session-tools';
 import type { ToolExecutionContext } from '../../core/types';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const USER_ID = 'user-1';
 const CALLER_CONVERSATION = 'conv-caller';
@@ -89,7 +90,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
 function contextOptions(overrides: Partial<ToolExecutionContext> = {}): { experimental_context: ToolExecutionContext } {
   return {
     experimental_context: {
-      userId: USER_ID,
+      userId: USER_ID, accessActor: credentialActor(USER_ID, null),
       conversationId: CALLER_CONVERSATION,
       chatSource: { type: 'page', agentPageId: CALLER_AGENT, agentTitle: 'Agent' },
       ...overrides,
@@ -445,7 +446,7 @@ describe('send_shell description: "Input is typed literally"', () => {
     const deps = makeDeps();
     const tools = createSessionTools(deps);
     await run(tools.send_shell, { shellId: SHELL.shellId, keystrokes: 'echo hi\n' }, contextOptions());
-    expect(deps.shellIo.send).toHaveBeenCalledWith({ shellId: SHELL.shellId, keystrokes: 'echo hi\n', userId: USER_ID });
+    expect(deps.shellIo.send).toHaveBeenCalledWith({ shellId: SHELL.shellId, keystrokes: 'echo hi\n', actor: expect.objectContaining({ userId: USER_ID }) });
   });
 });
 
@@ -476,7 +477,7 @@ describe('kill_shell description: "The session\'s sandbox (and every other shell
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
     expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true, paneNodeId: 'pane-shell', paneCount: 2 });
-    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actingUserId: USER_ID });
+    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actor: expect.objectContaining({ userId: USER_ID }) });
     expect(deps.killWorker).not.toHaveBeenCalled();
     expect(deps.ensureOwnSessionSandbox).not.toHaveBeenCalled();
   });
@@ -536,7 +537,7 @@ describe('list_panes description: "Returns the nodeIds that resize_pane/move_pan
     expect(result).toEqual(expect.objectContaining({ success: true, workspaceId: WORKSPACE_ID, nodes: LAYOUT.nodes }));
     // The read is per-viewer (security review HIGH 1): the model sees exactly
     // what this user's own layout GET would return, redactions included.
-    expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID, USER_ID);
+    expect(deps.readPaneGrid).toHaveBeenCalledWith(WORKSPACE_ID, expect.objectContaining({ userId: USER_ID }));
     // The addressability claim, checked rather than assumed: every id the
     // listing hands out is one the rearrange tools accept, and they take ONE
     // namespace now rather than two.
@@ -621,7 +622,7 @@ describe('the layout family description: "Only meaningful inside an agent sessio
     // The acting user reaches the write, where the binding gate spends THEIR
     // authority — the prompt-injection defence, and the reason this is asserted
     // rather than left to the runtime.
-    expect(deps.applyLayoutCommand).toHaveBeenCalledWith(expect.objectContaining({ actingUserId: USER_ID }));
+    expect(deps.applyLayoutCommand).toHaveBeenCalledWith(expect.objectContaining({ actor: expect.objectContaining({ userId: USER_ID }) }));
   });
 });
 

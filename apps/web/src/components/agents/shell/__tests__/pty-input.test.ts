@@ -1,5 +1,5 @@
 import { describe, test } from 'vitest';
-import { assert } from '@/stores/__tests__/riteway';
+import { assert } from '@/test/riteway';
 import { toPtyInput, PTY_MAX_INPUT_BYTES } from '../pty-input';
 
 const bytesOf = (value: string) => new TextEncoder().encode(value).length;

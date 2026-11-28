@@ -47,6 +47,7 @@ import {
 } from './realtime-call-session';
 import { realtimeCallRegistry, type RealtimeCallRegistry } from './realtime-call-registry';
 import { createVoiceBridgeClient, type VoiceBridgeClient } from './voice-bridge-client';
+import { conversationSpend } from '@pagespace/lib/billing/spend-target';
 import { startCallMeter, type CallMeterOptions, type CallMeterStart } from './call-metering';
 import {
   startVoiceCallRuntime,
@@ -113,6 +114,7 @@ export const handleRealtimeAttachRequest = async (
     callId,
     secret,
     userId,
+    authentication,
     conversationId,
     tools,
     model,
@@ -122,6 +124,7 @@ export const handleRealtimeAttachRequest = async (
     seed,
     instructions,
     assistant,
+    spendDriveId,
   } = parsed.data;
 
   // Claimed synchronously, before the first `await`. Checking the live counts
@@ -169,6 +172,9 @@ export const handleRealtimeAttachRequest = async (
       ...(conversationId === undefined ? {} : { conversationId }),
       tier: subscriptionTier as SubscriptionTier,
       model,
+      // The drive the web tier resolved from the bound conversation, or personal credits
+      // for a call with none (SPEND-1, SPEND-8).
+      spend: conversationSpend(spendDriveId, conversationId),
       // The meter cannot end a call by itself — it owns the ledger, not the
       // socket — so a limit it hits is reported here and torn down through the
       // runtime, which is the thing that can also hang up the browser.
@@ -214,6 +220,7 @@ export const handleRealtimeAttachRequest = async (
       meter: startedMeter,
       secret,
       seed,
+      authentication,
       ...(timezone === undefined ? {} : { timezone }),
       ...(locationContext === undefined ? {} : { locationContext }),
       ...(assistant === undefined ? {} : { assistant }),
@@ -231,7 +238,7 @@ export const handleRealtimeAttachRequest = async (
       agentPageId: assistant?.agentPageId,
       live: deps.registry.size,
     });
-    return { status: 200, body: { success: true, callId } };
+    return { status: 200, body: { success: true, callId, spendFallback: meter.spendFallback } };
   } catch (error) {
     const code = error instanceof RealtimeAttachError ? error.code : 'attach_failed';
     loggers.realtime.error(

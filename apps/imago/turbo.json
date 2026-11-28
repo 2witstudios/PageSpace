@@ -1,0 +1,9 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "env": ["IMAGO_API_PROXY_ORIGIN"]
+    }
+  }
+}

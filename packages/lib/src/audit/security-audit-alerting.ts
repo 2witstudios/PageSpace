@@ -36,7 +36,8 @@ export interface ChainVerificationAlert {
     | 'append'
     | 'anchor_publish'
     | 'anchor_verify'
-    | 'break_glass';
+    | 'break_glass'
+    | 'org_audit_dead_letter';
 }
 
 /**
@@ -539,6 +540,57 @@ export async function notifyAdminDbBreakGlass(
     loggers.security.error('[SecurityAuditAlerting] Break-glass alert handler failed:', {
       error,
     });
+  }
+}
+
+/** An org audit event the chain refused on every attempt (AUD-1): kept in the outbox, no longer retried. */
+export interface OrgAuditDeadLetterDetails {
+  outboxId: string;
+  eventType: string;
+  orgId: string;
+  attempts: number;
+  lastError: string;
+}
+
+/**
+ * Fire an org-audit dead-letter alert through the globally-registered handler. Same contract as the other notify
+ * helpers: no handler is a no-op, and a failing handler is logged, never thrown into the drainer.
+ */
+export async function notifyOrgAuditDeadLetter(details: OrgAuditDeadLetterDetails): Promise<void> {
+  if (!alertHandler) return;
+  const now = new Date();
+  const alert: ChainVerificationAlert = {
+    result: {
+      isValid: false,
+      totalEntries: 0,
+      entriesVerified: 0,
+      validEntries: 0,
+      invalidEntries: 0,
+      breakPoint: {
+        entryId: details.outboxId,
+        timestamp: now,
+        position: 0,
+        storedHash: '',
+        computedHash: '',
+        previousHashUsed: '',
+        description:
+          `Org audit event ${details.eventType} for org ${details.orgId} was refused by the audit chain ${details.attempts} times ` +
+          `and is dead-lettered in org_audit_outbox (id ${details.outboxId}). Last error: ${details.lastError}. ` +
+          'Fix the chain, then clear deadLetteredAt on the row to deliver it.',
+      },
+      firstEntryId: null,
+      lastEntryId: null,
+      verificationStartedAt: now,
+      verificationCompletedAt: now,
+      durationMs: 0,
+    },
+    triggeredAt: now,
+    source: 'org_audit_dead_letter',
+  };
+  try {
+    await alertHandler(alert);
+  } catch (error) {
+    loggers.security.error('[SecurityAuditAlerting] Org audit dead-letter alert handler failed:', { error });
   }
 }
 

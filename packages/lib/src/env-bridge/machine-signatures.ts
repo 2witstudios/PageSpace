@@ -192,5 +192,8 @@ function safeVerify(verify: Ed25519Verify, message: Uint8Array, signature: Uint8
   return valid ? { ok: true } : { ok: false, reason: 'bad_signature' };
 }
 
-/** Compare two digests without leaking how much matched. Re-exported for adapters that compare hashes they were handed. */
+/**
+ * Compare two digests without leaking how much matched. Re-exported for adapters that compare hashes they were handed.
+ * @public Adapter API for the local-environments epic (#2590).
+ */
 export const digestsEqual = constantTimeEqual;

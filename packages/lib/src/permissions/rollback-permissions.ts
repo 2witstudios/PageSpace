@@ -8,6 +8,7 @@
 import { canUserEditPage, isDriveOwnerOrAdmin } from './permissions';
 import type { ActivityResourceType } from '../monitoring/activity-logger';
 import { browserLoggers } from '../logging/logger-browser';
+import type { AccessActor } from './access-actor';
 
 /**
  * Context in which the rollback is being requested.
@@ -51,10 +52,11 @@ export interface RollbackPermissionResult {
  * - user_dashboard: User can rollback all their own changes
  */
 export async function canUserRollback(
-  userId: string,
+  actor: AccessActor,
   activity: ActivityForPermissionCheck,
   context: RollbackContext
 ): Promise<RollbackPermissionResult> {
+  const { userId } = actor;
   browserLoggers.permissions.debug('[Rollback:Permission] Checking rollback permission', {
     userId,
     activityId: activity.id,
@@ -109,7 +111,7 @@ export async function canUserRollback(
           reason: 'Activity is not associated with a drive',
         };
       }
-      const isDriveAdmin = await isDriveOwnerOrAdmin(userId, activity.driveId);
+      const isDriveAdmin = await isDriveOwnerOrAdmin(actor, activity.driveId);
       browserLoggers.permissions.debug('[Rollback:Permission] Drive admin check result', {
         isDriveAdmin,
       });
@@ -147,7 +149,7 @@ export async function canUserRollback(
           reason: 'Activity is not associated with a page',
         };
       }
-      const canEdit = await canUserEditPage(userId, activity.pageId);
+      const canEdit = await canUserEditPage(actor, activity.pageId);
       browserLoggers.permissions.debug('[Rollback:Permission] Page edit check result', {
         canEdit,
       });

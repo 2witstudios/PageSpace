@@ -17,6 +17,8 @@ const { mockActivityLogsFindMany, mockCountWhere, mockInArray } = vi.hoisted(() 
   mockInArray: vi.fn((...args: unknown[]) => ({ __op: 'inArray', args })),
 }));
 
+// The sign-in row filter has its own integration test (activity-sign-in-filter); here it leaves nothing out.
+vi.mock('@/lib/activities/activity-sign-in-filter', () => ({ activitySignInCondition: vi.fn(async () => undefined) }));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {

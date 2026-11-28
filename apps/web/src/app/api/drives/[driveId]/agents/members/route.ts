@@ -5,6 +5,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { driveAgentMembers, driveRoles } from '@pagespace/db/schema/members';
 import { pages } from '@pagespace/db/schema/core';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 /**
  * GET /api/drives/{driveId}/agents/members
@@ -18,16 +19,15 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, { allow: ['session'] as const, requireCSRF: false });
     if (isAuthError(auth)) return auth.error;
-    const { userId } = auth;
 
     const { driveId } = await context.params;
 
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'You must be a drive member to view agent members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You must be a drive member to view agent members' }, { status: 403 }));
     }
 
     const rows = await db

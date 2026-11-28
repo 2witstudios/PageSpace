@@ -11,6 +11,10 @@ import {
   ListObjectsV2Command,
 } from '@aws-sdk/client-s3';
 import { getS3Client, getS3Bucket } from '@/lib/presigned-url';
+import { deleteS3Keys, headS3Object, isS3NotFound, listS3Page, listS3Prefix, readS3ObjectBounded, type S3ObjectInfo } from '@/lib/storage/s3-objects';
+import { isHashBlocked } from '@pagespace/lib/content-safety/blocklist';
+import { assertPrefixWritable } from '@pagespace/lib/organizations/published-visibility';
+import { PARKED_PREFIX, PUBLISHED_PREFIX, parkedKeyOf, type PublishedObjectStore } from '@pagespace/lib/organizations/published-visibility-core';
 
 const CONTENT_HASH_RE = /^[0-9a-f]{64}$/i;
 const THUMBNAIL_SOURCE_KEY_RE = /^cache\/[0-9a-f]+\/thumbnail\.webp$/i;
@@ -99,6 +103,12 @@ function assertAssetKey(assetKey: string): string {
   return assetKey;
 }
 
+/** The content hash a private source key (`files/<hash>/original`, `cache/<hash>/thumbnail.webp`) belongs to. */
+function hashOfPrivateSourceKey(sourceKey: string): string | null {
+  const match = sourceKey.match(/^(?:files|cache)\/([0-9a-f]{64})\//i);
+  return match ? match[1].toLowerCase() : null;
+}
+
 function assertPrivateSourceKey(sourceKey: string): string {
   if (!FILE_SOURCE_KEY_RE.test(sourceKey) && !THUMBNAIL_SOURCE_KEY_RE.test(sourceKey)) {
     throw new Error('Invalid private source key');
@@ -155,6 +165,8 @@ export async function putPublishedArtifact(params: {
 }): Promise<{ key: string }> {
   const key = buildPublishedKey(params.subdomain, params.path);
 
+  // POL-4: a site the org's policy hides is never written to: a republish must not undo the pause.
+  await assertPrefixWritable(params.subdomain);
   await getPublishClient().send(
     new PutObjectCommand({
       Bucket: getPublishBucket(),
@@ -206,6 +218,7 @@ export async function putPublishedSiteFile(params: {
 }): Promise<{ key: string }> {
   const key = buildSiteFileKey(params.prefix, params.file);
 
+  await assertPrefixWritable(params.prefix);
   await getPublishClient().send(
     new PutObjectCommand({
       Bucket: getPublishBucket(),
@@ -239,12 +252,7 @@ export async function publishedArtifactExists(key: string): Promise<boolean> {
     );
     return true;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (is404) return false;
+    if (isS3NotFound(err)) return false;
     throw err;
   }
 }
@@ -253,12 +261,21 @@ export async function publishedArtifactExists(key: string): Promise<boolean> {
  * Delete a previously-published artifact by its storage key.
  */
 export async function deletePublishedArtifact(key: string): Promise<void> {
-  await getPublishClient().send(
-    new DeleteObjectCommand({
-      Bucket: getPublishBucket(),
-      Key: key,
-    }),
-  );
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  // POL-4: if the site is paused the object lives under suspended/. Unpublishing must delete THAT copy too, or
+  // restoring the site would bring a page back that its author had taken down.
+  const parked = parkedKeyOf(key);
+  if (parked) await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: parked }));
+}
+
+/** The prefix (drive subdomain or custom-domain host) a `published/<prefix>/...` key belongs to. */
+function prefixOfPublishedKey(key: string): string | null {
+  if (!key.startsWith(PUBLISHED_PREFIX)) return null;
+  const rest = key.slice(PUBLISHED_PREFIX.length);
+  const slash = rest.indexOf('/');
+  return slash > 0 ? rest.slice(0, slash) : null;
 }
 
 /**
@@ -272,6 +289,8 @@ export async function deletePublishedArtifact(key: string): Promise<void> {
  * correctly regardless of what the source object's stored metadata says.
  */
 export async function copyPublishedArtifact(fromKey: string, toKey: string): Promise<void> {
+  const toPrefix = prefixOfPublishedKey(toKey);
+  if (toPrefix) await assertPrefixWritable(toPrefix);
   const bucket = getPublishBucket();
   await getPublishClient().send(
     new CopyObjectCommand({
@@ -292,6 +311,8 @@ export async function copyPublishedArtifact(fromKey: string, toKey: string): Pro
  * `application/xml`, and 404.html must be `text/html`.
  */
 export async function copyPublishedSiteFileArtifact(fromKey: string, toKey: string): Promise<void> {
+  const toPrefix = prefixOfPublishedKey(toKey);
+  if (toPrefix) await assertPrefixWritable(toPrefix);
   const bucket = getPublishBucket();
   await getPublishClient().send(
     new CopyObjectCommand({
@@ -373,17 +394,21 @@ export async function copyObjectToPublishBucket(params: {
   const { contentType } = params;
   const publishBucket = getPublishBucket();
 
+  // A blocked hash is never promoted to the public bucket. This matters most
+  // while a takedown is waiting to delete (its bytes still exist privately):
+  // without it, republishing a page that embeds the file would put it back on
+  // the web. Checked before the dedup HEAD, which would otherwise return early.
+  const contentHash = hashOfPrivateSourceKey(sourceKey);
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    throw new Error('This file is not available for publishing');
+  }
+
   // Dedup check — existence at the resolved public key means it was already promoted.
   try {
     await getPublishClient().send(new HeadObjectCommand({ Bucket: publishBucket, Key: assetKey }));
     return;
   } catch (err: unknown) {
-    const anyErr = err as { name?: string; $metadata?: { httpStatusCode?: number } };
-    const is404 =
-      anyErr?.name === 'NotFound' ||
-      anyErr?.name === 'NoSuchKey' ||
-      anyErr?.$metadata?.httpStatusCode === 404;
-    if (!is404) throw err;
+    if (!isS3NotFound(err)) throw err;
   }
 
   const getResult = await getS3Client().send(
@@ -402,6 +427,13 @@ export async function copyObjectToPublishBucket(params: {
       ContentType: contentType,
     }),
   );
+
+  // Asked again now the copy exists: a takedown may have blocked the hash between the check above and this
+  // PUT, and its one pass over the public bucket may already be behind us. Take the copy back down here.
+  if (contentHash && (await isHashBlocked(contentHash))) {
+    await getPublishClient().send(new DeleteObjectCommand({ Bucket: publishBucket, Key: assetKey }));
+    throw new Error('This file is not available for publishing');
+  }
 }
 
 /**
@@ -413,6 +445,10 @@ export async function copyObjectToPublishBucket(params: {
  *
  * Private key: `files/{contentHash}/original` (standard Tigris upload layout).
  * Public key:  `assets/{contentHash}` (via buildAssetKey).
+ */
+/**
+ * NOT GATED: this does not run the publish gate (scan, verdicts, cases). Production code promotes assets
+ * through `promoteAsset` in asset-pipeline.ts; only tests call this directly.
  */
 export async function copyAssetToPublishBucket(params: {
   contentHash: string;
@@ -426,6 +462,75 @@ export async function copyAssetToPublishBucket(params: {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Content takedown: the public objects of one content hash
+// ---------------------------------------------------------------------------
+
+/** Key prefix of the derived public objects for a hash (`assets/cache/<hash>/thumbnail.webp`). */
+function assetCachePrefix(contentHash: string): string {
+  return `assets/cache/${assertContentHash(contentHash)}/`;
+}
+
+/**
+ * The full-size public copy of a content hash (`assets/<hash>`), or null when
+ * there is none. Anything other than not-found throws: "couldn't check" must
+ * never read as "nothing public".
+ */
+export function headPublishedAsset(contentHash: string): Promise<S3ObjectInfo | null> {
+  return headS3Object(getPublishClient(), getPublishBucket(), buildAssetKey(contentHash));
+}
+
+/**
+ * The public asset for a content hash, opened but not read: its body as the SDK returns it (a stream in
+ * Node) and its length. Used to stream a private copy of it without holding the file in memory.
+ */
+export async function openPublishedAsset(
+  contentHash: string,
+): Promise<{ body: unknown; contentLength?: number; contentType?: string }> {
+  const result = await getPublishClient().send(
+    new GetObjectCommand({ Bucket: getPublishBucket(), Key: buildAssetKey(contentHash) }),
+  );
+  return { body: result.Body, contentLength: result.ContentLength, contentType: result.ContentType };
+}
+
+/** One page of the public `assets/` prefix, after `startAfter` (the content-safety backfill). */
+export function listPublishedAssetsPage(startAfter: string | null, maxKeys: number): Promise<{ objects: S3ObjectInfo[]; truncated: boolean }> {
+  return listS3Page(getPublishClient(), getPublishBucket(), 'assets/', startAfter, maxKeys);
+}
+
+/** A public object's bytes, bounded like `readS3ObjectBounded` (the content-safety backfill scans what is served). */
+export function readPublishedObjectBounded(key: string, maxBytes: number, timeoutMs: number): Promise<{ bytes: Uint8Array; complete: boolean } | null> {
+  if (!key.startsWith('assets/')) throw new Error('Only public assets are read for scanning');
+  return readS3ObjectBounded(getPublishClient(), getPublishBucket(), key, maxBytes, timeoutMs);
+}
+
+/**
+ * Delete every public object for a content hash: `assets/<hash>` and
+ * everything under `assets/cache/<hash>/` (the public thumbnail copy).
+ *
+ * This is the content-takedown delete. `clearPublishedPrefix` does not cover
+ * these keys: assets are content-addressed and shared by every site that embeds
+ * the file, so they live outside any site's `published/<prefix>/`.
+ *
+ * Idempotent; returns how many objects existed and were deleted.
+ */
+export async function deletePublishedAssetsForHash(contentHash: string): Promise<number> {
+  const client = getPublishClient();
+  const bucket = getPublishBucket();
+  const assetKey = buildAssetKey(contentHash);
+  const [asset, derived] = await Promise.all([
+    headPublishedAsset(contentHash),
+    listS3Prefix(client, bucket, assetCachePrefix(contentHash)),
+  ]);
+
+  await deleteS3Keys(client, bucket, derived.map((object) => object.key));
+  // Deleted unconditionally: a DELETE of a missing key is a no-op, and this
+  // closes the gap between the HEAD above and a publish that was already in flight.
+  await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: assetKey }));
+
+  return derived.length + (asset ? 1 : 0);
+}
+
 /**
  * Delete every object whose key starts with `published/<hostPrefix>/` from the
  * public publish bucket. Used to wipe a custom-domain host's artifacts when the
@@ -437,10 +542,9 @@ export async function copyAssetToPublishBucket(params: {
  *
  * No-op when the prefix contains no objects (idempotent).
  */
-export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
+async function clearKeyPrefix(prefix: string): Promise<void> {
   const bucket = getPublishBucket();
   const client = getPublishClient();
-  const prefix = `published/${hostPrefix}/`;
 
   let continuationToken: string | undefined;
 
@@ -468,4 +572,55 @@ export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
 
     continuationToken = listResult.IsTruncated ? listResult.NextContinuationToken : undefined;
   } while (continuationToken);
+}
+
+/**
+ * Delete every object under `published/<hostPrefix>/` AND under its parked twin `suspended/<hostPrefix>/`: a
+ * removed domain or drive must not leave a paused copy behind to be restored later (POL-4).
+ */
+export async function clearPublishedPrefix(hostPrefix: string): Promise<void> {
+  await clearKeyPrefix(`${PUBLISHED_PREFIX}${hostPrefix}/`);
+  await clearKeyPrefix(`${PARKED_PREFIX}${hostPrefix}/`);
+}
+
+/**
+ * The publish bucket as the visibility reconciler's object store (POL-4): paginated list, immediate sub-prefixes,
+ * server-side COPY that keeps each object's stored content type, and delete. The move itself (copy, then delete,
+ * both copies kept on a mid-way failure) is movePrefix in lib; this is only the S3 surface.
+ */
+export function createPublishedObjectStore(): PublishedObjectStore {
+  return {
+    async listKeys(prefix) {
+      const client = getPublishClient();
+      const bucket = getPublishBucket();
+      const keys: string[] = [];
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+        for (const obj of page.Contents ?? []) if (obj.Key) keys.push(obj.Key);
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return keys;
+    },
+    async listPrefixes(root) {
+      const client = getPublishClient();
+      const bucket = getPublishBucket();
+      const names: string[] = [];
+      let token: string | undefined;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: root, Delimiter: '/', ContinuationToken: token }));
+        for (const p of page.CommonPrefixes ?? []) if (p.Prefix) names.push(p.Prefix.slice(root.length).replace(/\/$/, ''));
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return names;
+    },
+    exists: (key) => publishedArtifactExists(key),
+    async copy(fromKey, toKey) {
+      const bucket = getPublishBucket();
+      await getPublishClient().send(new CopyObjectCommand({ Bucket: bucket, CopySource: `${bucket}/${fromKey}`, Key: toKey, MetadataDirective: 'COPY' }));
+    },
+    async remove(key) {
+      await getPublishClient().send(new DeleteObjectCommand({ Bucket: getPublishBucket(), Key: key }));
+    },
+  };
 }

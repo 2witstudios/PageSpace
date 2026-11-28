@@ -89,15 +89,16 @@ vi.mock('@/lib/auth', () => ({
   authSessionIdOf: vi.fn<typeof import('@/lib/auth').authSessionIdOf>((result) => (result.tokenType === 'session' ? result.sessionId : undefined)),
   canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserViewPage(auth.userId, pageId);
+    return canUserViewPage(credentialActor(auth.userId, null), pageId);
   }),
   canPrincipalEditPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
     const { canUserEditPage } = await import('@pagespace/lib/permissions/permissions');
-    return canUserEditPage(auth.userId, pageId);
+    return canUserEditPage(credentialActor(auth.userId, null), pageId);
   }),
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
   canUserEditPage: vi.fn().mockResolvedValue(true),
 }));
@@ -357,6 +358,12 @@ vi.mock('@/lib/ai/core/tool-filtering', () => ({
   filterToolsForMcpScope: vi.fn().mockReturnValue({}),
   buildPageAITools: vi.fn().mockReturnValue({}),
 }));
+// Not a built-in Imago agent: the route's Imago context load fails the turn
+// closed if it throws, so it must not reach this file's partial db mock.
+vi.mock('@/lib/ai/core/imago-agent-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/core/imago-agent-context')>()),
+  loadImagoAgentContext: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@/lib/ai/core/page-tree-context', () => ({
   getPageTreeContext: vi.fn(),
 }));
@@ -449,6 +456,8 @@ vi.mock('@/lib/ai/core/validate-image-parts', () => ({
 vi.mock('@/lib/ai/core/model-capabilities', () => ({
   getModelCapabilities: vi.fn().mockResolvedValue({}),
   hasVisionCapability: vi.fn().mockReturnValue(true),
+  hasPdfInputCapability: vi.fn().mockReturnValue(false),
+  getToolMediaCapabilities: vi.fn().mockReturnValue({ hasVision: true, hasPdfInput: false, hasToolResultMedia: true }),
   DEFAULT_IMAGE_MODEL: 'google/gemini-3.1-flash-image',
 }));
 
@@ -483,6 +492,7 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 }));
 
 import { POST } from '../route';
+import { ContentBlockedError } from '@pagespace/lib/content-safety/policy';
 import { extractMessageContent } from '@/lib/ai/core/message-utils';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 import type { SessionAuthResult } from '@/lib/auth';
@@ -493,6 +503,7 @@ import { streamText, type UIMessageChunk } from 'ai';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 import { createAIProvider } from '@/lib/ai/core/provider-factory';
 import { pipeUIMessageStreamStrippingStart } from '@/lib/ai/core/stream-pipe-utils';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 /** A signal that reports aborted=true — simulates onAbort having already fired. */
 const abortedSignal = (): AbortSignal => {
@@ -608,6 +619,18 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       channel: makeFakeChannel(),
       finish: mockLifecycleFinish,
       getParts: vi.fn().mockResolvedValue([]),
+    });
+  });
+
+  describe('content blocklist', () => {
+    it('given the user-message save refuses a blocklisted attachment, should return the neutral 422 and never reach the model', async () => {
+      mockSaveMessageToDatabase.mockRejectedValueOnce(new ContentBlockedError('ab'.repeat(32)));
+
+      const response = await POST(makeRequest());
+
+      expect(response.status).toBe(422);
+      expect(await response.json()).toEqual({ error: "This file can't be uploaded" });
+      expect(streamText).not.toHaveBeenCalled();
     });
   });
 
@@ -1126,7 +1149,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(response).toBe(await mockRespondWithHelpAnswer.mock.results[0].value);
       expect(mockCanConsumeAI).not.toHaveBeenCalled();
       expect(mockRespondWithHelpAnswer).toHaveBeenCalledWith(
-        expect.objectContaining({ senderId: 'user-1', driveId: 'drive-1' })
+        expect.objectContaining({ sender: expect.objectContaining({ userId: 'user-1' }), driveId: 'drive-1' })
       );
     });
 
@@ -1624,6 +1647,18 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       const assistantSave = mockSaveMessageToDatabase.mock.calls.find((c: { role?: string }[]) => c[0]?.role === 'assistant');
       expect(assistantSave).toBeUndefined();
     });
+
+    it('WAL-5 (partial) given a gated turn that fails after the gate, settles on the wallet its hold was placed on', async () => {
+      mockCanConsumeAI.mockResolvedValueOnce({ allowed: true, holdId: 'hold-err', walletId: 'wallet-drive' });
+      mockTakeOverConversationStreams.mockRejectedValue(new Error('takeover boom'));
+
+      await POST(makeRequest());
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      expect({ success: calls[0][0].success, holdId: calls[0][0].holdId, walletId: calls[0][0].walletId })
+        .toEqual({ success: false, holdId: 'hold-err', walletId: 'wallet-drive' });
+    });
   });
 
   // A Stop (or the credit ceiling) aborting the step that is still streaming. ai@6 then
@@ -1662,6 +1697,7 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
         mockCanConsumeAI.mockResolvedValueOnce({
           allowed: true,
           holdId: 'hold-1',
+          walletId: 'wallet-drive',
           balanceSnapshot: { netSpendableCents: 1000 },
         });
         vi.mocked(createAIProvider).mockResolvedValueOnce({
@@ -1683,6 +1719,8 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(calls).toHaveLength(1);
       const settled = calls[0][0];
       expect(settled.holdId).toBe('hold-1');
+      // WAL-5: the interrupted turn settles on the wallet its hold was placed on.
+      expect(settled.walletId).toBe('wallet-drive');
       // 50 output tokens were streamed (200 chars); the prompt is estimated, never zero.
       expect(settled.outputTokens).toBe(50);
       expect(settled.inputTokens).toBeGreaterThan(0);
@@ -1692,4 +1730,66 @@ describe('POST /api/ai/chat — lifecycle handoff', () => {
       expect(settled.metadata).toMatchObject({ abortedStep: { outputTokens: 50, capped: false } });
     });
   });
+  describe('turn timing marks', () => {
+    it('persists the preflight marks on the usage row, in the order the steps complete', async () => {
+      await POST(makeRequest());
+      await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });
+      await captured.createUIMessageStreamOptions.onFinish?.({ responseMessage: mockResponseMessage });
+
+      const calls = vi.mocked(AIMonitoring.trackUsage).mock.calls;
+      expect(calls).toHaveLength(1);
+      const timing = (calls[0][0].metadata as { timing?: { marks: Record<string, number> } }).timing;
+      expect(timing).toBeDefined();
+      const names = Object.keys(timing!.marks);
+      const inOrder = [
+        'location_resolved',
+        'mcp_scope_checked',
+        'view_permission_checked',
+        'permissions',
+        'page_row_loaded',
+        'page_loaded',
+        'conversation_authorized',
+        'user_loaded',
+        'credit_gate',
+        'conversation_ensured',
+        'user_message_persisted',
+        'message_saved',
+        'subscription_module_loaded',
+        'provider_ready',
+        'provider_settings_updated',
+        'sandbox_eligibility',
+        'command_catalog_loaded',
+        'integrations_import',
+        'integrations_ready',
+        'tools_ready',
+        'personalization',
+        'home_drive_resolved',
+        'active_plan_loaded',
+        'system_prompt',
+        'ask_user_synced',
+        'history_loaded',
+        'history_converted',
+        'history_compacted',
+        'history_prepared',
+        'display_name_ready',
+        'generation_started',
+      ].filter((name) => names.includes(name));
+      // Steps that ran in this fixture must appear in completion order; conditional steps
+      // (sandbox, command catalog) may be absent, but never out of place.
+      expect(names.filter((name) => inOrder.includes(name))).toEqual(inOrder);
+      for (const required of ['permissions', 'page_loaded', 'credit_gate', 'message_saved', 'provider_ready', 'tools_ready', 'system_prompt', 'history_prepared', 'generation_started']) {
+        expect(names).toContain(required);
+      }
+    });
+  });
+});
+
+// Route contracts stub authorization; policy decisions are covered by principal-permissions integration tests.
+vi.mock('@/lib/auth/principal-permissions', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/principal-permissions')>();
+  const permissions = await import('@pagespace/lib/permissions/permissions');
+  return { ...actual,
+    canPrincipalViewPage: (auth: { userId: string }, resourceId: string) => permissions.canUserViewPage(credentialActor(auth.userId, null), resourceId),
+    canPrincipalEditPage: (auth: { userId: string }, resourceId: string) => permissions.canUserEditPage(credentialActor(auth.userId, null), resourceId),
+  };
 });

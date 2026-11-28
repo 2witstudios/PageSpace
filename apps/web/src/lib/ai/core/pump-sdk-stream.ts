@@ -37,6 +37,8 @@ export const pumpSdkStreamToChannel = async (
   sdkStream: ReadableStream<UIMessageChunk>,
   channel: StreamChannel,
   logger?: PumpLogger,
+  /** Sees every frame after it is appended (TTFT instrumentation). A throw is swallowed. */
+  onFrame?: (chunk: UIMessageChunk) => void,
 ): Promise<PumpResult> => {
   const reader = sdkStream.getReader();
   let frameCount = 0;
@@ -48,6 +50,13 @@ export const pumpSdkStreamToChannel = async (
       if (value === undefined) continue;
       channel.append(value);
       frameCount += 1;
+      if (onFrame) {
+        try {
+          onFrame(value);
+        } catch {
+          // Instrumentation must never cost a frame or fail the stream.
+        }
+      }
     }
     return { frameCount };
   } catch (error) {

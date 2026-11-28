@@ -147,4 +147,17 @@ describe('POST /api/auth/device/register', () => {
       }),
     );
   });
+
+  it.each([
+    [{ authenticatedAtMs: 1_700_000_000_000, assurance: 'user_verified_passkey' as const }, { authenticatedAtMs: 1_700_000_000_000, assurance: 'user_verified_passkey' }],
+    [undefined, null],
+  ])('SEC-2 (partial) the device token carries the registering session\'s evidence unchanged (D-OW-45)', async (authentication, expected) => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({
+      userId: 'user-123', tokenType: 'session', sessionId: 'session-123', authentication,
+    } as never);
+
+    await POST(createRequest({ deviceId: 'device-abc' }));
+
+    expect(createWebDeviceToken).toHaveBeenCalledWith(expect.objectContaining({ authentication: expected }));
+  });
 });

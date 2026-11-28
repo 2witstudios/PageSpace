@@ -85,7 +85,9 @@ const STEP_DEFS: ErasureStep[] = [
   // erasure with the subject's checkpointed message content still on disk.
   { id: 'purge-stream-state', fatal: true, cloudOnly: false },
   { id: 'security-audit', fatal: false, cloudOnly: false },
-  // Deleting the user row is the irreversible core — must succeed.
+  // Deleting the user row is the irreversible core — must succeed. It is also where [D-OW-27]'s retained
+  // minimum is written: per org the person departed, a keyed hash of their email (never the address), so
+  // a verified domain does not auto-join a new account with it back (org_departure_suppressions).
   { id: 'delete-user', fatal: true, cloudOnly: false },
   { id: 'stripe-customer', fatal: false, cloudOnly: true },
 ];

@@ -1,5 +1,7 @@
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 import type { PtyShell } from './sprites-shell';
 import type { TaskHoldController } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
+import type { ComputeCharge } from '@pagespace/lib/billing/compute-charge';
 
 export const MAX_SCROLLBACK_BYTES = 64 * 1024;
 export const DETACHED_IDLE_MS = 30 * 60 * 1000;
@@ -20,7 +22,8 @@ export const DETACHED_IDLE_MS = 30 * 60 * 1000;
  * report) would be built on it.
  */
 export type TerminalViewer = {
-  userId: string;
+  /** The viewer's credential: the re-auth tick asks every access question (org sign-in policy included) of it. */
+  actor: AccessActor;
   emitOutput(data: string): void;
   emitClosed(exitCode: number): void;
   emitError(message: string): void;
@@ -38,7 +41,7 @@ export type TerminalSession = {
    * still-running process cannot keep executing, unsupervised, until the
    * 30-min idle reap.
    */
-  lastViewerUserId: string;
+  lastViewerActor: AccessActor;
   /** Detachable exec session id on the Sprite, used to reattach after a WS drop. */
   spriteExecId?: string;
   /**
@@ -101,12 +104,25 @@ export type TerminalSession = {
   resumedAtCreate: boolean;
   /**
    * Terminal Epic 3 metering (optional — set only when a `billing` seam is
-   * wired). `payerId` + `connectedAt` identify who pays for the window that
+   * wired). `charge` + `connectedAt` identify who pays for the window that
    * started at `connectedAt` (rebased by each heartbeat settle); `holdId` is the
    * window's reservation when the gate placed one — settle records usage either
    * way, the hold is just the pre-authorization.
    */
-  payerId?: string;
+  /** The wallet this session's windows are held and settled on — the org pool for an org drive (WAL-9). */
+  charge?: ComputeCharge;
+  /**
+   * The session's own owner: the payer's fallback when the session has no drive, re-resolved
+   * with at each settle (`billing.resolveCharge`), so a drive that moves into or out of an org
+   * while the session is open changes who pays from the next window (WAL-9).
+   */
+  ownerId?: string;
+  /**
+   * THE PERSON WHO CAUSES the current window's compute (WAL-2): who an org charge is recorded
+   * under and capped against. Set by the connect that opened the window, and moved to whoever
+   * then attaches to or types into the live PTY (`claimBillingWindow`), never the session owner.
+   */
+  actorId?: string;
   holdId?: string;
   connectedAt?: number;
   /**

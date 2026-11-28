@@ -14,16 +14,54 @@ import { replaceFromDocument, readSheetDocument } from '@pagespace/lib/sheets/st
 import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
+import type { PolicyRefusal } from '@pagespace/lib/organizations/sharing-decisions';
+import { agentModelSaveRefusal } from '@/lib/ai/core/org-model-policy';
 
 export class PageRevisionMismatchError extends Error {
   currentRevision: number;
   expectedRevision?: number;
+  /** Set when the refusal came from the content lock rather than the row revision. */
+  currentContentRevision?: number;
+  expectedContentRevision?: number;
 
-  constructor(message: string, currentRevision: number, expectedRevision?: number) {
+  constructor(
+    message: string,
+    currentRevision: number,
+    expectedRevision?: number,
+    contentLock?: { current: number; expected: number | undefined }
+  ) {
     super(message);
     this.currentRevision = currentRevision;
     this.expectedRevision = expectedRevision;
+    this.currentContentRevision = contentLock?.current;
+    this.expectedContentRevision = contentLock?.expected;
   }
+}
+
+/**
+ * POL-8: the mutation set an agent page's provider or model to one the drive's org does not allow. Nothing was
+ * written; a route answers with the refusal's 403 and policy key.
+ */
+export class OrgModelPolicyError extends Error {
+  readonly refusal: PolicyRefusal;
+
+  constructor(refusal: PolicyRefusal) {
+    super(refusal.message);
+    this.refusal = refusal;
+  }
+}
+
+/** POL-8: throw OrgModelPolicyError when the drive's org does not allow the provider/model an agent page stores. */
+export async function assertAgentModelAllowed(driveId: string, saved: { provider: string | null; modelId: string | null }): Promise<void> {
+  const decision = await agentModelSaveRefusal(driveId, saved);
+  if (!decision.ok) throw new OrgModelPolicyError(decision);
+}
+
+/** The JSON body and status of a refused save, or null when `error` is not one. */
+export function orgModelPolicyErrorResponse(error: unknown): { body: { error: string; code: string; policy: string }; status: 403 } | null {
+  if (!(error instanceof OrgModelPolicyError)) return null;
+  const { message, code, policy, status } = error.refusal;
+  return { body: { error: message, code, policy }, status };
 }
 
 export interface PageMutationContext {
@@ -45,7 +83,13 @@ export interface ApplyPageMutationInput {
   operation: ActivityOperation;
   updates: Record<string, unknown>;
   updatedFields?: string[];
+  /** Refuses the write unless the row is at this revision, whatever field last changed it. */
   expectedRevision?: number;
+  /**
+   * Refuses a change to the content unless the content is at this revision. What
+   * an editor saves against: it only conflicts with a real change to the text.
+   */
+  expectedContentRevision?: number;
   context: PageMutationContext;
   source?: PageVersionSource;
   tx?: typeof db;
@@ -55,6 +99,7 @@ export interface ApplyPageMutationResult {
   pageId: string;
   driveId: string;
   nextRevision: number;
+  nextContentRevision: number;
   stateHashBefore: string;
   stateHashAfter: string;
   contentRefBefore: string | null;
@@ -73,6 +118,7 @@ export async function applyPageMutation({
   updates,
   updatedFields,
   expectedRevision,
+  expectedContentRevision,
   context,
   source,
   tx,
@@ -88,7 +134,7 @@ export async function applyPageMutation({
     throw new Error('Page not found');
   }
 
-  if (STRICT_REVISION && expectedRevision === undefined) {
+  if (STRICT_REVISION && expectedRevision === undefined && expectedContentRevision === undefined) {
     throw new PageRevisionMismatchError('Expected revision required', currentPage.revision, undefined);
   }
 
@@ -129,6 +175,25 @@ export async function applyPageMutation({
     ? (await readSheetDocument(pageId, database as never)) ?? storedContent
     : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
+
+  // Only a real change to the text, or to how it is read, moves the content
+  // lock, and only such a change can be refused by it. So a rename never
+  // conflicts with a save, and a resend of what is already stored (a second pane,
+  // a retry after a lost response) is not somebody else's edit.
+  const changesContent =
+    nextContent !== previousContent ||
+    (updates.contentMode !== undefined && updates.contentMode !== currentPage.contentMode);
+  const guardsContent = changesContent && expectedContentRevision !== undefined;
+  const contentLock = { current: currentPage.contentRevision, expected: expectedContentRevision };
+
+  if (guardsContent && currentPage.contentRevision !== expectedContentRevision) {
+    throw new PageRevisionMismatchError(
+      'Page content was modified since your last read',
+      currentPage.revision,
+      expectedRevision,
+      contentLock
+    );
+  }
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
   const contentFormatAfter = detectPageContentFormat(nextContent);
@@ -194,7 +259,39 @@ export async function applyPageMutation({
       : currentPage.userScopedAccess,
   };
 
+  // POL-8: every save of an agent page's provider or model passes here, so the org allowlists are judged once, for
+  // every caller (routes, AI tools, the chat echo), before anything is written. Only what this save sets is judged.
+  if (updates.aiProvider !== undefined || updates.aiModel !== undefined) {
+    await assertAgentModelAllowed(currentPage.driveId, {
+      provider: updates.aiProvider !== undefined ? nextPageState.aiProvider : null,
+      modelId: updates.aiModel !== undefined ? nextPageState.aiModel : null,
+    });
+  }
+
   const stateHashAfter = computePageStateHash(nextPageState);
+
+  // An editor's save of the text already stored, with nothing else in it. There
+  // is nothing to write: another version and activity entry would record an edit
+  // that did not happen, and the caller already holds this content.
+  const isResendOfStoredContent =
+    expectedContentRevision !== undefined &&
+    !changesContent &&
+    Object.keys(updates).every((field) => field === 'content' || field === 'contentMode');
+
+  if (isResendOfStoredContent) {
+    return {
+      pageId,
+      driveId: currentPage.driveId,
+      nextRevision: currentPage.revision,
+      nextContentRevision: currentPage.contentRevision,
+      stateHashBefore,
+      stateHashAfter: stateHashBefore,
+      contentRefBefore: contentRefBefore ?? null,
+      contentRefAfter: contentRefBefore ?? null,
+      contentFormatBefore,
+      contentFormatAfter: contentFormatBefore,
+    };
+  }
 
   // A sheet's content lives in rows, so a content write to one takes a
   // different path entirely.
@@ -268,9 +365,11 @@ export async function applyPageMutation({
       );
     }
 
-    const updateWhere = expectedRevision !== undefined
-      ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
-      : eq(pages.id, pageId);
+    const updateWhere = and(
+      eq(pages.id, pageId),
+      ...(expectedRevision !== undefined ? [eq(pages.revision, expectedRevision)] : []),
+      ...(guardsContent ? [eq(pages.contentRevision, expectedContentRevision)] : [])
+    );
 
     const [updated] = await transaction
       .update(pages)
@@ -278,6 +377,7 @@ export async function applyPageMutation({
         ...updates,
         // Rows are the truth for a sheet; the column would be a stale copy.
         ...(isSheetContentWrite ? { content: '' } : {}),
+        ...(changesContent ? { contentRevision: currentPage.contentRevision + 1 } : {}),
         revision: nextRevision,
         stateHash: stateHashAfter,
         updatedAt: new Date(),
@@ -289,7 +389,8 @@ export async function applyPageMutation({
       throw new PageRevisionMismatchError(
         'Page was modified while applying changes',
         currentPage.revision,
-        expectedRevision
+        expectedRevision,
+        guardsContent ? contentLock : undefined
       );
     }
 
@@ -472,6 +573,7 @@ export async function applyPageMutation({
     pageId,
     driveId: currentPage.driveId,
     nextRevision,
+    nextContentRevision: currentPage.contentRevision + (changesContent ? 1 : 0),
     stateHashBefore,
     stateHashAfter,
     contentRefBefore: contentRefBefore ?? null,

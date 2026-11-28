@@ -109,7 +109,7 @@ export const agentsListHandler: CommandHandler = async (ctx, intent) => {
   }
 
   if (allDrives) {
-    const result = await callSdk(ctx.stderr, () => ctx.sdk.agents.listMultiDrive({}));
+    const result = await callSdk(ctx, () => ctx.sdk.agents.listMultiDrive({}));
     if (!result.ok) return EXIT_RUNTIME_ERROR;
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
@@ -119,7 +119,7 @@ export const agentsListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_SUCCESS;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.agents.list({ driveId: driveId as string }));
+  const result = await callSdk(ctx, () => ctx.sdk.agents.list({ driveId: driveId as string }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
   if (intent.flags.json) {
     ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
@@ -340,7 +340,7 @@ export const agentsConfigHandler: CommandHandler = async (ctx, intent) => {
   }
 
   const input = { agentId, ...Object.fromEntries(parsed.values) } as UpdateAgentConfigInput;
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.agents.updateConfig(input));
+  const result = await callSdk(ctx, () => ctx.sdk.agents.updateConfig(input));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {
@@ -370,7 +370,7 @@ export const modelsListHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.agents.listModels({}));
+  const result = await callSdk(ctx, () => ctx.sdk.agents.listModels({}));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   if (intent.flags.json) {

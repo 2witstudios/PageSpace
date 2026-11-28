@@ -16,19 +16,24 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { creditBalances, creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { creditHolds, creditLedger } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI } from '../credit-gate';
-import { TIER_MONTHLY_ALLOWANCE_CENTS } from '../credit-pricing';
+import { PERSONAL_SPEND } from '../spend-target';
+import { tierAllowanceCents } from '../money-model';
+
+/** The free starter grant (MON-8), from the one definition. */
+const FREE_STARTER_CENTS = tierAllowanceCents('free');
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
 
 beforeAll(async () => {
   try {
-    await db.select().from(creditBalances).limit(1);
+    await db.select().from(wallets).limit(1);
     dbAvailable = true;
   } catch (error) {
     requireDb('agent-starter-grant.integration.test.ts', error);
@@ -40,7 +45,7 @@ afterAll(async () => {
   if (createdUserIds.length === 0) return;
   await db.delete(creditHolds).where(inArray(creditHolds.userId, createdUserIds));
   await db.delete(creditLedger).where(inArray(creditLedger.userId, createdUserIds));
-  await db.delete(creditBalances).where(inArray(creditBalances.userId, createdUserIds));
+  await db.delete(wallets).where(inArray(wallets.userId, createdUserIds));
   await db.delete(users).where(inArray(users.id, createdUserIds));
 });
 
@@ -59,9 +64,10 @@ async function seedUser(accountType: 'human' | 'agent', ownerUserId: string | nu
   return user;
 }
 
-/** A top-up that landed before the first AI call: a bare row, no period stamped. */
+/** A top-up that landed before the first AI call: a bare personal root wallet, no period stamped. */
 async function seedBareRow(userId: string, topupCents: number) {
-  await db.insert(creditBalances).values({
+  await db.insert(wallets).values({
+    ownerType: 'user',
     userId,
     monthlyRemainingCents: 0,
     monthlyAllowanceCents: 0,
@@ -76,16 +82,16 @@ async function starterGrantRows(userId: string) {
 }
 
 async function balance(userId: string) {
-  const [row] = await db.select().from(creditBalances).where(eq(creditBalances.userId, userId));
+  const [row] = await db.select().from(wallets).where(personalRootWalletOf(userId));
   return row;
 }
 
 describe('canConsumeAI — no-row lazy-init branch', () => {
-  it('given an unclaimed agent\'s first call, should create a zero-allowance balance row, write NO free-init ledger row, and refuse with requires_funding', async () => {
+  it('given an unclaimed agent\'s first call, should create a zero-allowance personal root wallet, write NO free-init ledger row, and refuse with requires_funding', async () => {
     if (!dbAvailable) return;
     const agent = await seedUser('agent');
 
-    const result = await canConsumeAI(agent.id, 'free');
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result).toMatchObject({ allowed: false, reason: 'requires_funding' });
     const row = await balance(agent.id);
@@ -99,14 +105,14 @@ describe('canConsumeAI — no-row lazy-init branch', () => {
     if (!dbAvailable) return;
     const human = await seedUser('human');
 
-    const result = await canConsumeAI(human.id, 'free');
+    const result = await canConsumeAI(human.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result.allowed).toBe(true);
     const row = await balance(human.id);
-    expect(row?.monthlyAllowanceCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(row?.monthlyAllowanceCents).toBe(FREE_STARTER_CENTS);
     const grants = await starterGrantRows(human.id);
     expect(grants).toHaveLength(1);
-    expect(grants[0]?.amountCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(grants[0]?.amountCents).toBe(FREE_STARTER_CENTS);
   });
 });
 
@@ -116,7 +122,7 @@ describe('canConsumeAI — bare-row starter-grant branch', () => {
     const agent = await seedUser('agent');
     await seedBareRow(agent.id, 0);
 
-    const result = await canConsumeAI(agent.id, 'free');
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result).toMatchObject({ allowed: false, reason: 'requires_funding' });
     expect(await starterGrantRows(agent.id)).toHaveLength(0);
@@ -128,11 +134,11 @@ describe('canConsumeAI — bare-row starter-grant branch', () => {
     const human = await seedUser('human');
     await seedBareRow(human.id, 0);
 
-    const result = await canConsumeAI(human.id, 'free');
+    const result = await canConsumeAI(human.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result.allowed).toBe(true);
     expect(await starterGrantRows(human.id)).toHaveLength(1);
-    expect((await balance(human.id))?.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect((await balance(human.id))?.monthlyRemainingCents).toBe(FREE_STARTER_CENTS);
   });
 });
 
@@ -143,12 +149,12 @@ describe('canConsumeAI — billing-off deployment (DEPLOYMENT_MODE=tenant)', () 
     else process.env.DEPLOYMENT_MODE = originalMode;
   });
 
-  it('given an unclaimed agent in tenant mode, should refuse with requires_funding and create no balance row', async () => {
+  it('given an unclaimed agent in tenant mode, should refuse with requires_funding and create no wallet', async () => {
     if (!dbAvailable) return;
     const agent = await seedUser('agent');
     process.env.DEPLOYMENT_MODE = 'tenant';
 
-    const result = await canConsumeAI(agent.id, 'free');
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result).toEqual({ allowed: false, reason: 'requires_funding' });
     expect(await balance(agent.id)).toBeUndefined();
@@ -160,7 +166,7 @@ describe('canConsumeAI — billing-off deployment (DEPLOYMENT_MODE=tenant)', () 
     const agent = await seedUser('agent', owner.id);
     process.env.DEPLOYMENT_MODE = 'tenant';
 
-    expect(await canConsumeAI(agent.id, 'free')).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
   });
 
   it('given a human in tenant mode, should stay unlimited', async () => {
@@ -168,7 +174,7 @@ describe('canConsumeAI — billing-off deployment (DEPLOYMENT_MODE=tenant)', () 
     const human = await seedUser('human');
     process.env.DEPLOYMENT_MODE = 'tenant';
 
-    expect(await canConsumeAI(human.id, 'free')).toEqual({ allowed: true, reason: 'unlimited' });
+    expect(await canConsumeAI(human.id, 'free', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
   });
 });
 
@@ -178,7 +184,7 @@ describe('canConsumeAI — refined denial reason', () => {
     const owner = await seedUser('human');
     const agent = await seedUser('agent', owner.id);
 
-    const result = await canConsumeAI(agent.id, 'free');
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result).toMatchObject({ allowed: false, reason: 'out_of_credits' });
     expect(await starterGrantRows(agent.id)).toHaveLength(0);
@@ -189,9 +195,35 @@ describe('canConsumeAI — refined denial reason', () => {
     const agent = await seedUser('agent');
     await seedBareRow(agent.id, 1000);
 
-    const result = await canConsumeAI(agent.id, 'free');
+    const result = await canConsumeAI(agent.id, 'free', { spend: PERSONAL_SPEND });
 
     expect(result.allowed).toBe(true);
     expect(await starterGrantRows(agent.id)).toHaveLength(0);
+  });
+});
+
+describe('rollDuePersonalRoots — the hourly comped-root sweep', () => {
+  it('given an agent on a paid tier whose root period has ended, should never grant it a monthly allowance', async () => {
+    if (!dbAvailable) return;
+    const { rollDuePersonalRoots } = await import('../wallet-funding-shell');
+    const agent = await seedUser('agent');
+    const human = await seedUser('human');
+    await db.update(users).set({ subscriptionTier: 'pro' }).where(inArray(users.id, [agent.id, human.id]));
+    const ended = new Date(Date.now() - 1000);
+    for (const id of [agent.id, human.id]) {
+      await seedBareRow(id, 0);
+      await db
+        .update(wallets)
+        .set({ monthlyPeriodStart: new Date(ended.getTime() - 30 * 24 * 3600 * 1000), monthlyPeriodEnd: ended })
+        .where(personalRootWalletOf(id));
+    }
+
+    await rollDuePersonalRoots({ now: new Date() });
+
+    const grants = async (userId: string) =>
+      (await db.select().from(creditLedger).where(eq(creditLedger.userId, userId))).filter((r) => r.entryType === 'monthly_grant');
+    expect(await grants(agent.id)).toHaveLength(0);
+    // Control: the same comped state on a human IS rolled, so the agent assertion is not vacuous.
+    expect(await grants(human.id)).toHaveLength(1);
   });
 });

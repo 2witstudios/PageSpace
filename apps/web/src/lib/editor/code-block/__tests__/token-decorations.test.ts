@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import type { ThemedToken } from 'shiki';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { tokensToDecorationSpecs } from '../token-decorations';
 
 function makeToken(content: string, color?: string, fontStyle?: number): ThemedToken {

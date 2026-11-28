@@ -61,7 +61,7 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
     // Addressed by shell AND by the acting human: the kill takes the shell's
     // pane with it through the membership funnel, which never takes a caller's
     // word for who is acting (#2462).
-    expect(mockKillShellById).toHaveBeenCalledWith({ shellId: SHELL_ID, actingUserId: 'user-1' });
+    expect(mockKillShellById).toHaveBeenCalledWith({ shellId: SHELL_ID, actor: expect.objectContaining({ userId: 'user-1' }) });
   });
 
   it('given a shell that is already gone, should 404 — which the client treats as success', async () => {
@@ -86,7 +86,7 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
 
   it('should authorize against the shell\'s OWN session with the END check (no capability gate)', async () => {
     await del();
-    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith('user-1', SESSION_ID);
+    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), SESSION_ID);
   });
 
   it('given a denial, should 404 (SAME as not-found, review #2261/5), audit it, and kill nothing', async () => {

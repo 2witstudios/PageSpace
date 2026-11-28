@@ -237,6 +237,7 @@ describe('GET /api/auth/google/callback', () => {
 
       // Verify session creation
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: { authenticatedAtMs: expect.any(Number), assurance: 'single_factor' },
         userId: mockExistingUser.id,
         type: 'user',
         scopes: ['*'],

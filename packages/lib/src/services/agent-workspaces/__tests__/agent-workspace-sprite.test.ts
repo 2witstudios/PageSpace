@@ -20,8 +20,9 @@ import {
   type FakeAgentSessionStore,
   type FakeSpriteHost,
 } from './fakes';
+import { credentialActor } from '../../../permissions/access-actor';
 
-const actor = { userId: OWNER_ID, tenantId: TENANT_ID };
+const actor = { access: credentialActor(OWNER_ID, null), tenantId: TENANT_ID };
 const SESSION_KEY = deriveAgentSessionSpriteKey({ tenantId: TENANT_ID, workspaceId: SESSION_ID, secret: SECRET });
 
 function toSpriteRow(record: AgentSessionRecord): AgentSessionSpriteRow {
@@ -876,7 +877,7 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
     const result = await ensureAgentSessionSandbox({
       row: toSpriteRow(makeSessionRecord()),
       intent: 'ensure',
-      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      actor: { access: credentialActor(OWNER_ID, null), tenantId: TENANT_ID },
       deps: makeDeps(
         { store, host },
         { checkConcurrency: async () => ({ allowed: false, reason: 'live agent-session limit reached' }) },
@@ -910,7 +911,7 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
     await ensureAgentSessionSandbox({
       row: toSpriteRow(ended),
       intent: 'ensure',
-      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      actor: { access: credentialActor(OWNER_ID, null), tenantId: TENANT_ID },
       deps: makeDeps({ store, host }, {
         checkConcurrency: async (input) => { seen.push(input); return { allowed: true }; },
       }),
@@ -928,7 +929,7 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
     await ensureAgentSessionSandbox({
       row: toSpriteRow(provisioned),
       intent: 'ensure',
-      actor: { userId: OWNER_ID, tenantId: TENANT_ID },
+      actor: { access: credentialActor(OWNER_ID, null), tenantId: TENANT_ID },
       deps: makeDeps({ store, host }, {
         checkConcurrency: async (input) => { seen.push(input); return { allowed: true }; },
       }),

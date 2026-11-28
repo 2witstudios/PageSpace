@@ -1,0 +1,341 @@
+import { db } from '@pagespace/db/db';
+import { and, asc, eq, inArray, isNotNull, isNull } from '@pagespace/db/operators';
+import type { OrgDriveVisibility } from '@pagespace/db/schema/core';
+import { driveMembers, driveRoles } from '@pagespace/db/schema/members';
+import { orgMembers, type OrgRole } from '@pagespace/db/schema/organizations';
+import { auditOrgAdminPrivateDriveAccess } from './org-admin-access-audit';
+import { getOpenDriveRoleFloors } from '../organizations/policy-reader';
+import type { DriveRoleGrant, OrgDriveMembership } from './org-access';
+import { driveMembershipRole, driveMembershipRow } from './drive-member-role';
+import type { RequesterRow } from './drive-join-requests';
+import { drives } from '@pagespace/db/schema/core';
+import {
+  explicitScopeAuthorityRow,
+  resolveEffectiveDriveMembership,
+  validOrgDriveRow,
+  type EffectiveDriveMembership,
+  type ExplicitScopeAuthority,
+} from './org-drive-resolution';
+
+/**
+ * The IO around resolveEffectiveDriveMembership for ONE human and ONE drive they do not own:
+ * the accepted drive_members row, then (only for an org drive) the user's org role and the drive's
+ * default role, then the ORG-4 audit event when org Owner/Admin power opened a PRIVATE drive.
+ * For a personal drive it runs only the one membership query.
+ */
+
+export interface MembershipDrive {
+  id: string;
+  /** Undefined is read as a personal drive. */
+  orgId?: string | null;
+  orgVisibility?: OrgDriveVisibility | null;
+}
+
+const NO_DEFAULT_ROLE: DriveRoleGrant = { role: 'MEMBER', customRoleId: null };
+
+export async function loadEffectiveDriveMembership(
+  userId: string,
+  drive: MembershipDrive,
+  options: ResolveMembershipsOptions = { audit: true },
+): Promise<EffectiveDriveMembership | null> {
+  const rows = await db
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, drive.id),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
+    .limit(1);
+
+  const [effective] = await resolveEffectiveDriveMemberships(
+    [{ userId, drive, row: driveMembershipRow(rows[0]) }],
+    options,
+  );
+  return effective;
+}
+
+export interface MembershipCandidate {
+  userId: string;
+  drive: MembershipDrive;
+  /** The user's ACCEPTED drive_members row for this drive, already read by the caller. */
+  row: OrgDriveMembership | null;
+}
+
+export interface ResolveMembershipsOptions {
+  /**
+   * Write the ORG-4 event when org power opens a PRIVATE drive. True when the answer serves the
+   * user's own request (opening, listing pages, searching, a realtime join or event). False when it
+   * computes an audience (which OTHER users can see a page): nobody accessed anything.
+   */
+  audit: boolean;
+  /**
+   * Read through this executor (a transaction) instead of the pool, so a caller holding locks sees the
+   * rows it locked ([D-OW-36] reassignment, review #2831 P2-2). Defaults to the pool.
+   */
+  executor?: Pick<typeof db, 'select'>;
+}
+
+/**
+ * The effective membership of many (user, drive) pairs whose accepted rows the caller already read,
+ * in the order given. The ONE IO edge every human drive resolver goes through, single or batched:
+ * for a personal drive it runs no query and returns the row.
+ * Otherwise it reads the org roles (one query), the default roles of the OPEN drives a row-less
+ * member needs (one query) and the Open-drive role floor of the orgs whose OPEN drives an org MEMBER
+ * resolves (one query, POL-6), then applies resolveEffectiveDriveMembership to each pair.
+ */
+export async function resolveEffectiveDriveMemberships(
+  candidates: MembershipCandidate[],
+  options: ResolveMembershipsOptions,
+): Promise<Array<EffectiveDriveMembership | null>> {
+  const facts = candidates.map(({ drive }) => ({
+    orgId: drive.orgId ?? null,
+    orgVisibility: drive.orgVisibility ?? 'OPEN',
+  }));
+
+  if (facts.every((f) => f.orgId === null)) {
+    return candidates.map(({ row }, i) => resolveEffectiveDriveMembership({
+      drive: facts[i],
+      orgRole: null,
+      row,
+      driveDefaultRole: NO_DEFAULT_ROLE,
+      openDriveRoleFloor: null,
+    }));
+  }
+
+  const executor = options.executor ?? db;
+  const orgRoles = await findOrgRoles(executor, candidates.flatMap(({ userId }, i) => {
+    const orgId = facts[i].orgId;
+    return orgId === null ? [] : [{ orgId, userId }];
+  }));
+  const orgRoleOf = (i: number): OrgRole | null => {
+    const orgId = facts[i].orgId;
+    return orgId === null ? null : orgRoles.get(orgRoleKey(orgId, candidates[i].userId)) ?? null;
+  };
+
+  // A stale row (a misplaced org row, a former lead's OWNER row) counts as no row here too, or the
+  // member would resolve the implicit OPEN membership without the drive's default role.
+  const needsDefaultRole = candidates.map(({ row }, i) => {
+    const orgRole = orgRoleOf(i);
+    return facts[i].orgId !== null
+      && orgRole === 'MEMBER'
+      && facts[i].orgVisibility === 'OPEN'
+      && validOrgDriveRow(row, facts[i], orgRole) === null;
+  });
+  const defaultRoles = await findDefaultCustomRoleIds(
+    executor,
+    candidates.filter((_, i) => needsDefaultRole[i]).map(({ drive }) => drive.id),
+  );
+  // POL-6: read once per org, only where an org MEMBER resolves an OPEN drive (the only place a floor can apply), through
+  // the caller's executor: a gate deciding under its row locks must not wait on a second pool connection.
+  const floors = await getOpenDriveRoleFloors(candidates.flatMap((_, i) => {
+    const orgId = facts[i].orgId;
+    return orgId !== null && orgRoleOf(i) === 'MEMBER' && facts[i].orgVisibility === 'OPEN' ? [orgId] : [];
+  }), executor);
+
+  return candidates.map(({ userId, drive, row }, i) => {
+    const orgId = facts[i].orgId;
+    if (orgId === null) {
+      return resolveEffectiveDriveMembership({
+        drive: facts[i], orgRole: null, row, driveDefaultRole: NO_DEFAULT_ROLE, openDriveRoleFloor: null,
+      });
+    }
+    const orgRole = orgRoleOf(i);
+    const effective = resolveEffectiveDriveMembership({
+      drive: facts[i],
+      orgRole,
+      row,
+      driveDefaultRole: needsDefaultRole[i]
+        ? { role: 'MEMBER', customRoleId: defaultRoles.get(drive.id) ?? null }
+        : NO_DEFAULT_ROLE,
+      openDriveRoleFloor: floors.get(orgId) ?? null,
+    });
+    if (options.audit && effective?.auditOrgAdminPrivateAccess && orgRole !== null) {
+      void auditOrgAdminPrivateDriveAccess({ userId, driveId: drive.id, orgId, orgRole });
+    }
+    return effective;
+  });
+}
+
+/**
+ * The membership that may back an explicit-role token scope on a drive the user does not own
+ * (explicitScopeAuthorityRow).
+ */
+export async function loadExplicitScopeAuthority(userId: string, driveId: string): Promise<ExplicitScopeAuthority> {
+  const [drive] = await db
+    .select({ orgId: drives.orgId, orgVisibility: drives.orgVisibility })
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!drive || drive.orgId === null) return { orgDrive: false };
+
+  const rows = await db
+    .select({ role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+    .from(driveMembers)
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.userId, userId),
+      isNotNull(driveMembers.acceptedAt),
+    ))
+    .limit(1);
+
+  return explicitScopeAuthorityRow({ drive, row: driveMembershipRow(rows[0]) });
+}
+
+/**
+ * One user's ACCEPTED drive_members rows in `driveIds`, keyed by drive, read through `executor` (an
+ * org demotion reads them inside the role change's transaction).
+ */
+export async function loadAcceptedRowsInDrives(
+  executor: Pick<typeof db, 'select'>,
+  userId: string,
+  driveIds: string[],
+): Promise<Map<string, OrgDriveMembership>> {
+  const rows = new Map<string, OrgDriveMembership>();
+  for (const ids of chunks(driveIds)) {
+    const found = await executor
+      .select({ driveId: driveMembers.driveId, role: driveMembers.role, customRoleId: driveMembers.customRoleId, source: driveMembers.source })
+      .from(driveMembers)
+      .where(and(eq(driveMembers.userId, userId), isNotNull(driveMembers.acceptedAt), inArray(driveMembers.driveId, ids)));
+    for (const r of found) {
+      const row = driveMembershipRow(r);
+      if (row) rows.set(r.driveId, row);
+    }
+  }
+  return rows;
+}
+
+/**
+ * Which of `userIds` hold an ACCEPTED drive_members MEMBERSHIP on which of `driveIds`, read through
+ * `executor` (org deletion reads them inside its transaction, after its own row deletes). A GUEST
+ * row (D-OW-24) is no membership, so its holder is not "still on the drive" and still gets kicked.
+ */
+export async function loadAcceptedDriveMemberPairs(
+  executor: Pick<typeof db, 'select'>,
+  userIds: string[],
+  driveIds: string[],
+): Promise<Array<{ userId: string; driveId: string }>> {
+  const pairs: Array<{ userId: string; driveId: string }> = [];
+  if (userIds.length === 0) return pairs;
+  for (const users of chunks(userIds)) {
+    for (const ids of chunks(driveIds)) {
+      const rows = await executor
+        .select({ userId: driveMembers.userId, driveId: driveMembers.driveId, role: driveMembers.role })
+        .from(driveMembers)
+        .where(and(inArray(driveMembers.userId, users), inArray(driveMembers.driveId, ids), isNotNull(driveMembers.acceptedAt)));
+      for (const { userId, driveId, role } of rows) {
+        if (driveMembershipRole(role) !== null) pairs.push({ userId, driveId });
+      }
+    }
+  }
+  return pairs;
+}
+
+/** The user's role in each org they belong to (for listing many drives at once). */
+export async function loadOrgRolesForUser(userId: string): Promise<Map<string, OrgRole>> {
+  const rows = await db
+    .select({ orgId: orgMembers.orgId, role: orgMembers.role })
+    .from(orgMembers)
+    .where(eq(orgMembers.userId, userId));
+  return new Map(rows.map((r) => [r.orgId, r.role]));
+}
+
+const orgRoleKey = (orgId: string, userId: string) => `${orgId}:${userId}`;
+
+/** Chunk size for the IN lists below (Postgres bind parameter limit). */
+const IN_LIST_CHUNK = 500;
+
+function chunks<T>(items: T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += IN_LIST_CHUNK) out.push(items.slice(i, i + IN_LIST_CHUNK));
+  return out;
+}
+
+async function findOrgRoles(executor: Pick<typeof db, 'select'>, pairs: Array<{ orgId: string; userId: string }>): Promise<Map<string, OrgRole>> {
+  const roles = new Map<string, OrgRole>();
+  if (pairs.length === 0) return roles;
+  const orgIds = [...new Set(pairs.map((p) => p.orgId))];
+  for (const userIds of chunks([...new Set(pairs.map((p) => p.userId))])) {
+    const rows = await executor
+      .select({ orgId: orgMembers.orgId, userId: orgMembers.userId, role: orgMembers.role })
+      .from(orgMembers)
+      .where(and(inArray(orgMembers.orgId, orgIds), inArray(orgMembers.userId, userIds)));
+    for (const r of rows) roles.set(orgRoleKey(r.orgId, r.userId), r.role);
+  }
+  return roles;
+}
+
+/** Each drive's default custom role (drive_roles.isDefault), for the drives given. */
+async function findDefaultCustomRoleIds(executor: Pick<typeof db, 'select'>, driveIds: string[]): Promise<Map<string, string>> {
+  const defaults = new Map<string, string>();
+  for (const ids of chunks([...new Set(driveIds)])) {
+    const rows = await executor
+      .select({ driveId: driveRoles.driveId, id: driveRoles.id })
+      .from(driveRoles)
+      .where(and(inArray(driveRoles.driveId, ids), eq(driveRoles.isDefault, true)))
+      // Deterministic, and the same pick the POL-6 floor guard judges (lowest position, then id).
+      .orderBy(asc(driveRoles.position), asc(driveRoles.id));
+    for (const r of rows) if (!defaults.has(r.driveId)) defaults.set(r.driveId, r.id);
+  }
+  return defaults;
+}
+
+/**
+ * A person's drive_members row on one drive, ACCEPTED OR PENDING, read through `executor`. For the
+ * join-request decisions only (drive-join-requests.ts), which must tell a pending invitation (theirs
+ * to accept, so no request and no admission) from no row at all. Never an access answer by itself.
+ */
+export async function loadDriveMemberRowState(
+  executor: Pick<typeof db, 'select'>,
+  driveId: string,
+  userId: string,
+): Promise<RequesterRow | null> {
+  const [row] = await executor
+    .select({ role: driveMembers.role, source: driveMembers.source, acceptedAt: driveMembers.acceptedAt })
+    .from(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId)))
+    .limit(1);
+  return row ? { role: driveMembershipRole(row.role), source: row.source, accepted: row.acceptedAt !== null } : null;
+}
+
+/**
+ * Remove a former lead's OWNER row on an org drive, inside the lead change's transaction. On an org
+ * drive the lead lives on drives.ownerId alone; a leftover OWNER row (the owner self-heal row a
+ * personal drive carried in) was never an invitation and must not outlive the handover, so the
+ * former lead keeps or loses access by their own membership only (DRV-1, D-OW-7).
+ */
+export async function removeFormerLeadOwnerRow(
+  executor: Pick<typeof db, 'delete'>,
+  driveId: string,
+  userId: string,
+): Promise<number> {
+  const removed = await executor
+    .delete(driveMembers)
+    .where(and(eq(driveMembers.driveId, driveId), eq(driveMembers.userId, userId), eq(driveMembers.role, 'OWNER')))
+    .returning({ id: driveMembers.id });
+  return removed.length;
+}
+
+/**
+ * POL-6, D-OW-11 (independent review of #2762, P2-3): org members of an Open drive hold its CURRENT default role.
+ * Their materialized rows (`source: 'org'`, role MEMBER) copied the default's id when they were synced, so when the
+ * drive's default changes or is removed, the rows that were ON THE PREVIOUS DEFAULT follow it here, in the role
+ * write's transaction (null: the plain member role). A custom role an admin assigned by hand is left alone
+ * (re-verify N8); invited rows keep the role they were given.
+ */
+export async function followDriveDefaultRole(
+  executor: Pick<typeof db, 'update'>,
+  driveId: string,
+  previousDefaultId: string | null,
+  defaultRoleId: string | null,
+): Promise<void> {
+  await executor
+    .update(driveMembers)
+    .set({ customRoleId: defaultRoleId })
+    .where(and(
+      eq(driveMembers.driveId, driveId),
+      eq(driveMembers.source, 'org'),
+      eq(driveMembers.role, 'MEMBER'),
+      previousDefaultId === null ? isNull(driveMembers.customRoleId) : eq(driveMembers.customRoleId, previousDefaultId),
+    ));
+}

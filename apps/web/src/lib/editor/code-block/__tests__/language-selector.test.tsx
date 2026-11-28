@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { assert } from './riteway';
+import { assert } from '@/test/riteway';
 import { LanguageSelector } from '../LanguageSelector';
 import type { NodeViewProps } from '@tiptap/react';
 

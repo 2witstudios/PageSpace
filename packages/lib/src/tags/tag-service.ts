@@ -35,6 +35,7 @@ import { preparePort, portPreparedAnchor } from '../content/anchoring/reanchor';
 import { resolveAnchor } from '../content/anchoring/resolve';
 import { projectContent, resolveProjectionFormat } from '../content/anchoring/text-projection';
 import { hashText } from '../content/anchoring/anchor';
+import type { AccessActor } from '../permissions/access-actor';
 
 const log = loggers.system;
 
@@ -130,9 +131,9 @@ function isUniqueViolation(error: unknown): boolean {
  * whole. Which ASSIGNMENTS they can see is a separate question, answered
  * per-page by `getPageTags`.
  */
-export async function listDriveTags(driveId: string, userId: string): Promise<TagResult<DriveTag[]>> {
+export async function listDriveTags(driveId: string, actor: AccessActor): Promise<TagResult<DriveTag[]>> {
   try {
-    if (!(await isUserDriveMember(userId, driveId))) return fail('forbidden');
+    if (!(await isUserDriveMember(actor, driveId))) return fail('forbidden');
 
     const rows = await db
       .select({
@@ -172,11 +173,11 @@ export async function listDriveTags(driveId: string, userId: string): Promise<Ta
  */
 export async function upsertTag(
   driveId: string,
-  userId: string,
+  actor: AccessActor,
   input: { name: string; color?: string; description?: string },
 ): Promise<TagResult<DriveTag>> {
   try {
-    if (!(await isUserDriveMember(userId, driveId))) return fail('forbidden');
+    if (!(await isUserDriveMember(actor, driveId))) return fail('forbidden');
 
     const normalized = normalizeTagName(input.name);
     if (!normalized.ok) return fail('invalid_name', normalized.reason);
@@ -189,7 +190,7 @@ export async function upsertTag(
         normalizedKey: normalized.key,
         color: input.color ?? null,
         description: input.description ?? null,
-        createdBy: userId,
+        createdBy: actor.userId,
       })
       .onConflictDoNothing({ target: [tags.driveId, tags.normalizedKey] })
       .returning({
@@ -292,7 +293,7 @@ function targetColumns(target: TagTarget): {
  * path runs through `upsertTag`, so it inherits the race handling.
  */
 export async function applyTag(
-  userId: string,
+  actor: AccessActor,
   input: {
     pageId: string;
     tagId?: string;
@@ -303,7 +304,7 @@ export async function applyTag(
   },
 ): Promise<TagResult<{ id: string }>> {
   try {
-    if (!(await canUserEditPage(userId, input.pageId))) return fail('forbidden');
+    if (!(await canUserEditPage(actor, input.pageId))) return fail('forbidden');
 
     const page = await db
       .select({
@@ -367,7 +368,7 @@ export async function applyTag(
     let tagId = input.tagId;
     if (!tagId) {
       if (!input.name) return fail('invalid_name', 'either tagId or name is required');
-      const upserted = await upsertTag(page[0].driveId, userId, { name: input.name });
+      const upserted = await upsertTag(page[0].driveId, actor, { name: input.name });
       if (!upserted.ok) return upserted;
       tagId = upserted.data.id;
     } else {
@@ -398,7 +399,7 @@ export async function applyTag(
         aiMessageId: cols.aiMessageId,
         source: input.source,
         confidence: input.confidence ?? null,
-        createdBy: userId,
+        createdBy: actor.userId,
       })
       .returning({ id: contentTags.id });
 
@@ -419,7 +420,7 @@ export async function applyTag(
  * against anything the caller supplies — so a caller cannot pass an id from a
  * page they cannot edit.
  */
-export async function removeTag(userId: string, contentTagId: string): Promise<TagResult<{ id: string }>> {
+export async function removeTag(actor: AccessActor, contentTagId: string): Promise<TagResult<{ id: string }>> {
   try {
     const row = await db
       .select({ id: contentTags.id, pageId: contentTags.pageId })
@@ -428,7 +429,7 @@ export async function removeTag(userId: string, contentTagId: string): Promise<T
       .limit(1);
     if (row.length === 0) return fail('assignment_not_found');
 
-    if (!(await canUserEditPage(userId, row[0].pageId))) return fail('forbidden');
+    if (!(await canUserEditPage(actor, row[0].pageId))) return fail('forbidden');
 
     await db.delete(contentTags).where(eq(contentTags.id, contentTagId));
     return ok({ id: contentTagId });
@@ -454,9 +455,9 @@ const assignmentColumns = {
 };
 
 /** Every assignment on one page. */
-export async function getPageTags(userId: string, pageId: string): Promise<TagResult<PageTagAssignment[]>> {
+export async function getPageTags(actor: AccessActor, pageId: string): Promise<TagResult<PageTagAssignment[]>> {
   try {
-    if (!(await canUserViewPage(userId, pageId))) return fail('forbidden');
+    if (!(await canUserViewPage(actor, pageId))) return fail('forbidden');
 
     const rows = await db
       .select(assignmentColumns)
@@ -484,7 +485,7 @@ export async function getPageTags(userId: string, pageId: string): Promise<TagRe
  * answers, and a caller rendering them the same way should have to choose that.
  */
 export async function getBatchPageTags(
-  userId: string,
+  actor: AccessActor,
   pageIds: string[],
 ): Promise<TagResult<Map<string, PageTagAssignment[]>>> {
   try {
@@ -492,7 +493,7 @@ export async function getBatchPageTags(
     if (pageIds.length === 0) return ok(result);
 
     const unique = [...new Set(pageIds)];
-    const permissions = await getBatchPagePermissions(userId, unique);
+    const permissions = await getBatchPagePermissions(actor, unique);
     const viewable = unique.filter((id) => permissions.get(id)?.canView === true);
     if (viewable.length === 0) return ok(result);
 

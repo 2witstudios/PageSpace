@@ -8,11 +8,12 @@
 
 import { buildHelpAnswerText } from '@pagespace/lib/commands/command-core';
 import { loadAvailableCommands } from '@/lib/commands/available-commands';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 export async function loadHelpAnswerText(
-  senderId: string,
+  sender: AccessActor,
   driveId: string | null
 ): Promise<string> {
-  const { winners } = await loadAvailableCommands(senderId, driveId);
+  const { winners } = await loadAvailableCommands(sender, driveId);
   return buildHelpAnswerText({ availableCommands: winners });
 }

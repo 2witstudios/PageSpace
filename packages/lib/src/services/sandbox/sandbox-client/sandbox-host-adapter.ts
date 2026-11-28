@@ -42,7 +42,7 @@ export function adaptSandboxHandleToExecutableSandbox(handle: SandboxHandle): Ex
     // local env cannot snapshot its filesystem (invariant 12).
     capabilities: handle.capabilities,
     runCommand: (args) => handle.exec(args),
-    writeFiles: (files) => handle.writeFiles(files),
+    writeFiles: (files, options) => handle.writeFiles(files, options),
     readFileToBuffer: (args) => handle.readFile(args),
     createCheckpoint: (comment) => handle.createCheckpoint(comment),
   };

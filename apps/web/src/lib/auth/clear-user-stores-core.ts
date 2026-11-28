@@ -17,6 +17,13 @@ export const USER_SPECIFIC_STORAGE_KEYS = [
 ] as const;
 
 /**
+ * Key prefixes for per-user values whose full key carries an id (the create-org setup plan is
+ * `pagespace.orgSetup.<userId>.<orgId>`). Purged on an identity switch, like the keys above.
+ */
+export const ORG_SETUP_STORAGE_PREFIX = 'pagespace.orgSetup.';
+export const USER_SPECIFIC_STORAGE_PREFIXES = [ORG_SETUP_STORAGE_PREFIX] as const;
+
+/**
  * Keys owned by stores that no longer exist. Purged on every sign-in, not just
  * on an identity switch, so orphaned blobs drain out of browsers belonging to
  * users who never switch accounts.
@@ -36,9 +43,19 @@ export function computeKeysToClear(
   lastUserId: string | null,
   newUserId: string,
 ): readonly string[] {
-  const userChanged = Boolean(lastUserId) && lastUserId !== newUserId;
-
-  return userChanged
+  return userChanged(lastUserId, newUserId)
     ? [...LEGACY_STORAGE_KEYS, ...USER_SPECIFIC_STORAGE_KEYS]
     : [...LEGACY_STORAGE_KEYS];
+}
+
+/** Which persisted key prefixes to purge for a sign-in: every per-user prefix on a switch, none otherwise. */
+export function computePrefixesToClear(
+  lastUserId: string | null,
+  newUserId: string,
+): readonly string[] {
+  return userChanged(lastUserId, newUserId) ? [...USER_SPECIFIC_STORAGE_PREFIXES] : [];
+}
+
+function userChanged(lastUserId: string | null, newUserId: string): boolean {
+  return Boolean(lastUserId) && lastUserId !== newUserId;
 }

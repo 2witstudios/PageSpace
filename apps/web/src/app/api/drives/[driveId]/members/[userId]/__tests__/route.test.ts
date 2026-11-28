@@ -11,7 +11,7 @@ type MemberPermission = Awaited<ReturnType<typeof import('@pagespace/lib/service
 // Contract Tests for /api/drives/[driveId]/members/[userId]
 //
 // These tests mock at the SERVICE SEAM level (checkDriveAccess, getDriveMemberDetails,
-// getMemberPermissions, updateMemberRole, updateMemberPermissions), NOT at ORM level.
+// getMemberPermissions, updateMemberAccess), NOT at ORM level.
 // ============================================================================
 
 // Mock at the service seam - this is the ONLY place we mock DB-related logic
@@ -19,8 +19,7 @@ vi.mock('@pagespace/lib/services/drive-member-service', () => ({
     checkDriveAccess: vi.fn(),
     getDriveMemberDetails: vi.fn(),
     getMemberPermissions: vi.fn(),
-    updateMemberRole: vi.fn(),
-    updateMemberPermissions: vi.fn(),
+    updateMemberAccess: vi.fn(),
     getDriveRecipientUserIds: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({
@@ -129,7 +128,7 @@ vi.mock('@/lib/auth', () => ({
   isAuthError: vi.fn(),
 }));
 
-import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberRole, updateMemberPermissions, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service'
+import { checkDriveAccess, getDriveMemberDetails, getMemberPermissions, updateMemberAccess, getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveNotification } from '@pagespace/lib/notifications/notifications';
 import {
@@ -146,6 +145,8 @@ import { mcpTokenDrives } from '@pagespace/db/schema/members';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { revokeAgentMembershipsGrantedBy, recapAgentMembershipsGrantedBy } from '@pagespace/lib/services/drive-agent-service';
+import { OrgLapsedError } from '@pagespace/lib/permissions/org-lapse-guard';
+import { ORG_LAPSED_MESSAGE } from '@pagespace/lib/organizations/status-core';
 
 // ============================================================================
 // Test Fixtures
@@ -185,6 +186,10 @@ const createDriveFixture = (overrides: {
   publishDefaultOgImageUrl: null,
   notFoundPageId: null,
   publishFaviconUrl: null,
+  avatarUrl: null,
+  color: null,
+  orgId: null,
+  orgVisibility: 'OPEN' as const,
 });
 
 const createAccessFixture = (overrides: Partial<DriveAccessResult>): DriveAccessResult => ({
@@ -203,6 +208,8 @@ const createMemberDetailsFixture = (overrides: {
   id: overrides.id ?? `mem_${overrides.userId}`,
   userId: overrides.userId,
   role: overrides.role,
+  source: 'invite',
+  isGuest: false,
   invitedBy: null,
   invitedAt: new Date('2024-01-01'),
   acceptedAt: new Date('2024-01-01'),
@@ -354,7 +361,7 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`);
       await GET(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockCurrentUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockCurrentUserId }));
     });
 
     it('should call getDriveMemberDetails with driveId and targetUserId', async () => {
@@ -463,6 +470,28 @@ describe('GET /api/drives/[driveId]/members/[userId]', () => {
   });
 
   describe('error handling', () => {
+    it('SEAT-9 (partial) [D-OW-33] answers 402 org_lapsed when the drive\'s org is lapsed and the change would give the member more', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+      vi.mocked(updateMemberAccess).mockRejectedValueOnce(new OrgLapsedError());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: 'ADMIN', permissions: [] }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
     it('should return 500 when service throws', async () => {
       vi.mocked(checkDriveAccess).mockRejectedValueOnce(new Error('Database error'));
 
@@ -525,8 +554,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -586,8 +614,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -606,8 +633,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'ADMIN' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -681,8 +707,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -690,7 +715,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       });
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, mockCurrentUserId);
+      expect(checkDriveAccess).toHaveBeenCalledWith(mockDriveId, expect.objectContaining({ userId: mockCurrentUserId }));
     });
 
     it('should call getDriveMemberDetails to verify member exists', async () => {
@@ -701,8 +726,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -713,7 +737,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       expect(getDriveMemberDetails).toHaveBeenCalledWith(mockDriveId, mockTargetUserId);
     });
 
-    it('should call updateMemberRole with role and customRoleId', async () => {
+    it('should call updateMemberAccess with role and customRoleId', async () => {
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true,
         drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
@@ -721,8 +745,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -730,10 +753,10 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       });
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(updateMemberRole).toHaveBeenCalledWith(mockDriveId, mockTargetUserId, 'ADMIN', 'role_123');
+      expect(updateMemberAccess).toHaveBeenCalledWith(mockDriveId, mockTargetUserId, mockCurrentUserId, { role: 'ADMIN', customRoleId: 'role_123', permissions: [] });
     });
 
-    it('should call updateMemberPermissions with permissions array', async () => {
+    it('should call updateMemberAccess with permissions array', async () => {
       const permissions = [
         { pageId: 'page_1', canView: true, canEdit: true, canShare: false },
         { pageId: 'page_2', canView: true, canEdit: false, canShare: false },
@@ -746,8 +769,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(2);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 2 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -755,12 +777,11 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       });
       await PATCH(request, createContext(mockDriveId, mockTargetUserId));
 
-      expect(updateMemberPermissions).toHaveBeenCalledWith(
-        mockDriveId,
-        mockTargetUserId,
-        mockCurrentUserId,
-        permissions
-      );
+      expect(updateMemberAccess).toHaveBeenCalledWith(mockDriveId, mockTargetUserId, mockCurrentUserId, {
+        role: undefined,
+        customRoleId: undefined,
+        permissions,
+      });
     });
   });
 
@@ -773,8 +794,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -799,8 +819,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -825,8 +844,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'ADMIN' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -846,8 +864,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(2);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 2 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -869,8 +886,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'ADMIN' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -889,8 +905,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'ADMIN' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null, permissionsUpdated: 0 });
       vi.mocked(recapAgentMembershipsGrantedBy).mockResolvedValue(['agent_1']);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
@@ -919,9 +934,8 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
       // Old custom role differs from the requested one (the reliable signal comes
-      // from updateMemberRole's return, NOT getDriveMemberDetails.customRole).
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_permissive' });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      // from updateMemberAccess's return, NOT getDriveMemberDetails.customRole).
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_permissive', permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -936,7 +950,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
     // Regression for the second Codex P1: clearing a custom role (customRoleId:
     // null) over a prior role, with the standard role unchanged, must still
     // re-cap. getDriveMemberDetails hardcodes customRole: null, so detection
-    // relies on updateMemberRole's returned oldCustomRoleId.
+    // relies on updateMemberAccess's returned oldCustomRoleId.
     it('should re-cap agents when the custom role is CLEARED (role unchanged)', async () => {
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true,
@@ -945,8 +959,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_x' });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_x', permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -965,8 +978,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'ADMIN' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'ADMIN', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -987,8 +999,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
       // Member already holds the same custom role being "set" ⇒ no change.
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_same' });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: 'role_same', permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1009,8 +1020,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(5);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 5 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1035,8 +1045,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null });
-      vi.mocked(updateMemberPermissions).mockResolvedValue(0);
+      vi.mocked(updateMemberAccess).mockResolvedValue({ oldRole: 'MEMBER', oldCustomRoleId: null, permissionsUpdated: 0 });
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1051,6 +1060,28 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
   });
 
   describe('error handling', () => {
+    it('SEAT-9 (partial) [D-OW-33] answers 402 org_lapsed when the drive\'s org is lapsed and the change would give the member more', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+      vi.mocked(updateMemberAccess).mockRejectedValueOnce(new OrgLapsedError());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: 'ADMIN', permissions: [] }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
     it('should return 500 when service throws', async () => {
       vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
         isOwner: true,
@@ -1059,7 +1090,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockRejectedValueOnce(new Error('Update failed'));
+      vi.mocked(updateMemberAccess).mockRejectedValueOnce(new Error('Update failed'));
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1081,7 +1112,7 @@ describe('PATCH /api/drives/[driveId]/members/[userId]', () => {
       vi.mocked(getDriveMemberDetails).mockResolvedValue(
         createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
       );
-      vi.mocked(updateMemberRole).mockRejectedValueOnce(error);
+      vi.mocked(updateMemberAccess).mockRejectedValueOnce(error);
 
       const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
         method: 'PATCH',
@@ -1509,6 +1540,28 @@ describe('DELETE /api/drives/[driveId]/members/[userId]', () => {
   });
 
   describe('error handling', () => {
+    it('SEAT-9 (partial) [D-OW-33] answers 402 org_lapsed when the drive\'s org is lapsed and the change would give the member more', async () => {
+      vi.mocked(checkDriveAccess).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test' }),
+      }));
+      vi.mocked(getDriveMemberDetails).mockResolvedValue(
+        createMemberDetailsFixture({ userId: mockTargetUserId, role: 'MEMBER' })
+      );
+      vi.mocked(updateMemberAccess).mockRejectedValueOnce(new OrgLapsedError());
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/members/${mockTargetUserId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ role: 'ADMIN', permissions: [] }),
+      });
+      const response = await PATCH(request, createContext(mockDriveId, mockTargetUserId));
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body).toEqual({ error: ORG_LAPSED_MESSAGE, code: 'org_lapsed' });
+      expect(createDriveNotification).not.toHaveBeenCalled();
+    });
+
     it('should return 500 when service throws', async () => {
       vi.mocked(checkDriveAccess).mockRejectedValueOnce(new Error('Database error'));
 

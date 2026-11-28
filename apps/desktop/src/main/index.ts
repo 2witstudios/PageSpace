@@ -7,6 +7,7 @@ import { getMCPManager } from './mcp-manager';
 import { initializeWSClient, shutdownWSClient } from './ws-client';
 import { logger } from './logger';
 import { preloadAuthSession } from './auth-session';
+import { restoreSessionCookie } from './session-cookie';
 import { setupMediaPermissionHandlers } from './media-permissions';
 import { createWindow, mainWindow } from './window';
 import { createMenu } from './menu';
@@ -42,6 +43,7 @@ if (!gotTheLock) {
 
 app.whenReady().then(async () => {
   await preloadAuthSession();
+  await restoreSessionCookie();
 
   setupMediaPermissionHandlers();
 

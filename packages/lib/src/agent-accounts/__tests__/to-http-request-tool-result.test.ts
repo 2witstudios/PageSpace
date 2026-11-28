@@ -69,3 +69,12 @@ describe('toHttpRequestToolResult', () => {
   });
 });
 
+
+it('given an unmapped refusal reason, should fall back to the generic message rather than an undefined one', () => {
+  const actual = toHttpRequestToolResult({
+    accountId: 'acct_1',
+    result: { ok: false, reason: 'some_future_reason' } as never,
+  });
+  expect(actual.ok).toBe(false);
+  expect((actual as { message?: string }).message).toBe('The request was not completed.');
+});

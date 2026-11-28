@@ -2,9 +2,9 @@
  * credit-balance — read-only view of a user's prepaid AI-credit balance for the
  * dashboard widget and the `GET /api/credits` endpoint.
  *
- * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the gate-driven periodic rollover live in `./credit-gate` (the imperative shell that
- * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
+ * This is the DISPLAY layer; it never mutates. The authoritative spend decision lives
+ * in `./credit-gate`, and a comped account's periodic rollover in the period sweep
+ * (`./wallet-funding-shell` rollDuePersonalRoots). Here we only mirror the gate's semantics for presentation:
  *   - free tier (a ONE-TIME starter grant, TIER_ALLOWANCE_REFILLS.free === false) is
  *     shown its stored remaining only, and no renewal date — nothing will ever be
  *     added to the monthly bucket again;
@@ -28,12 +28,15 @@
  * without reaching back into apps/web. See ./credit-emit.
  */
 
+import { toPersonalSubscriptionTier } from './subscription-tiers';
 import { db } from '@pagespace/db/db';
-import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
+import { creditHolds } from '@pagespace/db/schema/credits';
+import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
 import { allowanceRefills, isOneTimeAllowanceTier, starterGrantCents } from './credit-pricing';
+import { tierAllowanceCents } from './money-model';
 import { readGateAccount } from './gate-account';
 import { GateAccountNotFoundError } from './gate-account-not-found';
 import type { SubscriptionTier } from '../services/subscription-utils';
@@ -82,6 +85,14 @@ export interface CreditBalanceSummary {
   reserved: number;
 }
 
+/**
+ * A human's display allowance for an account never granted: derived from the list price
+ * (MON-2). The account-aware figure (0 for an agent) is upcomingStarterGrantCents.
+ */
+function allowanceFor(tier: SubscriptionTier): number {
+  return tierAllowanceCents(tier);
+}
+
 /** The unlimited/hidden summary used when prepaid billing is disabled. */
 function disabledSummary(): CreditBalanceSummary {
   return {
@@ -95,7 +106,7 @@ function disabledSummary(): CreditBalanceSummary {
 }
 
 /** The funded-balance columns both the display read and the routing gate need. */
-interface FundedBalanceRow {
+export interface FundedBalanceRow {
   monthlyRemainingCents: number;
   monthlyAllowanceCents: number;
   topupRemainingCents: number;
@@ -146,7 +157,17 @@ function needsStarterGrant(row: FundedBalanceRow | null, tier: SubscriptionTier)
   return row === null || pendingStarterGrant(row, tier);
 }
 
-function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier, starterGrant: number): number {
+/**
+ * `starterGrant` is the grant the gate will apply to a no-row or pending bare row. The two
+ * reads here pass the account-aware figure (upcomingStarterGrantCents: 0 for an agent); a
+ * caller that omits it (spend-resolution's leg read) pre-credits the human tier allowance,
+ * and the gate still grants an agent nothing (ADR 0007 Decision 9).
+ */
+export function spendableCentsFor(
+  row: FundedBalanceRow | null,
+  tier: SubscriptionTier,
+  starterGrant: number = allowanceFor(tier),
+): number {
   // No row yet: the gate lazy-inits with the starter grant on the first call.
   if (!row) return Math.max(0, starterGrant);
 
@@ -183,14 +204,14 @@ export async function readSpendableCents(
 ): Promise<number> {
   const [row] = await db
     .select({
-      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-      monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-      topupRemainingCents: creditBalances.topupRemainingCents,
-      debtCents: creditBalances.debtCents,
-      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+      monthlyRemainingCents: wallets.monthlyRemainingCents,
+      monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+      topupRemainingCents: wallets.topupRemainingCents,
+      debtCents: wallets.debtCents,
+      monthlyPeriodEnd: wallets.monthlyPeriodEnd,
     })
-    .from(creditBalances)
-    .where(eq(creditBalances.userId, userId))
+    .from(wallets)
+    .where(personalRootWalletOf(userId))
     .limit(1);
 
   const balance = row ?? null;
@@ -214,14 +235,14 @@ export async function getCreditBalance(
   const [rows, holdAgg] = await Promise.all([
     db
       .select({
-        monthlyRemainingCents: creditBalances.monthlyRemainingCents,
-        monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
-        topupRemainingCents: creditBalances.topupRemainingCents,
-        debtCents: creditBalances.debtCents,
-        monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+        monthlyRemainingCents: wallets.monthlyRemainingCents,
+        monthlyAllowanceCents: wallets.monthlyAllowanceCents,
+        topupRemainingCents: wallets.topupRemainingCents,
+        debtCents: wallets.debtCents,
+        monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
-      .from(creditBalances)
-      .where(eq(creditBalances.userId, userId))
+      .from(wallets)
+      .where(personalRootWalletOf(userId))
       .limit(1),
     db
       .select({ reserved: sql<number>`coalesce(sum(${creditHolds.estCents}), 0)` })
@@ -310,5 +331,5 @@ export async function resolveTier(userId: string): Promise<SubscriptionTier> {
     .from(users)
     .where(eq(users.id, userId))
     .limit(1);
-  return (rows[0]?.subscriptionTier as SubscriptionTier) ?? 'free';
+  return toPersonalSubscriptionTier(rows[0]?.subscriptionTier);
 }

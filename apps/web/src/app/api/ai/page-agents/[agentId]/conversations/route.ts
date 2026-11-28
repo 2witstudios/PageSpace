@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { createId, isCuid } from '@paralleldrive/cuid2';
-import { checkSessionAccess, createConversationInSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { checkSessionAccess, createConversationInSession, findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { getDriveSpend } from '@pagespace/lib/services/drive-wallet-service';
+import { listSpendChoices } from '@pagespace/lib/billing/spend-resolution';
+import { credentialRefusalFor } from '@pagespace/lib/permissions/wallet-access';
+import { walletCredentialOf, walletErrorResponse } from '@/lib/wallets/wallet-route';
 import {
   AgentNotInSessionDriveError,
   ConversationUnavailableError,
@@ -17,6 +21,7 @@ import {
   generateTitle,
 } from '@/lib/repositories/conversation-repository';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 // Auth options: GET is read-only, POST creates new conversations
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -62,10 +67,10 @@ export async function GET(
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'GET' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to view this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Get URL params for pagination
@@ -183,10 +188,10 @@ export async function POST(
     const canView = await canPrincipalViewPage(auth, agentId);
     if (!canView) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'page_agent_conversation', resourceId: agentId, details: { reason: 'no_view_permission', method: 'POST' }, riskScore: 0.5 });
-      return NextResponse.json(
+      return deniedResponse(actorFromAuth(auth), agentId, NextResponse.json(
         { error: 'Insufficient permissions to create conversations for this agent' },
         { status: 403 }
-      );
+      ));
     }
 
     // Parse request body (optional custom title, optional client-generated id)
@@ -216,7 +221,7 @@ export async function POST(
     const sessionId: string | null =
       workspaceIdFromBody ?? (typeof body.sessionId === 'string' && body.sessionId.length > 0 ? body.sessionId : null);
     if (sessionId !== null) {
-      const sessionAccess = await checkSessionAccess(auth.userId, sessionId);
+      const sessionAccess = await checkSessionAccess(actorFromAuth(auth), sessionId);
       if (!sessionAccess.allowed) {
         // Not found and denied answer THE SAME 404 — the [workspaceId] family's
         // policy (review #2261/5), applied here too since this route gates on
@@ -225,6 +230,27 @@ export async function POST(
         // never touch it.
         return workspaceNotFoundOrDenied(request, auth.userId, sessionId, sessionAccess.reason, 'page-agents/conversations');
       }
+    }
+
+    const hasInitialChoice = Object.prototype.hasOwnProperty.call(body, 'walletId');
+    let initialChosenWalletId: string | null | undefined;
+    if (hasInitialChoice) {
+      const refusal = credentialRefusalFor(walletCredentialOf(auth), 'set_conversation_source');
+      if (refusal) return walletErrorResponse({ ok: false, status: 403, ...refusal });
+      if (body.walletId !== null && (typeof body.walletId !== 'string' || !body.walletId.trim() || body.walletId.length > 64)) {
+        return walletErrorResponse({ ok: false, status: 400, code: 'invalid_request', message: 'walletId must be a wallet id or null' });
+      }
+      // SPEND-7: a bound thread spends in its workspace, not the agent's home.
+      const workspace = sessionId === null ? null : await findSessionRecord(sessionId);
+      if (sessionId !== null && !workspace) return NextResponse.json({ error: 'Workspace not found or access denied' }, { status: 404 });
+      const spendDriveId = sessionId === null ? agent.driveId : workspace?.driveId ?? null;
+      const preview = spendDriveId ? await getDriveSpend(actorFromAuth(auth), spendDriveId) : null;
+      if (preview && !preview.ok) return walletErrorResponse(preview);
+      const choices = preview?.ok ? preview.options : await listSpendChoices(auth.userId, null);
+      if (body.walletId !== null && !choices.some((choice) => choice.walletId === body.walletId)) {
+        return walletErrorResponse({ ok: false, status: 400, code: 'wallet_not_available', message: 'That wallet is not available in this conversation' });
+      }
+      initialChosenWalletId = body.walletId;
     }
 
     // Eagerly persist ownership so privacy filtering works immediately.
@@ -240,9 +266,10 @@ export async function POST(
       try {
         await createConversationInSession({
           conversationId,
-          userId: auth.userId,
+          actor: actorFromAuth(auth),
           agentPageId: agentId,
           workspaceId: sessionId,
+          ...(hasInitialChoice && { initialChosenWalletId }),
           ...(activeNodeId === null ? {} : { activeNodeId }),
         });
       } catch (error) {
@@ -265,7 +292,12 @@ export async function POST(
         throw error;
       }
     } else {
-      await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+      const created = hasInitialChoice
+        ? await conversationRepository.createConversation(conversationId, auth.userId, agentId, { initialChosenWalletId })
+        : await conversationRepository.createConversation(conversationId, auth.userId, agentId);
+      if (hasInitialChoice && created !== 'created') {
+        return NextResponse.json({ error: 'That conversation id is not available' }, { status: 409 });
+      }
     }
 
     const response = {

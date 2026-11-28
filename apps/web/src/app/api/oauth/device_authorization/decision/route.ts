@@ -23,6 +23,7 @@ import { resolveGrantAuthority } from '@/lib/auth/oauth-grant-authority';
 import { recordDeviceApproval, verifyDeviceUserCode } from '@/lib/repositories/oauth-repository';
 import { requireStepUpGrant } from '@/app/api/auth/mcp-tokens/step-up-gate';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
+import { actorFromAuth } from '@/lib/auth/request-actor';
 
 const bodySchema = z.object({
   userCode: z.string().min(1).max(32),
@@ -69,6 +70,7 @@ export async function POST(req: NextRequest) {
 
   const normalized = normalizeUserCode(body.userCode);
 
+  let authentication = auth.authentication ?? null;
   if (body.action === 'approve') {
     const lookup = await verifyDeviceUserCode({ userCode: normalized, now: new Date() });
     // An empty scope list is a legitimate device-authorization request
@@ -80,7 +82,7 @@ export async function POST(req: NextRequest) {
     if (lookup.outcome === 'ok' && lookup.scopes.length > 0) {
       const parsed = parseScopeList(lookup.scopes.join(' '));
       const authority =
-        parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, auth.userId));
+        parsed.ok && checkGrantAuthority(parsed.scopes, await resolveGrantAuthority(parsed.scopes, actorFromAuth(auth)));
 
       if (!authority || !authority.ok) {
         auditRequest(req, {
@@ -104,12 +106,14 @@ export async function POST(req: NextRequest) {
           missingReason: 'device_decision_missing_step_up',
           invalidReason: 'device_decision_step_up_invalid',
         });
-        if (gate) return gate;
+        if ('error' in gate) return gate.error;
+        authentication = gate.authentication;
       }
     }
   }
 
   const result = await recordDeviceApproval({
+    authentication,
     userCode: normalized,
     action: body.action,
     userId: auth.userId,

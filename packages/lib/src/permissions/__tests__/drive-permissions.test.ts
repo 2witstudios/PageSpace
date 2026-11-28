@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// The org sign-in gate (D-OW-45) reads policies through its own module; these tests are about the
+// resolvers behind it, so no org here sets a sign-in policy. Plain functions: a mock reset must not undo them.
+vi.mock('../actor-authentication', () => ({
+  checkActorDriveAuthentication: async () => ({ allowed: true }),
+  checkActorResourceAuthentication: async () => ({ allowed: true }),
+  filterDrivesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  filterResourcesForActor: async (_actor: unknown, ids: readonly string[]) => new Set(ids),
+  explainOrgAuthenticationDenial: async () => null,
+}));
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -65,6 +74,7 @@ import { getUserDrivePermissions, getUserDriveAccess } from '../permissions';
 import { db } from '@pagespace/db/db';
 import { isNotNull } from '@pagespace/db/operators';
 import { loggers } from '../../logging/logger-config';
+import { credentialActor } from '../access-actor';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,7 +129,7 @@ describe('getUserDrivePermissions', () => {
       stubDriveLookup([{ id: DRIVE, ownerId: USER }])
     );
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toEqual({
       hasAccess: true,
@@ -139,7 +149,7 @@ describe('getUserDrivePermissions', () => {
       driveWidePermissions: { canView: true, canEdit: true, canShare: false },
     });
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
     expect(result).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
   });
 
@@ -155,7 +165,7 @@ describe('getUserDrivePermissions', () => {
       driveWidePermissions: { canView: true, canEdit: false, canShare: false },
     });
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
     expect(result).toEqual({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: false });
   });
 
@@ -165,7 +175,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_1' }]));
     mockFetchCustomRolePermissions.mockResolvedValueOnce({ permissions: {}, driveWidePermissions: null });
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
     expect(result?.canEdit).toBe(false);
   });
 
@@ -175,7 +185,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER', customRoleId: 'role_stale' }]));
     mockFetchCustomRolePermissions.mockResolvedValueOnce(null);
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
     expect(result?.canEdit).toBe(false);
   });
 
@@ -184,7 +194,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'ADMIN', customRoleId: 'role_1' }]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
     expect(result?.canEdit).toBe(true);
     expect(mockFetchCustomRolePermissions).not.toHaveBeenCalled();
   });
@@ -194,7 +204,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'ADMIN' }]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toEqual({
       hasAccess: true,
@@ -210,7 +220,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER' }]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toEqual({
       hasAccess: true,
@@ -221,26 +231,34 @@ describe('getUserDrivePermissions', () => {
     });
   });
 
-  it('given a VIEWER role, returns { isMember: true, canEdit: false }', async () => {
+  it('given a role nobody classified (VIEWER), fails closed: no drive-level membership, a warning, no throw', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'VIEWER' }]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
-    expect(result).toEqual({
-      hasAccess: true,
-      isOwner: false,
-      isAdmin: false,
-      isMember: true,
-      canEdit: false,
-    });
+    expect(result).toBeNull();
+    expect(loggers.api.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Unclassified drive member role'),
+      expect.objectContaining({ role: 'VIEWER' }),
+    );
+    expect(loggers.api.error).not.toHaveBeenCalled();
+  });
+
+  it('D-OW-24 given a GUEST row (a redeemed page share link), returns no drive-level membership', async () => {
+    vi.mocked(db.select)
+      .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
+      .mockReturnValueOnce(stubMembershipLookup([{ role: 'GUEST' }]));
+
+    expect(await getUserDrivePermissions(credentialActor(USER, null), DRIVE)).toBeNull();
+    expect(loggers.api.warn).not.toHaveBeenCalled();
   });
 
   it('given no drive, returns null', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubDriveLookup([]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toBeNull();
   });
@@ -250,7 +268,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([]));
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toBeNull();
   });
@@ -258,7 +276,7 @@ describe('getUserDrivePermissions', () => {
   it('given silent: false, emits a debug log on drive lookup', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubDriveLookup([]));
 
-    await getUserDrivePermissions(USER, DRIVE, { silent: false });
+    await getUserDrivePermissions(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('[DRIVE_PERMISSIONS] Drive not found')
@@ -270,7 +288,7 @@ describe('getUserDrivePermissions', () => {
       stubDriveLookup([{ id: DRIVE, ownerId: USER }])
     );
 
-    await getUserDrivePermissions(USER, DRIVE, { silent: false });
+    await getUserDrivePermissions(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('[DRIVE_PERMISSIONS] User is drive owner')
@@ -282,7 +300,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'ADMIN' }]));
 
-    await getUserDrivePermissions(USER, DRIVE, { silent: false });
+    await getUserDrivePermissions(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('[DRIVE_PERMISSIONS] User is drive member with role: ADMIN')
@@ -294,7 +312,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([]));
 
-    await getUserDrivePermissions(USER, DRIVE, { silent: false });
+    await getUserDrivePermissions(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(loggers.api.debug).toHaveBeenCalledWith(
       expect.stringContaining('[DRIVE_PERMISSIONS] User has no drive-level membership')
@@ -306,7 +324,7 @@ describe('getUserDrivePermissions', () => {
       throw new Error('DB down');
     });
 
-    const result = await getUserDrivePermissions(USER, DRIVE);
+    const result = await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(result).toBeNull();
     expect(loggers.api.error).toHaveBeenCalledWith(
@@ -320,7 +338,7 @@ describe('getUserDrivePermissions', () => {
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
       .mockReturnValueOnce(stubMembershipLookup([{ role: 'MEMBER' }]));
 
-    await getUserDrivePermissions(USER, DRIVE);
+    await getUserDrivePermissions(credentialActor(USER, null), DRIVE);
 
     expect(vi.mocked(isNotNull)).toHaveBeenCalledWith('acceptedAt');
   });
@@ -338,7 +356,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
   it('given drive not found, logs and returns false', async () => {
     vi.mocked(db.select).mockReturnValueOnce(stubDriveLookup([]));
 
-    const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(result).toBe(false);
     expect(loggers.api.debug).toHaveBeenCalledWith(
@@ -351,7 +369,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
       stubDriveLookup([{ id: DRIVE, ownerId: USER }])
     );
 
-    const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(result).toBe(true);
     expect(loggers.api.debug).toHaveBeenCalledWith(
@@ -362,9 +380,9 @@ describe('getUserDriveAccess (silent: false branches)', () => {
   it('given accepted drive member, logs and returns true', async () => {
     vi.mocked(db.select)
       .mockReturnValueOnce(stubDriveLookup([{ id: DRIVE, ownerId: 'other-user' }]))
-      .mockReturnValueOnce(stubMembershipLookup([{ id: 'member-row' }]));
+      .mockReturnValueOnce(stubMembershipLookup([{ id: 'member-row', role: 'MEMBER' }]));
 
-    const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(result).toBe(true);
     expect(loggers.api.debug).toHaveBeenCalledWith(
@@ -378,7 +396,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
       .mockReturnValueOnce(stubMembershipLookup([]))
       .mockReturnValueOnce(stubLeftJoinLookup([{ id: 'page-perm-row' }]));
 
-    const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(result).toBe(true);
     expect(loggers.api.debug).toHaveBeenCalledWith(
@@ -392,7 +410,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
       .mockReturnValueOnce(stubMembershipLookup([]))
       .mockReturnValueOnce(stubLeftJoinLookup([]));
 
-    const result = await getUserDriveAccess(USER, DRIVE, { silent: false });
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE, { silent: false });
 
     expect(result).toBe(false);
     expect(loggers.api.debug).toHaveBeenCalledWith(
@@ -405,7 +423,7 @@ describe('getUserDriveAccess (silent: false branches)', () => {
       throw new Error('DB down');
     });
 
-    const result = await getUserDriveAccess(USER, DRIVE);
+    const result = await getUserDriveAccess(credentialActor(USER, null), DRIVE);
 
     expect(result).toBe(false);
     expect(loggers.api.error).toHaveBeenCalledWith(

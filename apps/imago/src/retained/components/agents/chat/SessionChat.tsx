@@ -1,0 +1,358 @@
+'use client';
+
+/**
+ * SessionChat — the ONE chat surface, rendered identically wherever an agent
+ * conversation appears.
+ *
+ * Presentation only; all state comes from `useAgentSessionChat`. `context`
+ * selects the message renderer, and nothing else changes: `'page'` gets the
+ * full `MessageRenderer` (via `ChatMessagesArea`, which also owns virtualization
+ * and its own undo dialog), `'console'` gets the `CompactMessageRenderer` (via
+ * the sidebar's `SidebarMessagesContent`, chrome-free and narrow-width safe).
+ *
+ * Self-contained by design (`@container`, `h-full min-w-0 min-h-0`, identity
+ * via props, no layout props) — which is exactly what lets the pane grid
+ * embed it unchanged.
+ *
+ * The presentation itself is `SessionChatView`, split out so the GLOBAL
+ * ASSISTANT (`AssistantSessionChat`, whose state comes from the other chat
+ * pipeline via `useAssistantSessionChat`) renders the identical surface — one
+ * view, two state hooks, per the "one chat surface" rule.
+ */
+import { useUiState, getUiState } from '@/ui/store/store';
+import { dispatch, transactions } from '@/ui/store/transactions';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { FileUIPart } from 'ai';
+import { Loader2 } from 'lucide-react';
+import { Button } from '@/retained/components/ui/button';
+import { ChatInput } from '@/retained/components/ai/chat/input';
+import { UndoAiChangesDialog } from '@/retained/components/ai/shared/chat';
+import { AskUserAnswerProvider } from '@/retained/components/ai/shared/chat/ask-user/AskUserAnswerContext';
+import { ChatErrorBanner } from '@/retained/components/ai/shared/chat/ChatErrorBanner';
+import { ChatMessagesArea } from '@/retained/components/ai/shared/chat/ChatMessagesArea';
+import { VoiceCallBarForConversation } from '@/retained/components/ai/voice/realtime';
+import { ImagoVoiceCallToggle } from './ImagoVoiceCallToggle';
+import { Conversation, ConversationScrollButton } from '@/retained/components/ai/ui/conversation';
+import { SidebarMessagesContent } from '@/retained/components/layout/right-sidebar/ai-assistant/SidebarChatTab';
+import { hasVisionCapability } from '@/retained/lib/ai/core/vision-models';
+import { useOpenPagePane } from '@/retained/lib/ai/shared/hooks/useOpenPagePane';
+import { useChatAttachments } from '@/retained-adapters/chat-attachments';
+import { useImageAttachments } from '@/retained/lib/ai/shared/hooks/useImageAttachments';
+import { useDraft } from '@/retained/hooks/useDraft';
+import { buildDraftKey } from '@/retained/lib/draft/draft';
+import { useSideQuestion, parseSideQuestionInput } from '@/retained/components/ai/btw/useSideQuestion';
+import { useConversationSpend } from '@/retained/hooks/useConversationSpend';
+import { SideQuestionCard } from '@/retained/components/ai/btw/SideQuestionCard';
+import type { AgentInfo } from '@/retained/types/agent';
+import { SpendSurfaceProvider } from '@/retained/components/wallets/SpendSurface';
+import { ComposerSpendStrip } from '@/retained/components/wallets/ComposerSpendStrip';
+import { SpendStrip } from '@/ui/chat/spend-strip/spend-strip';
+import { useAgentSessionChat, type UseAgentSessionChatReturn } from './useAgentSessionChat';
+
+export interface SessionChatProps {
+  /** This conversation's pane-hosting session — null (the default) for a plain, session-less conversation. See `SessionChatViewProps.sessionId`. */
+  sessionId?: string | null;
+  /** The fixed agent this conversation belongs to. */
+  agent: AgentInfo;
+  /** The thread — its session (and sandbox) resolves server-side from the row's binding. */
+  conversationId: string;
+  /** Which renderer/chrome to use — the only thing that differs between surfaces. */
+  context: 'page' | 'console';
+  /** Read-only viewers get history but no send/edit/delete/retry affordances. */
+  isReadOnly?: boolean;
+  /** A native draft's first accepted send, after its conversation was created. */
+  initialSend?: { id: string; text: string; files?: FileUIPart[] };
+  onInitialSend?: (dispatched: boolean) => void;
+  /** Imago's column (IMC-2.2): the compact composer row, a Mention button and its own placeholder. */
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
+}
+
+export default function SessionChat({
+  sessionId = null,
+  agent,
+  conversationId,
+  context,
+  isReadOnly = false,
+  initialSend,
+  onInitialSend,
+  imagoComposer,
+}: SessionChatProps) {
+  const chat = useAgentSessionChat({ agent, conversationId });
+  const firstSend = useRef<string | null>(null);
+  useEffect(() => {
+    if (!initialSend || firstSend.current === initialSend.id || isReadOnly) return;
+    firstSend.current = initialSend.id;
+    void chat.handleSend(initialSend.text, initialSend.files).then(
+      dispatched => onInitialSend?.(dispatched),
+      () => onInitialSend?.(false),
+    );
+  }, [initialSend, chat, isReadOnly, onInitialSend]);
+  return (
+    <SessionChatView
+      sessionId={sessionId}
+      conversationId={conversationId}
+      chat={chat}
+      // The AGENT's own drive — deliberately not the pane-hosting session's,
+      // which can legitimately be a different one. The server resolves this
+      // turn's command chips against the agent page's `page.driveId`, so any
+      // other scope would offer commands that fail as `not_found` on send.
+      agentId={agent.id}
+      spendScope={{ driveId: agent.driveId, isGlobal: false }}
+      commandDriveId={agent.driveId}
+      name={agent.title}
+      visionModel={agent.aiModel || ''}
+      context={context}
+      isReadOnly={isReadOnly}
+      imagoComposer={imagoComposer}
+    />
+  );
+}
+
+export interface SessionChatViewProps {
+  /**
+   * This conversation's pane-hosting session, or null for a plain
+   * session-less conversation — used only to react to `open_page_pane` tool
+   * calls by opening a pane in THIS session's grid (`useOpenPagePane`, itself
+   * a no-op when null). Not part of `chat`'s own state since it's a fact
+   * about where this surface is mounted, not about the conversation itself.
+   */
+  sessionId: string | null;
+  /** This conversation's own id — see `useOpenPagePane`'s `excludeTargetId` doc. */
+  conversationId: string;
+  /** The chat's whole state — from either pipeline's hook. */
+  chat: UseAgentSessionChatReturn;
+  /** The agent page this conversation belongs to: the voice call's target. Absent on the global assistant. */
+  agentId?: string;
+  /** The counterpart's display name (composer placeholder, compact-renderer label). */
+  name: string;
+  /** The model whose vision capability gates image attachment — '' = none. */
+  visionModel: string;
+  /**
+   * Drive scope for the `/` command picker — the drive whose commands the
+   * SERVER will resolve this conversation's chips against. `null` when the
+   * turn resolves no drive at all (a driveless global-assistant session on a
+   * non-drive route), which is correct: picker and execution then agree that
+   * there are none. Required, not optional, so a future caller of this shared
+   * view cannot silently reintroduce the unscoped-picker bug.
+   */
+  commandDriveId: string | null;
+  spendScope?: { driveId: string | null; isGlobal: boolean };
+  context: 'page' | 'console';
+  isReadOnly?: boolean;
+  imagoComposer?: { readonly placeholder: string; readonly aboveComposer?: React.ReactNode; readonly ownsCreditsAlert?: boolean };
+}
+
+export function SessionChatView({
+  sessionId,
+  conversationId,
+  chat,
+  agentId,
+  name,
+  visionModel,
+  commandDriveId,
+  spendScope,
+  context,
+  isReadOnly = false,
+  imagoComposer,
+}: SessionChatViewProps) {
+  // Imago's column keeps one draft and one attachment set across navigation; every other
+  // surface (a Console pane, several side by side) owns its own, as classic's composer does.
+  const sharedDraft = useUiState(state => state.resources.chatDraft);
+  const setSharedDraft = useCallback((next: string | ((current: string) => string)) => {
+    dispatch(transactions.setChatDraft, typeof next === 'function' ? next(getUiState().resources.chatDraft) : next);
+  }, []);
+  // Keyed by conversation, so it outlives the pane's History and Settings tabs and a session switch.
+  const { draft: ownDraft, setDraft: setOwnDraft } = useDraft(imagoComposer ? '' : buildDraftKey('ai', conversationId));
+  const input = imagoComposer ? sharedDraft : ownDraft;
+  const setInput = imagoComposer ? setSharedDraft : setOwnDraft;
+  const sharedAttachments = useChatAttachments();
+  const ownAttachments = useImageAttachments();
+  const { attachments, addFiles, removeFile, getFilesForSend } = imagoComposer ? sharedAttachments : ownAttachments;
+  const [showError, setShowError] = useState(true);
+  const [undoMessageId, setUndoMessageId] = useState<string | null>(null);
+  const sideQuestion = useSideQuestion(conversationId);
+
+  useOpenPagePane({ sessionId, conversationId, messages: chat.messages });
+
+  // JOURNEYS-2: the first send in a drive (multi-source) context waits for a RESOLVED,
+  // displayed source — an unresolved preview must not charge an undisclosed wallet. The
+  // strip above the composer shows the loading/retry state; SWR dedupes this read.
+  const spendPreview = useConversationSpend(
+    spendScope ? conversationId : null,
+    { driveId: spendScope?.driveId ?? null, isGlobal: spendScope?.isGlobal ?? false },
+  );
+  const sendPausedBySpend = Boolean(spendScope?.driveId) && spendPreview.spend === null;
+
+  const handleSendClick = useCallback(async () => {
+    const text = input;
+    const files = getFilesForSend();
+    if (!text.trim() && files.length === 0) return;
+    if (sendPausedBySpend) return; // the strip shows loading/retry; no reservation, no charge
+    const sentIds = attachments.filter(attachment => !attachment.processing && attachment.dataUrl).map(attachment => attachment.id);
+    // Clear immediately — typing during the handoff wait must not merge into
+    // the old draft; restore only if the composer is still empty on refusal.
+    setInput('');
+    const dispatched = await (files.length ? chat.handleSend(text, files) : chat.handleSend(text));
+    if (dispatched) sentIds.forEach(id => removeFile(id));
+    if (!dispatched) {
+      setInput((current) => (current === '' ? text : current));
+    }
+  }, [input, chat, attachments, getFilesForSend, removeFile, setInput, sendPausedBySpend]);
+
+  const handleSideQuestion = useCallback(() => {
+    const question = parseSideQuestionInput(input) ?? '';
+    if (!question) return;
+    setInput('');
+    void sideQuestion.ask(question);
+  }, [input, sideQuestion, setInput]);
+
+  // Queue-send (issue #2676): the composer enqueues during a stream; the
+  // composer text clears only when the enqueue succeeded (full queue, empty
+  // text → nothing to clear). Read-only surfaces never offer it.
+  const handleEnqueue = useCallback(() => {
+    if (chat.enqueueQueuedSend(input)) setInput('');
+  }, [input, chat, setInput]);
+
+  const handleUndoSuccess = useCallback(async () => {
+    setUndoMessageId(null);
+    await chat.reloadConversation();
+  }, [chat]);
+
+  const remoteStreamingUser = !chat.displayIsStreaming
+    ? chat.remoteStreams.find((s) => !s.isOwn)?.triggeredBy ?? null
+    : null;
+
+  const showLoading =
+    chat.isMessagesLoading && chat.messages.length === 0 && chat.remoteStreams.length === 0;
+
+  return (
+    // isReadOnly viewers get no answer plumbing at all — same as rendering
+    // outside a chat surface entirely — so AskUserQuestionCard's options and
+    // Submit stay disabled instead of letting a viewer attempt a 403'd resume.
+    <SpendSurfaceProvider conversationId={spendScope ? conversationId : null} driveId={spendScope?.driveId ?? null} isGlobal={spendScope?.isGlobal ?? false}>
+    <AskUserAnswerProvider value={isReadOnly ? null : chat.askUserAnswering}>
+    <div
+      data-testid="session-chat"
+      className="@container flex h-full min-w-0 min-h-0 flex-col bg-background"
+    >
+      {imagoComposer && <VoiceCallBarForConversation conversationId={conversationId} assistantName={name} />}
+      {chat.hasLoadError && (
+        <div className="flex items-center justify-between gap-2 border-b border-destructive/20 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          <span className="truncate">Failed to load messages</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 shrink-0 px-2 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+            onClick={() => void chat.reloadConversation()}
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+
+      <div className="min-h-0 min-w-0 flex-1 overflow-hidden flex flex-col">
+        {showLoading ? (
+          <div data-testid="session-chat-loading" className="flex h-full items-center justify-center">
+            <Loader2 className="size-4 animate-spin text-muted-foreground" />
+          </div>
+        ) : context === 'page' && !imagoComposer ? (
+          <ChatMessagesArea
+            messages={chat.messages}
+            isLoading={chat.isMessagesLoading}
+            isStreaming={chat.displayIsStreaming}
+            onEdit={!isReadOnly ? chat.handleEdit : undefined}
+            onDelete={!isReadOnly ? chat.handleDelete : undefined}
+            onRetry={!isReadOnly ? chat.handleRetry : undefined}
+            lastAssistantMessageId={chat.lastAssistantMessageId}
+            lastUserMessageId={chat.lastUserMessageId}
+            isReadOnly={isReadOnly}
+            onUndoSuccess={() => void chat.reloadConversation()}
+            onScrollNearTop={chat.handleScrollNearTop}
+            isLoadingOlder={chat.isLoadingOlder}
+            remoteStreams={chat.remoteStreams}
+          />
+        ) : (
+          <Conversation className="h-full">
+            <SidebarMessagesContent
+              messages={chat.messages}
+              assistantName={name}
+              contextLabel={null}
+              handleEdit={!isReadOnly ? chat.handleEdit : undefined}
+              handleDelete={!isReadOnly ? chat.handleDelete : undefined}
+              handleRetry={!isReadOnly ? chat.handleRetry : undefined}
+              handleUndoFromHere={(messageId) => setUndoMessageId(messageId)}
+              lastAssistantMessageId={chat.lastAssistantMessageId}
+              lastUserMessageId={chat.lastUserMessageId}
+              displayIsStreaming={chat.displayIsStreaming}
+              remoteStreams={chat.remoteStreams}
+              onScrollNearTop={chat.handleScrollNearTop}
+              isLoadingOlder={chat.isLoadingOlder}
+              hasMoreOlder={chat.hasMoreOlder}
+            />
+            <ConversationScrollButton className="bottom-6 z-10" />
+          </Conversation>
+        )}
+      </div>
+
+      <div className="shrink-0 space-y-1.5 border-t border-border p-2">
+        {sideQuestion.state && <SideQuestionCard state={sideQuestion.state} onDismiss={sideQuestion.dismiss} />}
+        <ChatErrorBanner
+          cause={chat.errorCause}
+          show={showError && !(imagoComposer?.ownsCreditsAlert === true && chat.errorCause?.code === 'out_of_credits')}
+          onClearError={() => {
+            setShowError(false);
+            chat.dismissError();
+          }}
+        />
+        {imagoComposer?.aboveComposer}
+        {spendScope && !isReadOnly && (imagoComposer
+          ? <SpendStrip conversationId={conversationId} {...spendScope} />
+          : <ComposerSpendStrip conversationId={conversationId} {...spendScope} hasMessages={chat.messages.length > 0} persistentBelowLg />)}
+        <ChatInput
+          value={input}
+          onChange={setInput}
+          onSend={() => void handleSendClick()}
+          onSideQuestion={handleSideQuestion}
+          onStop={() => void chat.handleStop()}
+          isStreaming={chat.displayIsStreaming}
+          isStopping={chat.isStopping}
+          disabled={isReadOnly}
+          sendDisabled={sendPausedBySpend}
+          placeholder={isReadOnly ? 'View only' : imagoComposer?.placeholder ?? `Message ${name}...`}
+          inputLabel={imagoComposer ? `Message ${name}` : undefined}
+          hideModelSelector
+          variant={context === 'console' || imagoComposer ? 'sidebar' : 'main'}
+          showMention={imagoComposer !== undefined && !isReadOnly}
+          voiceCall={imagoComposer !== undefined && !isReadOnly && agentId !== undefined ? <ImagoVoiceCallToggle agentId={agentId} conversationId={conversationId} /> : undefined}
+          hasVision={hasVisionCapability(visionModel)}
+          attachments={attachments}
+          onAddFiles={addFiles}
+          onRemoveFile={removeFile}
+          driveId={commandDriveId ?? undefined}
+          crossDrive
+          commandDriveId={commandDriveId ?? undefined}
+          remoteStreamingUser={remoteStreamingUser}
+          queuedMessages={chat.queuedSends}
+          onEnqueue={isReadOnly ? undefined : handleEnqueue}
+          onRemoveQueued={chat.removeQueuedSend}
+          onClearQueued={chat.clearQueuedSends}
+          onCancelQueue={chat.cancelQueuedDrain}
+          isQueueFull={chat.isQueueFull}
+        />
+      </div>
+
+      {/* Only the console path renders this itself — ChatMessagesArea (page
+          context) already owns its own UndoAiChangesDialog internally. */}
+      {context === 'console' && (
+        <UndoAiChangesDialog
+          open={!!undoMessageId}
+          onOpenChange={(open) => !open && setUndoMessageId(null)}
+          messageId={undoMessageId}
+          onSuccess={() => void handleUndoSuccess()}
+        />
+      )}
+    </div>
+    </AskUserAnswerProvider>
+    </SpendSurfaceProvider>
+  );
+}

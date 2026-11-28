@@ -61,9 +61,12 @@
  * to ask again for less.
  */
 
+import { parseVerifiedAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
+import { REALTIME_MODEL_VENDOR } from './session';
+import { PERSONAL_SPEND, conversationSpend, resolvedSpend } from '@pagespace/lib/billing/spend-target';
 import {
   clipToolName,
   formatInvalidParametersError,
@@ -72,7 +75,9 @@ import {
 import type {
   VoiceAssistant,
   VoiceLocationContext,
+  VoiceToolSpend,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
+import { credentialActor, type AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * How much of one tool result a call can afford to keep.
@@ -222,10 +227,21 @@ const safeStringify = (value: unknown): string => {
   }
 };
 
+/**
+ * The actor a voice bridge hop runs as: the named user with the ceremony evidence of the session that started the
+ * call, carried on every hop of the HMAC-signed bridge (lib realtime/voice-bridge-contract) and re-parsed here, so an
+ * org's sign-in policy (SEC-2/3) applies to a spoken turn exactly as to a typed one. Missing or malformed evidence is
+ * none, which every sign-in policy refuses.
+ */
+export const voiceBridgeActor = (userId: string, authentication: unknown): AccessActor =>
+  credentialActor(userId, parseVerifiedAuthentication(authentication, Date.now()));
+
 export type RealtimeToolDispatchRequest = {
   readonly name: string;
   readonly argumentsJson: string;
   readonly userId: string;
+  /** The calling credential's ceremony evidence as the bridge carried it; re-parsed, never trusted as shaped (SEC-2/3). */
+  readonly authentication?: unknown;
   readonly conversationId?: string;
   readonly timezone?: string;
   readonly locationContext?: VoiceLocationContext;
@@ -236,6 +252,11 @@ export type RealtimeToolDispatchRequest = {
    * and for an unbound call, which act as the user.
    */
   readonly assistant?: VoiceAssistant;
+  /**
+   * The source the call spends (the drive the web tier resolved and the source its opening
+   * hold pinned). Absent for a call on the caller's personal credits.
+   */
+  readonly spend?: VoiceToolSpend;
 };
 
 /**
@@ -292,6 +313,7 @@ export const buildVoiceToolContext = (
   model: string,
 ): ToolExecutionContext => ({
   userId: request.userId,
+  accessActor: voiceBridgeActor(request.userId, request.authentication),
   ...(request.conversationId === undefined ? {} : { conversationId: request.conversationId }),
   ...(request.timezone === undefined ? {} : { timezone: request.timezone }),
   ...(request.locationContext === undefined
@@ -307,7 +329,15 @@ export const buildVoiceToolContext = (
         },
         enabledTools: request.assistant.enabledTools,
       }),
-  aiProvider: 'openai_voice',
+  // The call's own source, as a typed turn hands its tools the turn's (SPEND-1): a tool
+  // that gates its own model call (generate_image) spends where the call spends, never
+  // the person's credits inside a drive.
+  creditSpend: {
+    spend: request.spend === undefined
+      ? PERSONAL_SPEND
+      : resolvedSpend(conversationSpend(request.spend.driveId, request.conversationId), request.spend.chosen ?? undefined, request.spend.fallbackFromWalletId),
+  },
+  aiProvider: REALTIME_MODEL_VENDOR,
   aiModel: model,
   requestOrigin: 'user',
   agentCallDepth: 0,

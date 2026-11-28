@@ -96,7 +96,7 @@ describe('GET /api/agent-workspaces/[workspaceId]', () => {
     // Shell controls for viewer-role members that every enforcement point
     // then 403'd.
     expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith({
-      userId: AUTH_USER.userId,
+      actor: expect.objectContaining({ userId: AUTH_USER.userId }),
       driveId: ROW.driveId,
       ownerId: ROW.ownerId,
     });
@@ -134,7 +134,7 @@ describe('GET /api/agent-workspaces/[workspaceId]', () => {
     });
     // The SAME check the DELETE is gated by, asked about the same session — not
     // a second rule that could drift from it.
-    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith(AUTH_USER.userId, SESSION_ID);
+    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: AUTH_USER.userId }), SESSION_ID);
   });
 
   it('given a never-provisioned session (no row), should answer { session: null } with 200 — NOT 404', async () => {
@@ -161,7 +161,7 @@ describe('POST /api/agent-workspaces/[workspaceId]', () => {
     const response = await post();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ session: { workspaceId: SESSION_ID, dto: true } });
-    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(ROW, 'user-1');
+    expect(mockProvisionSessionSandbox).toHaveBeenCalledWith(ROW, expect.objectContaining({ userId: 'user-1' }));
   });
 
   it('given no such session, should 404 and never provision — this route mints nothing', async () => {
@@ -246,7 +246,7 @@ describe('DELETE /api/agent-workspaces/[workspaceId]', () => {
 
   it('should gate on the END access check — the one WITHOUT the capability gate', async () => {
     await del();
-    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith('user-1', SESSION_ID);
+    expect(mockCheckSessionEndAccess).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user-1' }), SESSION_ID);
     expect(mockCheckSessionAccess).not.toHaveBeenCalled();
   });
 

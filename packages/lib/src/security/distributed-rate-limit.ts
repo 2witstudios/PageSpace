@@ -972,6 +972,15 @@ export const DISTRIBUTED_RATE_LIMITS = {
     blockDurationMs: 60 * 60 * 1000,
     progressiveDelay: false,
   },
+  // Public content report page (/api/report), keyed by IP. Generous enough for a
+  // visitor reporting several pages of one site, tight enough that a script cannot
+  // flood the review queue or the abuse inbox (every report sends an alert).
+  CONTENT_REPORT: {
+    maxAttempts: 10,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
   MARKETING_CONTACT_FORM: {
     maxAttempts: 5,
     windowMs: 60 * 60 * 1000,

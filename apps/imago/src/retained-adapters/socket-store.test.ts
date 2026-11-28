@@ -1,0 +1,20 @@
+import { expect, it, vi } from 'vitest';
+import { useSocketStore } from '@/retained/stores/useSocketStore';
+const client = vi.hoisted(() => ({ socket: vi.fn() }));
+vi.mock('@/realtime/realtime-client', () => ({ getBrowserRealtimeClient: () => client }));
+const connection = () => ({ connected: false, on: vi.fn(), off: vi.fn(), disconnect: vi.fn() });
+it('shares the host socket, binds status once, and removes obsolete listeners without disconnecting it', async () => {
+  const first = connection(); const second = connection();
+  client.socket.mockReturnValue(first);
+  await useSocketStore.getState().connect();
+  await useSocketStore.getState().connect(true);
+  expect(first.on).toHaveBeenCalledTimes(2);
+  expect(useSocketStore.getState().getSocket()).toBe(first);
+  client.socket.mockReturnValue(second);
+  await useSocketStore.getState().connect();
+  expect(first.off).toHaveBeenCalledTimes(2);
+  expect(second.on).toHaveBeenCalledTimes(2);
+  useSocketStore.getState().disconnect();
+  expect(first.disconnect).not.toHaveBeenCalled();
+  expect(second.disconnect).not.toHaveBeenCalled();
+});

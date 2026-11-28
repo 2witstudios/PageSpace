@@ -11,7 +11,10 @@ import { cacheRouter } from './api/serve';
 import { QueueManager } from './workers/queue-manager';
 import { ingestRouter } from './api/ingest';
 import { verifyRouter } from './api/verify';
+import { storeOriginalRouter } from './api/store-original';
 import avatarRouter from './api/avatar';
+import orgAvatarRouter from './api/org-avatar';
+import driveAvatarRouter from './api/drive-avatar';
 import { deleteFileRouter } from './api/delete-file';
 import { erasureRouter } from './api/erasure';
 import { appBuildRouter } from './api/app-build';
@@ -211,11 +214,19 @@ app.use('/api/ingest', authenticateService, requireScope('files:ingest'), requir
 // conversation- or page-bound files:write token; the handler validates the binding
 // and re-hashes the stored object supplied by the trusted web service.
 app.use('/api/verify', authenticateService, requireScope('files:write'), verifyRouter);
+// Server-produced originals (an agent's sandbox file filed into the drive): the
+// bytes are stored through ContentStore.saveOriginal so at-rest encryption
+// applies. Page-bound to the NEW page's id, minted after a parent edit check.
+app.use('/api/originals', authenticateService, requireScope('files:write'), requirePageBinding(), storeOriginalRouter);
 app.use('/api/avatar', authenticateService, requireScope('avatars:write'), avatarRouter);
 // Public avatar reads — no auth required; avatars are public images.
 // Web app proxies GET /api/avatar/:userId/:filename here when it doesn't have
 // direct volume access (e.g. Fly.io deployments).
 app.use('/avatars', avatarRouter);
+// ORG-1: org avatars, written only with a token bound to the org (no public read here; the web app serves them to members).
+app.use('/api/org-avatar', authenticateService, requireScope('org-avatars:write'), orgAvatarRouter);
+// Drive avatars, written only with a token bound to the drive (the web app serves them to members).
+app.use('/api/drive-avatar', authenticateService, requireScope('drive-avatars:write'), driveAvatarRouter);
 app.use('/api/files', authenticateService, requireScope('files:delete'), deleteFileRouter);
 app.use('/api/erasure', authenticateService, requireScope('erasure:enqueue'), erasureRouter);
 app.use('/api/app-hosting', authenticateService, requireScope('app-hosting:publish'), appBuildRouter);

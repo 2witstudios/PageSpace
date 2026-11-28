@@ -3,6 +3,8 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrin
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { checkDriveAccess, listDriveMembers, getDriveOwnerAsMember } from '@pagespace/lib/services/drive-member-service';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
+import { listDrivePageLinkGuests } from '@pagespace/lib/permissions/drive-member-labels';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -13,7 +15,6 @@ export async function GET(
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_READ);
     if (isAuthError(auth)) return auth.error;
-    const userId = auth.userId;
 
     const { driveId } = await context.params;
 
@@ -22,14 +23,14 @@ export async function GET(
     if (scopeError) return scopeError;
 
     // Check if user has access to this drive
-    const access = await checkDriveAccess(driveId, userId);
+    const access = await checkDriveAccess(driveId, actorFromAuth(auth));
 
     if (!access.drive) {
-      return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Drive not found' }, { status: 404 }));
     }
 
     if (!access.isOwner && !access.isMember) {
-      return NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'You must be a drive member to view members' }, { status: 403 }));
     }
 
     // Get all members with their profiles and permission counts. The owner
@@ -52,10 +53,14 @@ export async function GET(
     const pendingInvites = canSeePending
       ? await driveInviteRepository.findUnconsumedInvitesByDrive(driveId)
       : [];
+    // D-OW-24 page-link guests are not members; the lead and admins see them listed apart
+    // (UI-5), by name with the pages they hold. Always an array, like pendingInvites.
+    const guests = canSeePending ? await listDrivePageLinkGuests(driveId) : [];
 
     return NextResponse.json({
       members,
       pendingInvites,
+      guests,
       currentUserRole: access.isOwner ? 'OWNER' : (access.isAdmin ? 'ADMIN' : 'MEMBER')
     });
   } catch (error) {

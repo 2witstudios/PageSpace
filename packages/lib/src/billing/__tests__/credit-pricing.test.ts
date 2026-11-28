@@ -131,17 +131,17 @@ describe('realtime session constants', () => {
 
 describe('TIER_ALLOWANCE_REFILLS', () => {
   it('names every tier, and only the free tier is a one-time (non-refilling) grant', async () => {
-    const { TIER_ALLOWANCE_REFILLS, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual(Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS).sort());
+    const { TIER_ALLOWANCE_REFILLS } = await import('../credit-pricing');
+    const { TIERS } = await import('../subscription-tiers');
+    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual([...TIERS].sort());
     expect(TIER_ALLOWANCE_REFILLS.free).toBe(false);
     expect(TIER_ALLOWANCE_REFILLS.pro).toBe(true);
-    expect(TIER_ALLOWANCE_REFILLS.founder).toBe(true);
     expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
   });
 
-  it('free starter grant is $5 of credit value by default', async () => {
-    const { TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(TIER_MONTHLY_ALLOWANCE_CENTS.free).toBe(500);
+  it('MON-1 (partial) credit-pricing no longer tabulates an allowance — the money model derives it', async () => {
+    const pricing: Record<string, unknown> = await import('../credit-pricing');
+    expect(pricing.TIER_MONTHLY_ALLOWANCE_CENTS).toBeUndefined();
   });
 });
 
@@ -150,7 +150,7 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
     const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
     expect(allowanceRefills('free')).toBe(false);
     expect(isOneTimeAllowanceTier('free')).toBe(true);
-    for (const tier of ['pro', 'founder', 'business']) {
+    for (const tier of ['pro', 'business']) {
       expect(allowanceRefills(tier)).toBe(true);
       expect(isOneTimeAllowanceTier(tier)).toBe(false);
     }
@@ -165,6 +165,13 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
   });
 });
 
+// The no-invoice allowance per tier (MON-2): money-model's tierAllowanceCents is the one
+// definition, so these tests read it rather than a tier table.
+async function tierAllowances(): Promise<{ free: number; pro: number; business: number }> {
+  const { tierAllowanceCents } = await import('../money-model');
+  return { free: tierAllowanceCents('free'), pro: tierAllowanceCents('pro'), business: tierAllowanceCents('business') };
+}
+
 describe('starterGrantCents (ADR 0007 Decision 9 — no starter grant for agents)', () => {
   it('is 0 for an agent on the free tier', async () => {
     const { starterGrantCents } = await import('../credit-pricing');
@@ -172,56 +179,64 @@ describe('starterGrantCents (ADR 0007 Decision 9 — no starter grant for agents
   });
 
   it('is 0 for an agent on EVERY tier, including an unknown tier', async () => {
-    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    for (const tier of Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS)) {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    for (const tier of Object.keys(allowances)) {
       expect(starterGrantCents({ tier, accountType: 'agent' })).toBe(0);
     }
     expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'agent' })).toBe(0);
   });
 
   it('is the free allowance for a human on the free tier', async () => {
-    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(allowances.free);
     expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(500);
   });
 
   it('is the tier allowance for a human on a known tier (the gate’s existing lazy-init amount)', async () => {
-    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(starterGrantCents({ tier: 'pro', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
-    expect(starterGrantCents({ tier: 'business', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.business);
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'pro', accountType: 'human' })).toBe(allowances.pro);
+    expect(starterGrantCents({ tier: 'business', accountType: 'human' })).toBe(allowances.business);
   });
 
   it('falls back to the free allowance for a human on an unknown tier (matches the gate’s `?? free`)', async () => {
-    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'human' })).toBe(allowances.free);
   });
 
   it('does not pick up prototype keys as tiers', async () => {
-    const { starterGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(allowances.free);
   });
 });
 
 describe('allowanceGrantCents (Phase 1b — ONE allowance function for every grant)', () => {
   it('given an agent, should grant 0 for both a starter grant and a refill, on every tier', async () => {
-    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
     for (const kind of ['starter', 'refill'] as const) {
-      for (const tier of [...Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS), 'legacy-tier']) {
+      for (const tier of [...Object.keys(allowances), 'legacy-tier']) {
         expect(allowanceGrantCents({ tier, accountType: 'agent', kind })).toBe(0);
       }
     }
   });
 
   it('given a human refill on a known tier, should grant that tier allowance', async () => {
-    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(allowanceGrantCents({ tier: 'pro', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.pro);
-    expect(allowanceGrantCents({ tier: 'founder', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.founder);
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(allowanceGrantCents({ tier: 'pro', accountType: 'human', kind: 'refill' })).toBe(allowances.pro);
+    expect(allowanceGrantCents({ tier: 'business', accountType: 'human', kind: 'refill' })).toBe(allowances.business);
   });
 
   it('given a human on an unknown or prototype-key tier, should fall back to the free allowance (both kinds)', async () => {
-    const { allowanceGrantCents, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
-    expect(allowanceGrantCents({ tier: 'legacy-tier', accountType: 'human', kind: 'refill' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
-    expect(allowanceGrantCents({ tier: 'toString', accountType: 'human', kind: 'starter' })).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(allowanceGrantCents({ tier: 'legacy-tier', accountType: 'human', kind: 'refill' })).toBe(allowances.free);
+    expect(allowanceGrantCents({ tier: 'toString', accountType: 'human', kind: 'starter' })).toBe(allowances.free);
   });
 
   it('given any input, starterGrantCents should equal the starter kind (it delegates)', async () => {

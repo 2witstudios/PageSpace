@@ -21,7 +21,10 @@ import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@page
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,
+  type InviteKind,
 } from '@/lib/auth/native-invite-acceptance';
+import { autoJoinVerifiedDomainAfterSignIn } from '@/lib/orgs/domain-auto-join';
+import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 
 const verifySchema = z.object({
   email: z.email(),
@@ -194,7 +197,10 @@ export async function POST(req: Request) {
     const { platform, deviceId, deviceName: deviceNameField } = validation.data;
 
     // Create session
+    // D-OW-45: the ceremony this route just verified, recorded on every credential it mints.
+    const authentication = ceremonyAuthentication({ method: 'passkey', userVerified: result.data.userVerified }, Date.now());
     const sessionToken = await sessionService.createSession({
+      authentication,
       userId,
       type: 'user',
       scopes: ['*'],
@@ -221,7 +227,8 @@ export async function POST(req: Request) {
     // ?inviteError=<code> so the user can act on it.
     let inviteAcceptedDriveId: string | null = null;
     let inviteAcceptedPageId: string | null = null;
-    let inviteAcceptedKind: 'drive' | 'page' | 'connection' | null = null;
+    let inviteAcceptedKind: InviteKind | null = null;
+    let orgLandingPath: string | null = null;
     let inviteAcceptError: string | null = null;
     if (validation.data.inviteToken) {
       const inviteResult = await consumeAnyInviteIfPresent({
@@ -234,6 +241,7 @@ export async function POST(req: Request) {
       inviteAcceptedDriveId = inviteResult.invitedDriveId;
       inviteAcceptedPageId = inviteResult.invitedPageId;
       inviteAcceptedKind = inviteResult.kind;
+      orgLandingPath = inviteResult.orgLandingPath;
       if (inviteResult.inviteError) {
         inviteAcceptError = inviteResult.inviteError;
       }
@@ -278,10 +286,14 @@ export async function POST(req: Request) {
       }
     }
 
+    // SEC-1: a new account on an org's verified email domain joins it (seat permitting). Never throws.
+    await autoJoinVerifiedDomainAfterSignIn(userId);
+
     let deviceTokenValue: string | undefined;
     if (deviceId) {
       try {
         deviceTokenValue = await createDeviceToken({
+          authentication,
           userId, deviceId,
           tokenVersion: 1, // verifySignupRegistration creates users with tokenVersion: 1
           platform: platform || 'web',
@@ -331,7 +343,10 @@ export async function POST(req: Request) {
     // user land on the dashboard but with an inviteError query param so the
     // UI can surface what went wrong.
     let redirectUrl: string;
-    if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
+    if (orgLandingPath) {
+      // ORG-3: the org hub once joined; the invite page (which says why) when refused.
+      redirectUrl = orgLandingPath;
+    } else if (inviteAcceptedKind === 'page' && inviteAcceptedDriveId && inviteAcceptedPageId) {
       redirectUrl = `/dashboard/${inviteAcceptedDriveId}/pages/${inviteAcceptedPageId}?welcome=true&invited=1`;
     } else if (inviteAcceptedKind === 'connection') {
       redirectUrl = `/dashboard/connections?welcome=true&connection_requested=1`;

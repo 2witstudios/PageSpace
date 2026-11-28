@@ -38,11 +38,14 @@ import { canPrincipalViewPage, type AuthResult } from '@/lib/auth';
 import { buildRealtimeToolSet, type ToolAllowlist } from './tools';
 import { buildVoiceCallContext, type VoiceSystemContextDeps } from './system-context';
 import type { BindingLoaderDeps, SeedConversation, AgentPage } from './binding-loader';
+import type { VoiceSpendDeps } from './voice-spend';
 import type {
   TranscriptPersistenceDeps,
   TranscriptConversation,
 } from './transcript-persistence';
 import type { RealtimeToolDispatchDeps } from './tool-dispatch';
+import { actorFromAuth } from '@/lib/auth/request-actor';
+import { voiceBridgeActor } from './tool-dispatch';
 
 /**
  * The subset of a `conversations` row both consumers need. Narrowed here rather
@@ -143,20 +146,21 @@ export const voiceSystemContextDeps = (auth: AuthResult): VoiceSystemContextDeps
   // the environment looked like at import time.
   buildTools: () => buildPageSpaceTools(),
   loadAgentMemory: async (pageId, userId) =>
-    buildAgentMemorySection(await getAgentMemoryContext(pageId, userId)),
+    userId === auth.userId ? buildAgentMemorySection(await getAgentMemoryContext(pageId, actorFromAuth(auth))) : '',
   loadActivePlan: async (conversationId, userId) =>
     buildActivePlanPrompt(
-      await getActivePlan(conversationId, userId, (pageId) =>
+      userId !== auth.userId ? null : await getActivePlan(conversationId, actorFromAuth(auth), (pageId) =>
         canPrincipalViewPage(auth, pageId),
       ),
     ),
-  loadPersonalization: (userId) => getUserPersonalization(userId),
+  loadPersonalization: async (userId) => (userId === auth.userId ? getUserPersonalization(actorFromAuth(auth)) : null),
   logger: loggers.ai,
 });
 
 export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   loadConversation,
-  canAccess: (userId, conversation) => canAccessConversation(userId, conversation),
+  canAccess: (userId, conversation) =>
+    userId === auth.userId ? canAccessConversation(actorFromAuth(auth), conversation) : Promise.resolve(false),
   // Streaming placeholders stay excluded (the default): an empty mid-flight row
   // is not a turn, and `buildRealtimeSeed` would drop it anyway.
   //
@@ -179,6 +183,21 @@ export const voiceBindingDeps = (auth: AuthResult): BindingLoaderDeps => ({
   logger: loggers.ai,
 });
 
+/** Where a call spends (SPEND-1): the conversation read and the caller's own page check. */
+export const voiceSpendDeps = (auth: AuthResult): VoiceSpendDeps => ({
+  loadConversation,
+  canAccess: (userId, conversation) =>
+    userId === auth.userId ? canAccessConversation(actorFromAuth(auth), conversation) : Promise.resolve(false),
+  loadPage: async (pageId) => {
+    const [row] = await db
+      .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
+      .from(pages)
+      .where(eq(pages.id, pageId));
+    return row;
+  },
+  canViewPage: (pageId) => canPrincipalViewPage(auth, pageId),
+});
+
 export const voiceTranscriptDeps: TranscriptPersistenceDeps = {
   loadConversation,
   createConversation: async (userId, conversationId) => {
@@ -198,7 +217,8 @@ export const voiceTranscriptDeps: TranscriptPersistenceDeps = {
       throw error;
     }
   },
-  canAccess: (userId, conversation) => canAccessConversation(userId, conversation),
+  // The bridge hop's actor carries the call's ceremony evidence (see voiceBridgeActor).
+  canAccess: (userId, conversation, authentication) => canAccessConversation(voiceBridgeActor(userId, authentication), conversation),
   saveGlobalMessage: (args) =>
     messageRepository.saveGlobalMessage({
       ...args,

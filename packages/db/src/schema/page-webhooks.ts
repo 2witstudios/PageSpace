@@ -25,7 +25,10 @@ export const pageWebhooks = pgTable('page_webhooks', {
   /** HMAC signing secret, field-level encrypted (packages/lib/src/encryption/field-crypto.ts). Plaintext is shown exactly once at creation. */
   webhookSecretEncrypted: text('webhookSecretEncrypted').notNull(),
   isEnabled: boolean('isEnabled').default(true).notNull(),
-  createdBy: text('createdBy').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  // [D-OW-36] Cleared when the creator's account is deleted; an org drive's webhook outlives them, disabled and flagged.
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
+  /** [D-OW-36] Set when the creator left the org or deleted their account: disabled until an org Owner or Admin reassigns or deletes it. */
+  ownerLeftAt: timestamp('ownerLeftAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   lastFiredAt: timestamp('lastFiredAt', { mode: 'date' }),
   lastFireError: text('lastFireError'),

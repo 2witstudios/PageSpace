@@ -1,8 +1,8 @@
 import { DOMSerializer, type Node as PmNode } from 'prosemirror-model';
 import type * as Y from 'yjs';
-import { collabSchema, yDocToPmDoc } from './collab-document.js';
-import { withDomWorkspace, type DomWorkspace } from './dom-workspace.js';
-import { assertProjectable } from './projection-errors.js';
+import { collabSchema, yDocToPmDoc } from './collab-document.ts';
+import { withDomWorkspace, type DomWorkspace } from './dom-workspace.ts';
+import { assertProjectable } from './projection-errors.ts';
 
 /**
  * The HTML projection — what `pages.content` keeps holding, forever.

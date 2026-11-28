@@ -402,7 +402,7 @@ export function createSheetsEditCellsHandler(deps: SheetsStdinDeps): CommandHand
       return EXIT_USAGE_ERROR;
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       ctx.sdk.pages.editCells({ operation: 'edit-cells', pageId, cells: cells as Array<{ address: string; value: string }> }),
     );
     if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -423,7 +423,7 @@ export const sheetsDescribeHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () => ctx.sdk.sheets.describe({ operation: 'describe', pageId }));
+  const result = await callSdk(ctx, () => ctx.sdk.sheets.describe({ operation: 'describe', pageId }));
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
   ctx.stdout.write(intent.flags.json ? `${JSON.stringify(result.value)}\n` : renderDescribe(result.value));
@@ -482,7 +482,7 @@ export const sheetsQueryHandler: CommandHandler = async (ctx, intent) => {
     }
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.sheets.queryRows({
       operation: 'query-rows',
       pageId,
@@ -534,7 +534,7 @@ export const sheetsRowsHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.sheets.getRows({
       operation: 'get-rows',
       pageId,
@@ -594,7 +594,7 @@ export function createSheetsAppendHandler(deps: SheetsStdinDeps): CommandHandler
       return EXIT_USAGE_ERROR;
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       ctx.sdk.sheets.appendRows({
         operation: 'append-rows',
         pageId,
@@ -658,7 +658,7 @@ export function createSheetsUpdateCellsHandler(deps: SheetsStdinDeps): CommandHa
       return EXIT_USAGE_ERROR;
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       ctx.sdk.sheets.updateCells({
         operation: 'update-cells',
         pageId,
@@ -737,7 +737,7 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_RUNTIME_ERROR;
   }
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.sheets.deleteRows({
       operation: 'delete-rows',
       pageId,
@@ -783,7 +783,7 @@ export const sheetsFormattingHandler: CommandHandler = async (ctx, intent) => {
   // were ASKED for — the response cannot say.
   const ranges = parseCommaList(scan.values.get('--ranges'));
 
-  const result = await callSdk(ctx.stderr, () =>
+  const result = await callSdk(ctx, () =>
     ctx.sdk.sheets.readFormatting({
       operation: 'read-formatting',
       pageId,
@@ -862,7 +862,7 @@ export function createSheetsFormatHandler(deps: SheetsStdinDeps): CommandHandler
       return EXIT_USAGE_ERROR;
     }
 
-    const result = await callSdk(ctx.stderr, () =>
+    const result = await callSdk(ctx, () =>
       ctx.sdk.sheets.applyFormat({
         operation: 'apply-format',
         pageId,

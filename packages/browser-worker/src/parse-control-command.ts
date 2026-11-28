@@ -8,8 +8,8 @@
  * so nothing rides along into the driver. Elements are addressed by the
  * snapshot `ref` alphabet only — a CSS selector is a DOM query and is refused.
  */
-import { BROWSER_OPERATION_LIMITS, type BrowserOperation, type TabAction } from './browser-operation.js';
-import { HUMAN_KEYS, type ControlCommand, type HumanInput, type HumanKey } from './control-instruction.js';
+import { BROWSER_OPERATION_LIMITS, type BrowserOperation, type TabAction } from './browser-operation.ts';
+import { HUMAN_KEYS, type ControlCommand, type HumanInput, type HumanKey } from './control-instruction.ts';
 
 type Json = Readonly<Record<string, unknown>>;
 

@@ -26,6 +26,8 @@ export const oauthClients = pgTable('oauth_clients', {
 // hash of the code is stored at rest; codePrefix is for indexed debugging
 // lookup only, matching the sessions/device-token convention.
 export const oauthAuthorizationCodes = pgTable('oauth_authorization_codes', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   codeHash: text('codeHash').unique().notNull(),
   codePrefix: text('codePrefix').notNull(),
@@ -53,6 +55,8 @@ export const oauthAuthorizationCodes = pgTable('oauth_authorization_codes', {
 // approves the device on /activate; both the device_code and user_code are
 // stored hash-only.
 export const oauthDeviceCodes = pgTable('oauth_device_codes', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   deviceCodeHash: text('deviceCodeHash').unique().notNull(),
   deviceCodePrefix: text('deviceCodePrefix').notNull(),
@@ -86,6 +90,8 @@ export const oauthDeviceCodes = pgTable('oauth_device_codes', {
 // family cap fixed at first issuance, single-use rotation via
 // replacedByTokenId, reuse detection revokes the whole family.
 export const oauthRefreshTokens = pgTable('oauth_refresh_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   tokenHash: text('tokenHash').unique().notNull(),
   tokenPrefix: text('tokenPrefix').notNull(),
@@ -112,6 +118,8 @@ export const oauthRefreshTokens = pgTable('oauth_refresh_tokens', {
 // refresh family's familyId so a reuse-detection family revocation reaches
 // every access token the family ever issued, not just its refresh tokens.
 export const oauthAccessTokens = pgTable('oauth_access_tokens', {
+  authenticatedAt: timestamp('authenticatedAt', { mode: 'date' }),
+  authenticationAssurance: text('authenticationAssurance', { enum: ['single_factor', 'user_verified_passkey'] }),
   id: text('id').primaryKey().$defaultFn(() => createId()),
   tokenHash: text('tokenHash').unique().notNull(),
   tokenPrefix: text('tokenPrefix').notNull(),

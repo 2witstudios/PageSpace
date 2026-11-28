@@ -1,3 +1,4 @@
+import { parseVerifiedAuthentication, type VerifiedAuthentication } from './authentication-evidence';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, and, isNull, lt, gt, sql, or } from '@pagespace/db/operators';
@@ -43,12 +44,16 @@ export async function createDeviceTokenRecord(
   platform: 'web' | 'desktop' | 'ios' | 'android',
   tokenVersion: number,
   metadata: {
+    /** Required (D-OW-45): the evidence of the ceremony this device token stands for; see CreateSessionOptions. */
+    authentication: VerifiedAuthentication | null;
     deviceName?: string;
     userAgent?: string;
     ipAddress?: string;
     location?: string;
-  } = {}
+  }
 ): Promise<{ id: string; token: string }> {
+  const authentication = parseVerifiedAuthentication(metadata.authentication, Date.now());
+  if (metadata.authentication != null && !authentication) throw new Error('Invalid authentication evidence');
   // Generate opaque device token (ps_dev_*)
   const token = generateDeviceToken();
 
@@ -66,6 +71,8 @@ export async function createDeviceTokenRecord(
     platform,
     tokenVersion,
     tokenHash: tokenHashValue,
+    authenticatedAt: authentication ? new Date(authentication.authenticatedAtMs) : null,
+    authenticationAssurance: authentication?.assurance ?? null,
     tokenPrefix: getTokenPrefix(token),
     expiresAt,
     deviceName: metadata.deviceName,
@@ -360,6 +367,7 @@ export async function rotateDeviceToken(
       oldDeviceToken.platform,
       tokenVersion,
       {
+        authentication: parseVerifiedAuthentication({ authenticatedAtMs: oldDeviceToken.authenticatedAt?.getTime(), assurance: oldDeviceToken.authenticationAssurance }, Date.now()),
         deviceName: oldDeviceToken.deviceName || undefined,
         userAgent: metadata.userAgent || oldDeviceToken.userAgent || undefined,
         ipAddress: metadata.ipAddress || oldDeviceToken.lastIpAddress || undefined,
@@ -412,6 +420,8 @@ export async function cleanupExpiredDeviceTokens(): Promise<number> {
  * race conditions in concurrent login/signup/OAuth flows.
  */
 export async function validateOrCreateDeviceToken(params: {
+  /** Required (D-OW-45): the evidence of the sign-in ceremony minting this device token; see CreateSessionOptions. */
+  authentication: VerifiedAuthentication | null;
   providedDeviceToken: string | null | undefined;
   userId: string;
   deviceId: string;
@@ -429,7 +439,9 @@ export async function validateOrCreateDeviceToken(params: {
   // This prevents TOCTOU race conditions in concurrent requests
   // Dynamic import to avoid module initialization order issues
   const { atomicValidateOrCreateDeviceToken } = await import('@pagespace/db/transactions/auth-transactions');
-  return atomicValidateOrCreateDeviceToken(params, {
+  const authentication = parseVerifiedAuthentication(params.authentication, Date.now());
+  if (params.authentication != null && !authentication) throw new Error('Invalid authentication evidence');
+  return atomicValidateOrCreateDeviceToken({ ...params, authenticatedAt: authentication ? new Date(authentication.authenticatedAtMs) : null, authenticationAssurance: authentication?.assurance ?? null }, {
     hashToken,
     getTokenPrefix,
     generateDeviceToken,

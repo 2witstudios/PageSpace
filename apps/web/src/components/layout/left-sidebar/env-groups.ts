@@ -45,6 +45,8 @@ export interface EnvGroup<T> {
    * orphan (the question does not apply).
    */
   enrolled: boolean | null;
+  /** The owner's Home env — never deletable (Rebuild wipes it). False for an orphan. */
+  isHome: boolean;
   sessions: T[];
 }
 
@@ -90,6 +92,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: env.substrate,
       machineLabel: env.substrate === 'local' ? env.label : null,
       enrolled: env.substrate === 'local' ? env.enrolled : null,
+      isHome: env.isHome,
       sessions: sessionsByEnv.get(env.id) ?? [],
     }))
     .sort(byEnvDisplayName);
@@ -103,9 +106,36 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       substrate: null,
       machineLabel: null,
       enrolled: null,
+      isHome: false,
       sessions: sessionsByEnv.get(envId) ?? [],
     }))
     .sort(byEnvDisplayName);
 
   return { envGroups: [...listedGroups, ...orphanGroups], looseSessions };
+}
+
+/**
+ * Splits a drive's LOOSE (ephemeral) sessions into the ones still current and
+ * the "previous" ones — the per-conversation sandboxes that piled up before the
+ * drive had a Home env (single-sandbox model). Pure.
+ *
+ * Previous means "created before Home existed", not "ephemeral": once Home is
+ * there every auto-created session runs in it, so an ephemeral session made
+ * AFTER it is one somebody chose on purpose ("New sandbox") and stays where it
+ * was. The previous ones are not ended automatically — they may hold files —
+ * so the sidebar lists them apart with an explicit "End all".
+ */
+export function splitPreviousSessions<T extends { createdAt: string }>(
+  looseSessions: readonly T[],
+  envs: readonly DriveEnvDTO[],
+): { current: T[]; previous: T[] } {
+  const home = envs.find((env) => env.isHome);
+  if (!home) return { current: [...looseSessions], previous: [] };
+  const homeBorn = Date.parse(home.createdAt);
+  const current: T[] = [];
+  const previous: T[] = [];
+  for (const session of looseSessions) {
+    (Date.parse(session.createdAt) < homeBorn ? previous : current).push(session);
+  }
+  return { current, previous };
 }

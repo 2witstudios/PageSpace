@@ -1,0 +1,1 @@
+ALTER TABLE "org_subscriptions" ADD COLUMN "collectionMethod" text DEFAULT 'charge_automatically' NOT NULL;

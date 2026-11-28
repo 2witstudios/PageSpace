@@ -13,6 +13,7 @@ import {
   upsertCalendarTriggerWorkflow,
 } from '@/lib/workflows/calendar-trigger-helpers';
 import { broadcastCalendarEvent } from '@/lib/websocket/calendar-events';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const SESSION_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const SESSION_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -78,7 +79,7 @@ export async function GET(request: Request, context: { params: Promise<{ eventId
 
   const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   const [row] = await db
@@ -172,7 +173,7 @@ export async function PUT(request: Request, context: { params: Promise<{ eventId
 
   const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   // TRIGGER SAFETY: execution context is always the home drive (event.driveId).
@@ -237,7 +238,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ even
 
   const canManage = await canManageEventTrigger(auth, event);
   if (!canManage) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    return deniedResponse(actorFromAuth(auth), event.driveId, NextResponse.json({ error: 'Forbidden' }, { status: 403 }));
   }
 
   await removeCalendarTrigger(db, eventId);

@@ -162,6 +162,21 @@ describe('/api/auth/mobile/refresh', () => {
     vi.mocked(getClientIP).mockReturnValue('192.168.1.1');
   });
 
+  it.each([false, true])('SEC-3 (partial) mobile refresh preserves original evidence with rotation=%s', async (rotate) => {
+    const authenticatedAtMs = Date.now() - 3600000;
+    vi.mocked(validateDeviceToken).mockResolvedValue({ ...mockDeviceRecord,
+      expiresAt: new Date(Date.now() + (rotate ? 1 : 30) * 86400000),
+      authenticatedAt: new Date(authenticatedAtMs), authenticationAssurance: 'single_factor',
+    } as never);
+    const response = await POST(new Request('http://localhost/api/auth/mobile/refresh', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(validRefreshPayload),
+    }));
+    expect(response.status).toBe(200);
+    expect(sessionService.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      authentication: { authenticatedAtMs, assurance: 'single_factor' },
+    }));
+  });
+
   describe('successful mobile refresh', () => {
     it('returns 200 with new tokens', async () => {
       const request = new Request('http://localhost/api/auth/mobile/refresh', {
@@ -518,6 +533,7 @@ describe('/api/auth/mobile/refresh', () => {
       await POST(request);
 
       expect(sessionService.createSession).toHaveBeenCalledWith({
+        authentication: null,
         userId: mockUser.id,
         type: 'user',
         scopes: ['*'],

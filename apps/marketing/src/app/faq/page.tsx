@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, FREE_STARTER_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS_DISPLAY, creditPacksPhrase, formatDollars, planFacts } from "@/lib/credits";
 import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
 
@@ -19,6 +19,12 @@ function faqText(node: ReactNode): string {
 }
 
 export const metadata = pageMetadata.faq;
+
+// Plan and seat prices come from the tier table via planFacts (SEAT-2), never typed in here.
+const PRO = planFacts("pro");
+const BUSINESS = planFacts("business");
+const BUSINESS_SEATS = BUSINESS.org?.includedSeats;
+const EXTRA_SEAT_PRICE = BUSINESS.org ? formatDollars(BUSINESS.org.extraSeatPriceCents) : "";
 
 interface FAQItem {
   id: string;
@@ -75,7 +81,7 @@ const faqs: FAQItem[] = [
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS_DISPLAY} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -84,10 +90,11 @@ const faqs: FAQItem[] = [
     answer: (
       <>
         More credits, access to Pro models, and more storage. Each plan
-        includes a monthly credit allowance — {MONTHLY_CREDITS.pro}/month on
-        Pro ($15/month), {MONTHLY_CREDITS.founder}/month on Founder ($50/month),
-        and {MONTHLY_CREDITS.business}/month on Business ($100/month) — and you
-        can buy more credits anytime. All plans include real-time collaboration
+        includes a monthly credit allowance — {MONTHLY_CREDITS.pro} credits a
+        month on Pro ({PRO.price}/month) and {MONTHLY_CREDITS.business} credits a month
+        on Business ({BUSINESS.price}/month, the plan for an organization with {BUSINESS_SEATS} seats
+        included and {EXTRA_SEAT_PRICE} per extra seat) — and you can buy more credits
+        anytime. All plans include real-time collaboration
         and AI agents. Full comparison on the{" "}
         {docsLink("/pricing", "Pricing page")}.
       </>
@@ -97,7 +104,7 @@ const faqs: FAQItem[] = [
   {
     id: "how-ai-credits-work",
     question: "How do credits work?",
-    answer: `Free accounts start with ${FREE_STARTER_CREDITS} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS_DISPLAY} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
     category: "Pricing and plans",
   },
   {

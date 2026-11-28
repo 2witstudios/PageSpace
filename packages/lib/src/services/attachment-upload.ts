@@ -25,12 +25,13 @@ import {
 // re-exported here so existing importers are unchanged.
 export type { AttachmentTarget } from './attachment-upload-core';
 import type { AttachmentTarget } from './attachment-upload-core';
+import { type AccessActor, derivedCredentialEvidence } from '../permissions/access-actor';
 
 const UPLOAD_SCOPES: ServiceScope[] = ['files:write'];
 const CONVERSATION_TOKEN_EXPIRY_MS = 10 * 60 * 1000; // match createUploadServiceToken default
 
 export interface CreateAttachmentUploadServiceTokenArgs {
-  userId: string;
+  actor: AccessActor;
   target: AttachmentTarget;
 }
 
@@ -51,7 +52,8 @@ export interface AttachmentUploadServiceToken {
 export async function createAttachmentUploadServiceToken(
   args: CreateAttachmentUploadServiceTokenArgs
 ): Promise<AttachmentUploadServiceToken> {
-  const { userId, target } = args;
+  const { actor, target } = args;
+  const { userId } = actor;
 
   switch (target.type) {
     case 'page': {
@@ -59,7 +61,7 @@ export async function createAttachmentUploadServiceToken(
       // enqueue processor ingestion, so don't inherit files:ingest from the
       // page-upload default scopes.
       const result = await createUploadServiceToken({
-        userId,
+        actor,
         driveId: target.driveId,
         pageId: target.pageId,
         parentId: target.pageId,
@@ -106,6 +108,7 @@ export async function createAttachmentUploadServiceToken(
       const token = await sessionService.createSession({
         userId,
         type: 'service',
+        authentication: derivedCredentialEvidence(actor),
         scopes: UPLOAD_SCOPES as string[],
         resourceType: 'conversation',
         resourceId: target.conversationId,

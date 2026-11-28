@@ -1,15 +1,19 @@
 /**
- * Merge guards over the AI route call sites. These are source-scan invariants: they read
- * the route files and fail the build if a regression slips in — a gate caller that forgets
- * the concurrency cap, or an OpenRouter onFinish that captures cost but not the generation
- * id the reconcile cron needs. Cheaper and more durable than hoping a reviewer notices.
+ * Merge guards over the AI call sites. These are source-scan invariants: they read the
+ * source and fail the build if a regression slips in — a model call no credit gate
+ * covers, a gate caller that forgets the concurrency cap, or an OpenRouter onFinish that
+ * captures cost but not the generation id the reconcile cron needs. Cheaper and more
+ * durable than hoping a reviewer notices.
  */
 import { describe, it, expect } from 'vitest';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
+import ts from 'typescript';
 
 // vitest runs with cwd = apps/web; the AI routes live under src/app/api.
-const API_DIR = join(process.cwd(), 'src/app/api');
+const WEB_DIR = process.cwd();
+const SRC_DIR = join(WEB_DIR, 'src');
+const API_DIR = join(SRC_DIR, 'app/api');
 
 // Next route handlers are route.ts OR route.tsx.
 const isRouteFile = (name: string) => name === 'route.ts' || name === 'route.tsx';
@@ -44,10 +48,23 @@ function gateCallSlices(src: string): string[] {
 // `createAIProvider` is the only way a route gets a model; the AI SDK entry points
 // cover helpers that run a model handed to them.
 const MODEL_CALL = /(?<!function\s)\b(?:createAIProvider|streamText|generateText|generateObject|streamObject|embedMany|embed)\s*\(/;
-// `acquireWorkflowCredit(` is canConsumeAI inside executeWorkflow's run claim: the
-// workflow routes reach the gate through the executor they import, and the
-// "workflow run gate guards" below pin where in the executor it sits.
-const GATE_CALLS = ['canConsumeAI(', 'acquireWorkflowCredit('];
+
+/**
+ * What counts as passing the gate: `canConsumeAI` itself, or a wrapper that takes the
+ * hold through it. Each wrapper is pinned to its module below, and a test proves every
+ * one of those modules really calls `canConsumeAI` or another pinned wrapper — so naming
+ * a function here cannot make an ungated call look gated.
+ */
+const GATE_WRAPPERS: Record<string, string> = {
+  acquireUserCreditHold: 'src/lib/ai/core/user-credit-hold.ts',
+  gateUserCall: 'src/lib/ai/core/user-credit-hold.ts',
+  acquireWorkflowCreditHold: 'src/lib/workflows/workflow-credit-gate.ts',
+  creditAdmission: 'src/lib/workflows/workflow-credit-gate.ts',
+  acquireMentionCreditHold: 'src/lib/channels/mention-credit-gate.ts',
+  // Each memory model call reserves the person's own credits first, through gateUserCall.
+  reserveMemoryCall: 'src/lib/memory/memory-credit.ts',
+};
+const GATE_CALL = new RegExp(`(?<!function\\s)\\b(?:${['canConsumeAI', ...Object.keys(GATE_WRAPPERS)].join('|')})\\s*\\(`);
 
 /** Resolve an `@/lib/...` or relative import to its source file, or undefined. */
 function resolveImport(specifier: string, fromFile: string): string | undefined {
@@ -82,28 +99,184 @@ function routeAndDirectImports(file: string): Array<{ path: string; src: string 
 }
 
 /**
- * Routes that run a model without a PRE-call gate by design. Pinned exactly below:
- * adding a route here is a billing decision, not a way to quiet the guard. There
- * is no "known gap" list any more — the workflow routes that were on one (manual
- * run, the workflows cron, the task-triggers cron) now take the credit hold
- * inside `executeWorkflow` (`@/lib/workflows/workflow-executor`), and a new
- * ungated route fails outright.
+ * Production files (paths relative to apps/web) that make a model call no credit gate
+ * covers, BY DESIGN. Pinned exactly below: adding a file here is a billing decision,
+ * not a way to quiet the guard, and each entry must say which gate its spend is under.
+ *
+ * The memory cron was listed here until its services took a hold of their own — a
+ * user in debt kept accruing debt every night (the fourth of this class after #2700
+ * and #2728). ask_agent's sub-agent was the last entry, until it reserved against its
+ * turn's wallet before its own tool loop (WAL-6a). Every model call site now passes a
+ * gate, or is reachable only through files that do.
  */
-const UNGATED_BY_DESIGN: Record<string, string> = {
-  '/api/memory/cron/route.ts':
-    'HMAC-signed system cron (validateSignedCronRequest), not user-reachable, so no user fan-out; runs only for paying tiers (MEMORY_PAYING_TIERS), once per user per day; every model call still records and debits usage via AIMonitoring.trackUsage (source: memory)',
-};
+const UNGATED_BY_DESIGN: Record<string, string> = {};
 
 function ungatedModelRoutes(): string[] {
   const offenders: string[] = [];
   for (const file of ROUTE_FILES) {
     const scanned = routeAndDirectImports(file);
     const invokesModel = scanned.some(({ src }) => MODEL_CALL.test(src));
-    const gated = scanned.some(({ src }) => GATE_CALLS.some((call) => src.includes(call)));
-    if (invokesModel && !gated) offenders.push(apiRelPath(file));
+    const gated = scanned.some(({ src }) => GATE_CALL.test(src));
+    if (invokesModel && !gated) offenders.push(webRelPath(file));
   }
   return offenders;
 }
+
+/** Path relative to apps/web, forward slashes — the key form of UNGATED_BY_DESIGN. */
+const webRelPath = (file: string) => relative(WEB_DIR, file).split(sep).join('/');
+
+const isProductionSource = (name: string) =>
+  /\.tsx?$/.test(name) && !name.endsWith('.d.ts') && !/\.(test|spec)\.tsx?$/.test(name);
+
+function productionFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__tests__' || entry.name === 'node_modules' || full === join(SRC_DIR, 'test')) continue;
+      out.push(...productionFiles(full));
+    } else if (isProductionSource(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/**
+ * Value imports of one file: `from '…'`, `import '…'` and dynamic `import('…')`,
+ * restricted to `@/…` and relative specifiers. `import type` / `export type` lines
+ * are dropped first — a type-only import runs nothing, so it is not a caller.
+ */
+function valueImportSpecifiers(src: string): string[] {
+  const withoutTypeImports = src.replace(/\b(?:import|export)\s+type\s[^;]*?from\s*['"][^'"]+['"]/g, '');
+  return [...withoutTypeImports.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)['"]((?:@\/|\.{1,2}\/)[^'"]+)['"]/g)].map((m) => m[1]);
+}
+
+/**
+ * The credit-gate coverage rule, pure over a map of (absolute path → comment-stripped
+ * source) so it can be tested on fixtures. A file that makes a model call is COVERED if
+ *   - it calls a gate itself (GATE_CALL), or
+ *   - it is allowlisted (UNGATED_BY_DESIGN), or
+ *   - it has at least one value importer and EVERY value importer is covered.
+ * So a model call is fine only if every way into it passes a gate. A file nobody imports
+ * (a route, a new entry point) must gate itself. An import cycle counts as uncovered.
+ * The granularity is the FILE: a gated file adding a second, ungated call passes — a
+ * documented limit, the same one the route scan above has always had.
+ */
+function uncoveredModelCallSites(
+  sources: Map<string, string>,
+  srcRoot: string,
+  allowlisted: (file: string) => boolean,
+): string[] {
+  const resolve = (specifier: string, fromFile: string): string | undefined => {
+    const base = specifier.startsWith('@/') ? join(srcRoot, specifier.slice(2)) : join(dirname(fromFile), specifier);
+    return [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts'), join(base, 'index.tsx')].find((c) => sources.has(c));
+  };
+
+  const importers = new Map<string, Set<string>>();
+  for (const [file, src] of sources) {
+    for (const specifier of valueImportSpecifiers(src)) {
+      const target = resolve(specifier, file);
+      if (!target || target === file) continue;
+      if (!importers.has(target)) importers.set(target, new Set());
+      importers.get(target)!.add(file);
+    }
+  }
+
+  const covered = (file: string, visiting: Set<string>): boolean => {
+    if (GATE_CALL.test(sources.get(file) ?? '') || allowlisted(file)) return true;
+    if (visiting.has(file)) return false;
+    const callers = [...(importers.get(file) ?? [])];
+    if (callers.length === 0) return false;
+    visiting.add(file);
+    const result = callers.every((caller) => covered(caller, visiting));
+    visiting.delete(file);
+    return result;
+  };
+
+  return [...sources.entries()]
+    .filter(([, src]) => MODEL_CALL.test(src))
+    .map(([file]) => file)
+    .filter((file) => !covered(file, new Set()));
+}
+
+/** The AI SDK / provider entry points MODEL_CALL matches, as callee names for the AST scan. */
+const MODEL_CALLEES = new Set(['createAIProvider', 'streamText', 'generateText', 'generateObject', 'streamObject', 'embedMany', 'embed']);
+
+/** The calls that actually run a model (building a client with createAIProvider spends nothing). */
+const RUNNING_MODEL_CALLEES = new Set([...MODEL_CALLEES].filter((name) => name !== 'createAIProvider'));
+
+/**
+ * Closes the file-level blind spot for the memory services, which reserve PER CALL
+ * (reserveMemoryCall) rather than through a callback wrapper. The file-level rule is
+ * satisfied by one reserveMemoryCall anywhere in the file, so a second model call added
+ * next to it would pass. Here, in every file that calls reserveMemoryCall, each call that
+ * runs a model must sit in a function that makes EXACTLY ONE such model call, takes EXACTLY
+ * ONE reserveMemoryCall lexically BEFORE it, and settles EXACTLY ONCE through a
+ * trackUsage({ holdId, … }) — one hold, one settle, per model call.
+ */
+function memoryModelCallsWithoutOwnReservation(fileName: string, source: string): string[] {
+  const file = ts.createSourceFile(fileName, source, ts.ScriptTarget.Latest, true, fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+
+  const calleeName = (call: ts.CallExpression): string | undefined => {
+    const callee = call.expression;
+    if (ts.isIdentifier(callee)) return callee.text;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text;
+    return undefined;
+  };
+  const enclosingFunction = (node: ts.Node): ts.Node | undefined => {
+    for (let at = node.parent; at; at = at.parent) {
+      if (ts.isFunctionDeclaration(at) || ts.isFunctionExpression(at) || ts.isArrowFunction(at) || ts.isMethodDeclaration(at)) return at;
+    }
+    return undefined;
+  };
+  // The function that OWNS a call: its nearest enclosing function, skipping the inline
+  // callbacks a call is commonly chained through (`.catch((e) => …)`) — those do not own it.
+  const owner = (node: ts.Node): ts.Node | undefined => enclosingFunction(node);
+  const settlesAHold = (call: ts.CallExpression) =>
+    call.arguments.some((arg) => ts.isObjectLiteralExpression(arg) && arg.properties.some((p) => p.name !== undefined && ts.isIdentifier(p.name) && p.name.text === 'holdId'));
+
+  const byFunction = new Map<ts.Node | undefined, { models: ts.CallExpression[]; reserves: ts.CallExpression[]; settles: ts.CallExpression[] }>();
+  const entry = (fn: ts.Node | undefined) => {
+    if (!byFunction.has(fn)) byFunction.set(fn, { models: [], reserves: [], settles: [] });
+    return byFunction.get(fn)!;
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node)) {
+      const name = calleeName(node) ?? '';
+      if (RUNNING_MODEL_CALLEES.has(name)) entry(owner(node)).models.push(node);
+      if (name === 'reserveMemoryCall') entry(owner(node)).reserves.push(node);
+      if (name === 'trackUsage' && settlesAHold(node)) entry(owner(node)).settles.push(node);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+
+  const line = (node: ts.Node) => file.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+  const offenders: string[] = [];
+  for (const { models, reserves, settles } of byFunction.values()) {
+    for (const call of models) {
+      const where = `${calleeName(call)} @ line ${line(call)}`;
+      if (models.length !== 1) offenders.push(`${where}: ${models.length} model calls share one function`);
+      else if (reserves.length !== 1) offenders.push(`${where}: ${reserves.length} reserveMemoryCall in its function`);
+      else if (reserves[0].getStart() > call.getStart()) offenders.push(`${where}: reserved after the model call`);
+      else if (settles.length !== 1) offenders.push(`${where}: ${settles.length} trackUsage({ holdId }) settles in its function`);
+    }
+  }
+  return offenders;
+}
+
+const PRODUCTION_SOURCES = new Map(
+  productionFiles(SRC_DIR).map((file) => [file, stripComments(readFileSync(file, 'utf8'))] as const),
+);
+const MODEL_CALL_SITES = [...PRODUCTION_SOURCES.entries()]
+  .filter(([, src]) => MODEL_CALL.test(src))
+  .map(([file]) => webRelPath(file));
+
+/** Uncovered sites across apps/web, optionally ignoring the allowlist. */
+const uncoveredWebSites = (honourAllowlist: boolean) =>
+  uncoveredModelCallSites(PRODUCTION_SOURCES, SRC_DIR, (file) => honourAllowlist && webRelPath(file) in UNGATED_BY_DESIGN)
+    .map(webRelPath);
 
 describe('AI gate call-site guards', () => {
   it('every route that creates an AI provider or runs a model passes the credit gate', () => {
@@ -113,17 +286,189 @@ describe('AI gate call-site guards', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('the ungated list is exactly these routes, each with a reason', () => {
+  it('every production model call site is gated, or reachable only through gated callers', () => {
+    // The route scan above sees one import deep. This one enumerates EVERY production
+    // file under src that builds or runs a model — crons, trigger executors, services —
+    // and walks its importers all the way up. A call no gate covers is how a user with
+    // an exhausted balance keeps spending: the debit lands after the fact as debt, and
+    // only the gate refuses the next call.
+    expect(uncoveredWebSites(true)).toEqual([]);
+  });
+
+  it('the ungated list is exactly these files, each with a reason', () => {
     // Pinned literally: growing the list must fail here and be argued in review.
-    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual(['/api/memory/cron/route.ts']);
+    expect(Object.keys(UNGATED_BY_DESIGN)).toEqual([]);
     for (const reason of Object.values(UNGATED_BY_DESIGN)) {
       expect(reason.length).toBeGreaterThan(20);
     }
   });
 
-  it('every listed route is still ungated (a fixed route must leave the list)', () => {
-    const stillUngated = new Set(ungatedModelRoutes());
-    expect(Object.keys(UNGATED_BY_DESIGN).filter((rel) => !stillUngated.has(rel))).toEqual([]);
+  it('every listed file is still an ungated model call site (a fixed file must leave the list)', () => {
+    const uncoveredWithoutList = new Set(uncoveredWebSites(false));
+    expect(Object.keys(UNGATED_BY_DESIGN).filter((rel) => !uncoveredWithoutList.has(rel))).toEqual([]);
+  });
+
+  it('every gate wrapper is defined where pinned and really calls canConsumeAI (or a wrapper pinned elsewhere)', () => {
+    for (const [name, rel] of Object.entries(GATE_WRAPPERS)) {
+      const src = PRODUCTION_SOURCES.get(join(WEB_DIR, rel));
+      expect(src, rel).toBeDefined();
+      expect(src, `${rel} defines ${name}`).toMatch(new RegExp(`export\\s+(?:async\\s+)?function\\s+${name}\\b`));
+      const delegates = Object.entries(GATE_WRAPPERS).filter(([, other]) => other !== rel).map(([wrapper]) => wrapper);
+      expect(src, `${rel} calls canConsumeAI`).toMatch(new RegExp(`(?<!function\\s)\\b(?:${['canConsumeAI', ...delegates].join('|')})\\s*\\(`));
+    }
+  });
+
+  it('the site scan sees the known model call sites (guard is not vacuous)', () => {
+    expect(MODEL_CALL_SITES).toEqual(expect.arrayContaining([
+      'src/lib/memory/discovery-service.ts',
+      'src/lib/memory/integration-service.ts',
+      'src/lib/memory/compaction-service.ts',
+      'src/lib/workflows/workflow-executor.ts',
+      'src/lib/ai/chat-pipeline/page-chat-turn.ts',
+      'src/lib/integrations/zoom/generate-summary.ts',
+    ]));
+  });
+
+  it('no other workspace makes a model call outside this scan', () => {
+    // The scan covers apps/web. A model call in another app or package would escape
+    // it — bring that workspace under this guard rather than letting it pass.
+    const repoRoot = join(WEB_DIR, '../..');
+    const offenders: string[] = [];
+    for (const workspace of ['apps', 'packages']) {
+      for (const name of readdirSync(join(repoRoot, workspace))) {
+        const src = join(repoRoot, workspace, name, 'src');
+        if (join(repoRoot, workspace, name) === WEB_DIR || !existsSync(src)) continue;
+        for (const file of productionFiles(src)) {
+          if (MODEL_CALL.test(stripComments(readFileSync(file, 'utf8')))) offenders.push(relative(repoRoot, file));
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('SPEND-1 (partial) inside a memory service, every model call takes exactly one reservation first and settles it exactly once', () => {
+    // The file-level rule above cannot see a second call added next to an existing
+    // reservation — exactly where a fourth memory pass would go.
+    const offenders: Record<string, string[]> = {};
+    for (const [file] of PRODUCTION_SOURCES) {
+      const raw = readFileSync(file, 'utf8');
+      if (!/\breserveMemoryCall\s*\(/.test(stripComments(raw)) || webRelPath(file) === GATE_WRAPPERS.reserveMemoryCall) continue;
+      const outside = memoryModelCallsWithoutOwnReservation(file, raw);
+      if (outside.length > 0) offenders[webRelPath(file)] = outside;
+    }
+    expect(offenders).toEqual({});
+  });
+
+  it('the per-call reservation scan covers the memory services (not vacuous)', () => {
+    const scanned = [...PRODUCTION_SOURCES.keys()]
+      .filter((file) => /\breserveMemoryCall\s*\(/.test(PRODUCTION_SOURCES.get(file) ?? ''))
+      .map(webRelPath);
+    expect(scanned).toEqual(expect.arrayContaining([
+      'src/lib/memory/discovery-service.ts',
+      'src/lib/memory/integration-service.ts',
+      'src/lib/memory/compaction-service.ts',
+    ]));
+  });
+
+  describe('per-call reservation rule (fixtures)', () => {
+    const scan = (src: string) => memoryModelCallsWithoutOwnReservation('fixture.ts', src);
+
+    it('passes one reservation, one model call and one settle per function', () => {
+      expect(scan(`
+        async function pass(u: string) {
+          const provider = await createAIProvider(u, {});
+          const r = await reserveMemoryCall(u, { provider: 'p', model: 'm', inputChars: 1 });
+          if (!r.allowed) return [];
+          const result = await generateObject({}).catch((e) => { r.release(); throw e; });
+          AIMonitoring.trackUsage({ userId: u, holdId: r.holdId, walletId: r.walletId });
+          return result;
+        }
+      `)).toEqual([]);
+    });
+
+    it('flags a second model call under the same reservation', () => {
+      expect(scan(`
+        export async function run(u: string) {
+          const r = await reserveMemoryCall(u, {});
+          await generateText({});
+          await generateText({});
+          AIMonitoring.trackUsage({ holdId: r.holdId });
+        }
+      `)).toEqual([
+        'generateText @ line 4: 2 model calls share one function',
+        'generateText @ line 5: 2 model calls share one function',
+      ]);
+    });
+
+    it('flags a model call in a helper with no reservation of its own', () => {
+      expect(scan(`
+        async function pass() { return generateObject({}); }
+        export async function run(u: string) { const r = await reserveMemoryCall(u, {}); await pass(); AIMonitoring.trackUsage({ holdId: r.holdId }); }
+      `)).toEqual(['generateObject @ line 2: 0 reserveMemoryCall in its function']);
+    });
+
+    it('flags a reservation taken after the model call', () => {
+      expect(scan(`
+        export async function run(u: string) { await generateText({}); const r = await reserveMemoryCall(u, {}); AIMonitoring.trackUsage({ holdId: r.holdId }); }
+      `)).toEqual(['generateText @ line 2: reserved after the model call']);
+    });
+
+    it('flags a model call whose hold is never settled (a debit without the holdId)', () => {
+      expect(scan(`
+        export async function run(u: string) { const r = await reserveMemoryCall(u, {}); await generateText({}); AIMonitoring.trackUsage({ userId: u }); }
+      `)).toEqual(['generateText @ line 2: 0 trackUsage({ holdId }) settles in its function']);
+    });
+  });
+
+  describe('coverage rule (fixtures)', () => {
+    const root = '/repo/src';
+    const at = (rel: string) => `${root}/${rel}`;
+    const run = (files: Record<string, string>) =>
+      uncoveredModelCallSites(new Map(Object.entries(files).map(([rel, src]) => [at(rel), src])), root, () => false)
+        .map((file) => file.slice(root.length + 1));
+
+    it('flags a model call nobody gates', () => {
+      expect(run({ 'lib/new-feature.ts': "import { generateText } from 'ai'; export const go = () => generateText({});" }))
+        .toEqual(['lib/new-feature.ts']);
+    });
+
+    it('passes a helper whose only caller gates', () => {
+      expect(run({
+        'lib/helper.ts': 'export const go = () => generateText({});',
+        'app/api/x/route.ts': "import { go } from '@/lib/helper'; await canConsumeAI(u); go();",
+      })).toEqual([]);
+    });
+
+    it('flags a helper once ANY caller is ungated, however deep', () => {
+      expect(run({
+        'lib/helper.ts': 'export const go = () => generateText({});',
+        'lib/middle.ts': "import { go } from './helper'; export const mid = go;",
+        'app/api/gated/route.ts': "import { go } from '@/lib/helper'; await reserveMemoryCall(u, {}); go();",
+        'app/api/ungated/route.ts': "import { mid } from '@/lib/middle'; mid();",
+      })).toEqual(['lib/helper.ts']);
+    });
+
+    it('does not count a type-only import as a caller', () => {
+      expect(run({
+        'lib/helper.ts': 'export type R = string; export const go = () => generateText({});',
+        'app/api/gated/route.ts': "import { go } from '@/lib/helper'; await canConsumeAI(u); go();",
+        'app/api/types/route.ts': "import type { R } from '@/lib/helper';",
+      })).toEqual([]);
+    });
+
+    it('does not count a comment that mentions the gate', () => {
+      expect(run({ 'lib/x.ts': stripComments('// canConsumeAI( later\nexport const go = () => streamText({});') }))
+        .toEqual(['lib/x.ts']);
+    });
+  });
+
+  it('SPEND-1 (partial) the memory cron runs a model and is gated (it left the ungated list)', () => {
+    const cron = ROUTE_FILES.find((f) => webRelPath(f) === 'src/app/api/memory/cron/route.ts');
+    expect(cron).toBeDefined();
+    const scanned = routeAndDirectImports(cron!);
+    expect(scanned.some(({ src }) => MODEL_CALL.test(src))).toBe(true);
+    expect(ungatedModelRoutes()).not.toContain('src/app/api/memory/cron/route.ts');
+    expect(Object.keys(UNGATED_BY_DESIGN)).not.toContain('src/app/api/memory/cron/route.ts');
   });
 
   it('the model-call scan sees the /btw side-question stream (guard is not vacuous)', () => {
@@ -146,6 +491,28 @@ describe('AI gate call-site guards', () => {
     expect(ROUTE_FILES.length).toBeGreaterThan(0);
     // sanity: the chat route is in the set
     expect(ROUTE_FILES.some((f) => apiRelPath(f).endsWith('/ai/chat/route.ts'))).toBe(true);
+  });
+
+  it('SPEND-1 (partial) every canConsumeAI call a route makes, or delegates to, names the wallet it spends', () => {
+    // The gate takes the session's drive and the chosen source (or PERSONAL_SPEND for a
+    // call with no drive) and reserves on exactly the wallet that resolves to. A call that
+    // passed no spend target would have no wallet to name; the type makes `spend` required,
+    // and this keeps a cast or an untyped options bag from slipping one through.
+    const offenders: string[] = [];
+    let gateCalls = 0;
+    for (const file of ROUTE_FILES) {
+      for (const { path, src } of routeAndDirectImports(file)) {
+        for (const slice of gateCallSlices(src)) {
+          gateCalls++;
+          const namesSpend = /\bspend\b/.test(slice);
+          // An options variable (`canConsumeAI(userId, tier, opts)`) must be built with a spend target.
+          const passesOptionsVariable = /,\s*\w+\s*\)\s*$/.test(slice) && /\bspend:/.test(src);
+          if (!namesSpend && !passesOptionsVariable) offenders.push(relative(API_DIR, path));
+        }
+      }
+    }
+    expect(gateCalls).toBeGreaterThan(5);
+    expect([...new Set(offenders)]).toEqual([]);
   });
 
   it('every interactive canConsumeAI caller passes maxInFlight', () => {
@@ -179,120 +546,259 @@ describe('AI gate call-site guards', () => {
   });
 });
 
-/**
- * Workflow runs are gated INSIDE executeWorkflow (Agent Signup Phase 1b / D-33):
- * the manual run route and both crons once called it with no credit gate, so a
- * zero-balance account — and any unclaimed agent — could schedule free AI. The
- * gate now lives in the executor; these guards keep it there and make every new
- * entry point a conscious, reviewed addition.
- */
-describe('workflow run gate guards', () => {
-  const SRC_DIR = join(process.cwd(), 'src');
-  const EXECUTOR = 'lib/workflows/workflow-executor.ts';
+// ─── Every module that runs a model, not only routes ─────────────────────────────────────
+//
+// What this proves, exactly: in apps/web/src, every FILE that imports an AI SDK entry point or
+// fetches a provider's API either calls a gate itself or is pinned to ONE caller file that
+// calls a gate and imports it; in apps/realtime/src, every file that opens the OpenAI
+// Realtime socket or imports an AI SDK entry point is pinned the same way, and the pinned
+// caller takes its meter's hold before it attaches. KNOWN_LIMITS below is what it does NOT
+// prove; it is pinned so a limit cannot quietly grow or be forgotten.
+const KNOWN_LIMITS = [
+  'per file, not per call: a second, ungated model call inside a file that already calls a gate passes',
+  'a pinned module is checked against ONE caller that gates and imports it; any other caller of it is not checked',
+  'scans apps/web/src and apps/realtime/src only: packages/* and the other apps are not scanned (none runs a model today)',
+  'a gate call is matched by name: the guard does not prove it runs before the model call, only that the file makes it',
+] as const;
 
-  const allSourceFiles = (dir: string): string[] => {
-    const out: string[] = [];
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
-        out.push(...allSourceFiles(full));
-      } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-        out.push(full);
-      }
+function allSourceFiles(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__tests__' || entry.name === 'test') continue;
+      out.push(...allSourceFiles(full));
+    } else if (/\.tsx?$/.test(entry.name) && !/\.(test|spec)\.tsx?$/.test(entry.name) && !entry.name.endsWith('.d.ts')) {
+      out.push(full);
     }
-    return out;
-  };
-  const srcRel = (file: string) => relative(SRC_DIR, file).split(sep).join('/');
-  const SOURCE_FILES = allSourceFiles(SRC_DIR);
+  }
+  return out;
+}
 
-  // Every caller of executeWorkflow. Adding one means reading the gate policy
-  // in lib/workflows/core/workflow-gate-options.ts and listing it here.
-  const KNOWN_ENTRY_POINTS = [
-    'app/api/cron/task-triggers/route.ts',
-    'app/api/cron/workflows/route.ts',
-    'app/api/workflows/[workflowId]/run/route.ts',
-    'lib/integrations/zoom/webhook-trigger-executor.ts',
-    'lib/webhooks/page-webhook-trigger-executor.ts',
-    'lib/workflows/calendar-trigger-executor.ts',
-    'lib/workflows/task-trigger-helpers.ts',
-  ];
 
-  it('every executeWorkflow entry point is enumerated', () => {
-    const callers = SOURCE_FILES.filter(
-      (f) => srcRel(f) !== EXECUTOR && readFileSync(f, 'utf8').includes('executeWorkflow('),
-    ).map(srcRel).sort();
-    expect(callers).toEqual(KNOWN_ENTRY_POINTS);
-  });
-
-  it('executeWorkflow gates credit inside the run claim, before dispatching any model call, and releases the hold in finally', () => {
-    const src = readFileSync(join(SRC_DIR, EXECUTOR), 'utf8');
-    const start = src.indexOf('export async function executeWorkflow(');
-    const body = src.slice(start, src.indexOf('\n}\n', start));
-    const gate = body.indexOf('await acquireWorkflowCredit(input)');
-    expect(gate).toBeGreaterThan(-1);
-    // After the claim: an overlapping fire loses the claim and never gates.
-    expect(gate).toBeGreaterThan(body.indexOf('.insert(workflowRuns)'));
-    // Before the model: runClaimed is the only path to runStepChain/runExecution.
-    expect(gate).toBeLessThan(body.indexOf('runClaimed('));
-    // A transient refusal gives the claim back, so the source retries.
-    expect(body.slice(gate).includes('abandonClaim(runId')).toBe(true);
-    const fin = body.lastIndexOf('} finally {');
-    expect(fin).toBeGreaterThan(gate);
-    expect(body.slice(fin).includes('await releaseHold(holdId)')).toBe(true);
-  });
-
-  it('no entry point takes its own credit gate or hold (the executor holds once for the whole run)', () => {
-    const offenders = KNOWN_ENTRY_POINTS.filter((rel) => {
-      const src = readFileSync(join(SRC_DIR, rel), 'utf8');
-      return src.includes('canConsumeAI(') || src.includes('releaseHold(');
-    });
-    expect(offenders).toEqual([]);
-  });
-});
+/** The AI SDK entry points that run a model. */
+const MODEL_ENTRY_POINTS = new Set([
+  'streamText', 'generateText', 'generateObject', 'streamObject', 'embed', 'embedMany',
+  'generateImage', 'experimental_generateImage', 'experimental_transcribe', 'experimental_generateSpeech',
+]);
 
 /**
- * Every place that resolves an AI provider spends money. Each must gate credit
- * in the same file, or be on this list with the reason its spend is gated
- * upstream. A new provider call fails here until someone decides which.
+ * Runs a model: imports an AI SDK entry point as a value (a call can hide behind an injected
+ * parameter, as the /btw side question's `streamText: stream = streamText` does, so the
+ * import is the signal, not the call), or calls a provider's HTTP API directly.
  */
-describe('AI provider resolution is credit-gated', () => {
-  const SRC_DIR = join(process.cwd(), 'src');
-  const GATE_CALLS = ['canConsumeAI(', 'acquireWorkflowCredit(', 'withZoomAiCredit('];
-  const GATED_UPSTREAM: Record<string, string> = {
-    'lib/ai/core/provider-factory.ts': 'defines createAIProvider',
-    'lib/ai/core/compaction/compaction-service.ts': 'runs after a gated chat turn, on that turn’s conversation',
-    'lib/ai/tools/agent-communication-tools.ts': 'ask_agent runs inside an already-gated parent request',
-    'lib/memory/compaction-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
-    'lib/memory/discovery-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
-    'lib/memory/integration-service.ts': 'memory cron: paying human accounts only (MEMORY_PAYING_TIERS + accountType human)',
-  };
+function runsModel(src: string): boolean {
+  for (const match of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"]ai['"]/g)) {
+    const names = match[1].split(',').map((n) => n.trim()).filter((n) => n && !n.startsWith('type '));
+    if (names.some((n) => MODEL_ENTRY_POINTS.has(n.split(/\s+as\s+/)[0].trim()))) return true;
+  }
+  // Free lookups (the model list, a generation's recorded cost) run no model.
+  return /fetch\(\s*['"`]https:\/\/(?:api\.openai\.com|openrouter\.ai\/api)\/v1\/(?!models\b|generation\b)/.test(src);
+}
 
-  const sourceFiles = (dir: string): string[] => {
-    const out: string[] = [];
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== '__tests__' && entry.name !== 'node_modules') out.push(...sourceFiles(full));
-      } else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-        out.push(full);
-      }
-    }
-    return out;
-  };
+/** The credit gate or one of its wrappers — each reserves through canConsumeAI before the call. */
+const MODULE_GATE = /\b(?:canConsumeAI|gateUserCall|reserveMemoryCall|acquire(?:User|Workflow|Mention)CreditHold)\(/;
 
-  it('every createAIProvider caller gates credit in-file or is listed with its upstream gate', () => {
-    const offenders = sourceFiles(SRC_DIR)
-      .map((file) => ({ rel: relative(SRC_DIR, file).split(sep).join('/'), src: readFileSync(file, 'utf8') }))
-      .filter(({ src }) => src.includes('createAIProvider('))
-      .filter(({ rel, src }) => !(rel in GATED_UPSTREAM) && !GATE_CALLS.some((call) => src.includes(call)))
+/**
+ * Modules that run a model without calling the gate themselves because EVERY caller gates
+ * first. Each names the one file that takes that gate and imports the module; the guard
+ * checks both, so an entry cannot outlive the gate it relies on. Pinned exactly: a new
+ * module that runs a model either gates its own call or is argued onto this list in review.
+ */
+const GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
+  'src/lib/ai/btw/side-question.ts': {
+    gatedIn: 'src/app/api/ai/btw/route.ts',
+    reason: 'runs only from POST /api/ai/btw, which gates with canConsumeAI and settles the hold once',
+  },
+  'src/lib/ai/core/image-generation.ts': {
+    gatedIn: 'src/lib/ai/tools/image-generation-tools.ts',
+    reason: 'runs only from the generate_image tool, which gates with canConsumeAI on its turn\'s spend before generating',
+  },
+  'src/lib/integrations/zoom/extract-action-items.ts': {
+    gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
+    reason: 'called only from processZoomWebhook, which reserves the destination drive\'s payer (acquireUserCreditHold) before either enrichment call',
+  },
+  'src/lib/integrations/zoom/generate-summary.ts': {
+    gatedIn: 'src/lib/integrations/zoom/process-webhook.ts',
+    reason: 'called only from processZoomWebhook, which reserves the destination drive\'s payer (acquireUserCreditHold) before either enrichment call',
+  },
+  'src/lib/workflows/workflow-executor.ts': {
+    gatedIn: 'src/lib/workflows/workflow-credit-gate.ts',
+    reason: 'every run is admitted by acquireWorkflowCreditHold or carries the creditSpend its trigger executor reserved with canConsumeAI; a run with neither fails closed (automationRunUnreserved)',
+  },
+};
+
+const moduleSources = () => allSourceFiles(SRC_DIR).map((path) => ({ rel: webRelPath(path), src: stripComments(readFileSync(path, 'utf8')) }));
+
+describe('AI gate call-site guards: every module that runs a model', () => {
+  const modules = moduleSources();
+  const modelModules = modules.filter(({ src }) => runsModel(src));
+
+  it('SPEND-1 (partial) every module that runs a model gates the call itself or is pinned to the gate its callers take', () => {
+    const offenders = modelModules
+      .filter(({ rel, src }) => !MODULE_GATE.test(src) && !(rel in GATED_BY_CALLER))
       .map(({ rel }) => rel);
     expect(offenders).toEqual([]);
   });
 
-  it('the Zoom transcript enrichments gate through withZoomAiCredit', () => {
-    for (const rel of ['lib/integrations/zoom/generate-summary.ts', 'lib/integrations/zoom/extract-action-items.ts']) {
-      expect(readFileSync(join(SRC_DIR, rel), 'utf8')).toMatch(/withZoomAiCredit\(/);
+  it('the gated-by-caller list is exactly these modules, each still running a model with no gate of its own', () => {
+    expect(Object.keys(GATED_BY_CALLER).sort()).toEqual([
+      'src/lib/ai/btw/side-question.ts',
+      'src/lib/ai/core/image-generation.ts',
+      'src/lib/integrations/zoom/extract-action-items.ts',
+      'src/lib/integrations/zoom/generate-summary.ts',
+      'src/lib/workflows/workflow-executor.ts',
+    ]);
+    const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+    for (const rel of Object.keys(GATED_BY_CALLER)) {
+      const src = bySrc.get(rel);
+      expect(src, rel).toBeDefined();
+      expect(runsModel(src!), `${rel} no longer runs a model: remove it`).toBe(true);
+      expect(MODULE_GATE.test(src!), `${rel} now gates itself: remove it`).toBe(false);
     }
+  });
+
+  it('each pinned module\'s caller takes the gate and imports the module', () => {
+    const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+    for (const [rel, { gatedIn, reason }] of Object.entries(GATED_BY_CALLER)) {
+      const caller = bySrc.get(gatedIn);
+      expect(caller, gatedIn).toBeDefined();
+      expect(MODULE_GATE.test(caller!), `${gatedIn} takes no gate`).toBe(true);
+      const moduleName = rel.replace(/^.*\//, '').replace(/\.tsx?$/, '');
+      expect(new RegExp(`['"][^'"]*/${moduleName}['"]`).test(caller!), `${gatedIn} does not import ${rel}`).toBe(true);
+      expect(reason.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('its known limits are exactly these, each stated', () => {
+    expect(KNOWN_LIMITS).toHaveLength(4);
+    for (const limit of KNOWN_LIMITS) expect(limit.length).toBeGreaterThan(40);
+  });
+
+  it('the module scan sees the model calls it must (guard is not vacuous)', () => {
+    const rels = modelModules.map(({ rel }) => rel);
+    for (const expected of [
+      'src/lib/ai/chat-pipeline/page-chat-turn.ts',
+      'src/lib/ai/core/compaction/compaction-service.ts',
+      'src/lib/memory/discovery-service.ts',
+      'src/lib/ai/btw/side-question.ts',
+      'src/app/api/voice/synthesize/route.ts',
+    ]) {
+      expect(rels, expected).toContain(expected);
+    }
+  });
+});
+
+// ─── apps/realtime: the Realtime voice transport ─────────────────────────────────────────
+
+const REALTIME_SRC = join(process.cwd(), '..', 'realtime', 'src');
+const realtimeRel = (file: string) => relative(join(process.cwd(), '..', '..'), file).split(sep).join('/');
+
+/** Opens the OpenAI Realtime socket, or runs a model through the AI SDK. */
+const runsRealtimeModel = (src: string) => /['"`]wss:\/\/api\.openai\.com\/v1\/realtime/.test(src) || runsModel(src);
+
+/**
+ * apps/realtime modules that run a model, each pinned to the caller that takes the meter's
+ * hold (canConsumeAI inside startCallMeter) before the socket attaches.
+ */
+const REALTIME_GATED_BY_CALLER: Record<string, { gatedIn: string; reason: string }> = {
+  'apps/realtime/src/voice/realtime-call-session.ts': {
+    gatedIn: 'apps/realtime/src/voice/attach-handler.ts',
+    reason: 'the Realtime socket is attached only by the attach handler, after startMeter took the opening hold on the call\'s resolved spend; every later window re-holds through canConsumeAI or ends the call',
+  },
+};
+
+describe('AI gate call-site guards: apps/realtime', () => {
+  const modules = allSourceFiles(REALTIME_SRC).map((path) => ({ rel: realtimeRel(path), src: stripComments(readFileSync(path, 'utf8')) }));
+  const bySrc = new Map(modules.map(({ rel, src }) => [rel, src]));
+
+  it('SPEND-1 (partial) every apps/realtime module that runs a model is pinned to a caller that meters it first', () => {
+    const offenders = modules
+      .filter(({ rel, src }) => runsRealtimeModel(src) && !MODULE_GATE.test(src) && !(rel in REALTIME_GATED_BY_CALLER))
+      .map(({ rel }) => rel);
+    expect(offenders).toEqual([]);
+    expect(modules.filter(({ src }) => runsRealtimeModel(src)).map(({ rel }) => rel)).toEqual(Object.keys(REALTIME_GATED_BY_CALLER));
+  });
+
+  it('the pinned caller takes the meter\'s hold BEFORE it attaches the socket, and the meter gates through canConsumeAI', () => {
+    for (const [rel, { gatedIn, reason }] of Object.entries(REALTIME_GATED_BY_CALLER)) {
+      const caller = bySrc.get(gatedIn);
+      expect(caller, gatedIn).toBeDefined();
+      const moduleName = rel.replace(/^.*\//, '').replace(/\.tsx?$/, '');
+      expect(new RegExp(`['"][^'"]*/${moduleName}['"]`).test(caller!), `${gatedIn} does not import ${rel}`).toBe(true);
+      const meterAt = caller!.indexOf('deps.startMeter(');
+      const attachAt = caller!.indexOf('deps.attach(');
+      expect(meterAt, 'startMeter call').toBeGreaterThan(-1);
+      expect(attachAt, 'attach call').toBeGreaterThan(meterAt);
+      expect(reason.length).toBeGreaterThan(20);
+    }
+    const meter = bySrc.get('apps/realtime/src/voice/call-metering.ts');
+    expect(meter).toBeDefined();
+    expect(meter).toMatch(/gate = canConsumeAI/);
+    expect(meter!.indexOf('await gate(userId')).toBeGreaterThan(-1);
+  });
+});
+
+// ─── Workflow runs: where the gate sits, and what a refusal leaves behind ────────────────
+//
+// The manual run route and both crons once called executeWorkflow with no credit gate, so a
+// zero-balance account — and any unclaimed agent — could schedule free AI (Agent Signup
+// Phase 1b / D-33). Every caller now passes the gate (automation-spend.guard pins which way);
+// these pins keep the gate's PLACEMENT and its retry semantics, so a transient refusal never
+// loses a calendar occurrence, a cron slot or a one-shot task trigger.
+describe('workflow run gate guards', () => {
+  const read = (rel: string) => stripComments(readFileSync(join(SRC_DIR, rel), 'utf8'));
+  const body = (src: string, signature: string) => {
+    const start = src.indexOf(signature);
+    expect(start, signature).toBeGreaterThan(-1);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  it('executeWorkflow admits a run inside the claim, before any model: claim -> admit -> runClaimed, and a transient refusal gives the claim back', () => {
+    const run = body(read('lib/workflows/workflow-executor.ts'), 'export async function executeWorkflow(');
+    const claim = run.indexOf('.insert(workflowRuns)');
+    const admit = run.indexOf('await options.admit()');
+    expect(claim).toBeGreaterThan(-1);
+    // After the claim: an overlapping fire loses the claim and never gates.
+    expect(admit).toBeGreaterThan(claim);
+    // Before the model: runClaimed is the only path to runStepChain/runExecution.
+    expect(admit).toBeLessThan(run.indexOf('runClaimed('));
+    // A transient refusal (or a throwing gate) of a rescheduled source gives the claim back.
+    expect(run.slice(admit)).toMatch(/shouldRetryRefusal\(/);
+    expect(run.slice(admit)).toMatch(/abandonClaim\(runId/);
+    // The fail-closed backstop: a model run with no reserved drive wallet is skipped.
+    expect(run).toMatch(/automationRunUnreserved\(/);
+  });
+
+  it('every trigger executor that gates before the claim calls the gate before executeWorkflow', () => {
+    for (const rel of [
+      'lib/workflows/calendar-trigger-executor.ts',
+      'lib/integrations/zoom/webhook-trigger-executor.ts',
+      'lib/webhooks/page-webhook-trigger-executor.ts',
+    ]) {
+      const src = read(rel);
+      const gateAt = src.indexOf('canConsumeAI(');
+      expect(gateAt, rel).toBeGreaterThan(-1);
+      expect(src.indexOf('executeWorkflow(', gateAt), rel).toBeGreaterThan(gateAt);
+    }
+  });
+
+  it('a calendar occurrence refused before the claim is retried only inside the window, else settled once', () => {
+    const src = read('lib/workflows/calendar-trigger-executor.ts');
+    expect(src).toMatch(/shouldRetryRefusal\(/);
+    expect(src).toMatch(/retryable: true/);
+    expect(src).toMatch(/recordUnstartedRun\(trigger, 'cancelled'/);
+  });
+
+  it('every scheduled caller keeps its source eligible on a retryable result', () => {
+    expect(read('app/api/cron/workflows/route.ts')).toMatch(/!result\.claimConflict && !result\.retryable/);
+    expect(read('app/api/cron/task-triggers/route.ts')).toMatch(/if \(result\.retryable\)/);
+    expect(read('lib/workflows/task-trigger-helpers.ts')).toMatch(/if \(result\.retryable\)/);
+    expect(read('app/api/cron/calendar-triggers/route.ts')).toMatch(/result\.retryable/);
+  });
+
+  it('a completion fire keeps the tier daily cap (user-paced), the due-date cron skips it', () => {
+    expect(read('lib/workflows/task-trigger-helpers.ts')).toMatch(/creditAdmission\(input, 'user-paced'\)/);
+    expect(read('app/api/cron/task-triggers/route.ts')).toMatch(/'due_date' \? 'scheduled' : 'user-paced'/);
   });
 });

@@ -48,6 +48,7 @@ import {
   revokeEnv,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -69,7 +70,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'read', envId },
       });
-      return NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Not a member of this drive' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);
@@ -99,7 +100,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ drive
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'rename', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can rename environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can rename environments' }, { status: 403 }));
     }
 
     if (!(await resolveEnvInDrive(envId, driveId))) {
@@ -150,7 +151,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
         resourceId: driveId,
         details: { route: 'drive-envs', operation: 'delete', envId },
       });
-      return NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 });
+      return deniedResponse(actorFromAuth(auth), driveId, NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 }));
     }
 
     const env = await resolveEnvInDrive(envId, driveId);
@@ -181,12 +182,18 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     const force = new URL(request.url).searchParams.get('force') === 'true';
     const result = await deleteEnv({ envId, force });
 
-    // Two refusals, both terminal. There is deliberately no `teardown_failed`
+    // Three refusals (not_found, is_home, live_sessions), all terminal. There is deliberately no `teardown_failed`
     // arm any more: the delete now kills the Sprite only AFTER the row is gone,
     // so a kill this request could not confirm is the reclaim outbox's problem
     // rather than a failure to report — the environment IS deleted either way.
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      if (result.reason === 'is_home') {
+        return NextResponse.json(
+          { error: 'Home can’t be deleted — your assistants run in it. Use Rebuild to start it fresh, or rename it.', reason: 'is_home' },
+          { status: 409 },
+        );
+      }
       return NextResponse.json(
         {
           error: 'Sessions are still running in this environment',

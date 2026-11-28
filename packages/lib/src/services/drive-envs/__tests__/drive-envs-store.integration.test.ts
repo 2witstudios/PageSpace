@@ -79,6 +79,7 @@ async function seedEnv(
     sandboxId: string;
     spriteInstanceId: string | null;
     spriteTornDownAt: Date;
+    isHome: boolean;
   }> = {},
 ): Promise<string> {
   const id = createId();
@@ -91,6 +92,7 @@ async function seedEnv(
     sandboxId: over.sandboxId ?? null,
     spriteInstanceId: over.spriteInstanceId ?? null,
     spriteTornDownAt: over.spriteTornDownAt ?? null,
+    isHome: over.isHome ?? false,
     updatedAt: new Date(),
   });
   return id;
@@ -413,6 +415,12 @@ describe('createIfUnderLimit — the ceiling, for real', () => {
     }
   });
 
+  // The six transactions serialise on the payer lock, each holding a pooled
+  // connection: well under a second alone, but past vitest's 5s default on a
+  // heavily loaded host (IMG-4.2b review). The wait is the guarantee under
+  // test, so it gets an explicit budget instead of a smaller fan-out.
+  const CONCURRENT_CREATES_TIMEOUT_MS = 30_000;
+
   it('given MANY concurrent creates at the ceiling, should let exactly the remaining slots through', async () => {
     // The behavioral form of the same guarantee: `(driveId, name)` uniqueness
     // cannot serialize `env-0` against `env-1`, so the ceiling has to come from
@@ -436,7 +444,7 @@ describe('createIfUnderLimit — the ceiling, for real', () => {
     expect(attempts.filter((attempt) => attempt.ok)).toHaveLength(2);
     const rows = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId));
     expect(rows).toHaveLength(4);
-  });
+  }, CONCURRENT_CREATES_TIMEOUT_MS);
 
   it('given a duplicate NAME, should answer name_taken rather than throwing — drizzle wraps the driver error', async () => {
     // The wrapped-`cause` case: `drizzle-orm@0.45.2` rethrows the driver's
@@ -595,6 +603,97 @@ describe('countLiveSessionsInEnv / countEnvsOwnedBy', () => {
 
     expect(await store.countEnvsOwnedBy(payerId)).toBe(2);
     expect(await store.countEnvsOwnedBy(otherPayerId)).toBe(1);
+  });
+
+  it('should NOT count the payer\'s Home env — the ceiling meters envs made on purpose', async () => {
+    await seedEnv({ driveId, name: 'Home', isHome: true });
+    await seedEnv({ driveId: secondDriveId, name: 'b' });
+
+    expect(await store.countEnvsOwnedBy(payerId)).toBe(1);
+  });
+});
+
+describe('createIfUnderLimit — Home is outside the ceiling', () => {
+  it('given a Home env and one deliberate env at a ceiling of 2, should still mint the second deliberate env, then refuse a third', async () => {
+    await seedEnv({ driveId, name: 'Home', isHome: true });
+    await seedEnv({ driveId, name: 'first' });
+
+    const second = await store.createIfUnderLimit({ driveId, name: 'second', createdBy: payerId, now: new Date(), payerId, maxEnvs: 2 });
+    expect(second.ok).toBe(true);
+
+    const third = await store.createIfUnderLimit({ driveId, name: 'third', createdBy: payerId, now: new Date(), payerId, maxEnvs: 2 });
+    expect(third).toEqual({ ok: false, reason: 'limit_reached' });
+  });
+});
+
+describe('ensureHomeEnv — one Home per drive, for real', () => {
+  it('given no Home env, should mint one named "Home", flagged, billed to its creator, with no Sprite', async () => {
+    const env = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(env).toMatchObject({ driveId, name: 'Home', isHome: true, createdBy: payerId, sandboxId: null });
+    const [row] = await db.select().from(driveEnvs).where(eq(driveEnvs.id, env.id)).limit(1);
+    expect(row?.costOwnerId).toBe(payerId);
+  });
+
+  it('given a Home env already, should return it and mint nothing', async () => {
+    const first = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+    const second = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(second.id).toBe(first.id);
+    const rows = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('given a renamed Home env, should still return it — Home is the flag, not the name', async () => {
+    const first = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+    await store.rename({ envId: first.id, name: 'my-box', now: new Date() });
+
+    const again = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+    expect(again).toMatchObject({ id: first.id, name: 'my-box', isHome: true });
+  });
+
+  it('given an unflagged env already named "Home", should adopt it rather than fail on the name', async () => {
+    const mine = await seedEnv({ driveId, name: 'Home' });
+
+    const env = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(env).toMatchObject({ id: mine, isHome: true });
+    const rows = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('given a LOCAL env already named "Home", should not adopt the machine — Home is minted beside it', async () => {
+    const machine = createId();
+    await db.insert(driveEnvs).values({ id: machine, driveId, name: 'Home', substrate: 'local', createdBy: payerId, updatedAt: new Date() });
+
+    const env = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(env.id).not.toBe(machine);
+    expect(env).toMatchObject({ name: 'Home sandbox', isHome: true, substrate: 'sprite' });
+  });
+
+  it('given a LOCAL "Home" and an env already named "Home sandbox", should mint Home as "Home sandbox 2" instead of throwing on the name', async () => {
+    await db.insert(driveEnvs).values({ id: createId(), driveId, name: 'Home', substrate: 'local', createdBy: payerId, updatedAt: new Date() });
+    await seedEnv({ driveId, name: 'Home sandbox' });
+
+    const env = await store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() });
+
+    expect(env).toMatchObject({ name: 'Home sandbox 2', isHome: true, substrate: 'sprite' });
+  });
+
+  it('given MANY concurrent first uses, should end with exactly one Home env and hand every caller the same one', async () => {
+    const results = await Promise.all(
+      Array.from({ length: 6 }, () => store.ensureHomeEnv({ driveId, createdBy: payerId, now: new Date() })),
+    );
+
+    expect(new Set(results.map((env) => env.id)).size).toBe(1);
+    const rows = await db.select().from(driveEnvs).where(eq(driveEnvs.driveId, driveId));
+    expect(rows).toHaveLength(1);
+  });
+
+  it('the partial unique index refuses a second flagged Home in one drive', async () => {
+    await seedEnv({ driveId, name: 'Home', isHome: true });
+    await expect(seedEnv({ driveId, name: 'Home 2', isHome: true })).rejects.toThrow();
   });
 });
 

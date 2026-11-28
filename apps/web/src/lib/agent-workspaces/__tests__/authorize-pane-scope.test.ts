@@ -11,6 +11,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { authorizePaneScope, type PaneScopeAuthorityDeps } from '../authorize-pane-scope';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const VIEWER = 'viewer-1';
 const WORKSPACE = 'ws-1';
@@ -32,15 +33,15 @@ describe('page scopes', () => {
   it('REFUSES a page the caller cannot view — the title oracle over pages', async () => {
     const d = deps({ canViewPage: vi.fn(async () => false) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('page', 'page-secret') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('page', 'page-secret') }, d),
     ).toBe(false);
-    expect(d.canViewPage).toHaveBeenCalledWith(VIEWER, 'page-secret');
+    expect(d.canViewPage).toHaveBeenCalledWith(expect.objectContaining({ userId: VIEWER }), 'page-secret');
   });
 
   it('allows a page the caller can view', async () => {
     const d = deps({ canViewPage: vi.fn(async () => true) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('page', 'page-ok') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('page', 'page-ok') }, d),
     ).toBe(true);
   });
 });
@@ -49,21 +50,21 @@ describe('terminal scopes', () => {
   it('REFUSES a shell that lives in a different workspace', async () => {
     const d = deps({ findShellWorkspace: vi.fn(async () => OTHER_WORKSPACE) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('terminal', 'shell-x') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('terminal', 'shell-x') }, d),
     ).toBe(false);
   });
 
   it('REFUSES a shell that does not exist', async () => {
     const d = deps({ findShellWorkspace: vi.fn(async () => null) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('terminal', 'nope') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('terminal', 'nope') }, d),
     ).toBe(false);
   });
 
   it('allows a shell of THIS workspace', async () => {
     const d = deps({ findShellWorkspace: vi.fn(async () => WORKSPACE) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('terminal', 'shell-own') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('terminal', 'shell-own') }, d),
     ).toBe(true);
   });
 });
@@ -81,28 +82,28 @@ describe('chat scopes', () => {
   it('REFUSES a foreign private conversation — the universal title oracle', async () => {
     const d = deps({ findConversation: vi.fn(async () => conversation({ workspaceId: OTHER_WORKSPACE })) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-victim') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-victim') }, d),
     ).toBe(false);
   });
 
   it('REFUSES a conversation that does not exist — no existence oracle either', async () => {
     const d = deps({ findConversation: vi.fn(async () => null) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'made-up') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'made-up') }, d),
     ).toBe(false);
   });
 
   it('allows a conversation already bound to THIS workspace', async () => {
     const d = deps({ findConversation: vi.fn(async () => conversation({ workspaceId: WORKSPACE })) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-here') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-here') }, d),
     ).toBe(true);
   });
 
   it("allows the caller's OWN conversation from anywhere", async () => {
     const d = deps({ findConversation: vi.fn(async () => conversation({ userId: VIEWER })) });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-mine') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-mine') }, d),
     ).toBe(true);
   });
 
@@ -112,7 +113,7 @@ describe('chat scopes', () => {
       canViewPage: vi.fn(async () => true),
     });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-shared') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-shared') }, d),
     ).toBe(true);
   });
 
@@ -122,7 +123,7 @@ describe('chat scopes', () => {
       canViewPage: vi.fn(async () => false),
     });
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-shared') }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', 'conv-shared') }, d),
     ).toBe(false);
   });
 });
@@ -131,7 +132,7 @@ describe('an unbound picker pane', () => {
   it('needs no authority — there is no target yet', async () => {
     const d = deps();
     expect(
-      await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('chat', null) }, d),
+      await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('chat', null) }, d),
     ).toBe(true);
     expect(d.findConversation).not.toHaveBeenCalled();
   });
@@ -140,8 +141,8 @@ describe('an unbound picker pane', () => {
 describe('ports scopes', () => {
   it('authorizes only when the target IS this workspace — containment is the whole rule', async () => {
     const d = deps();
-    expect(await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('ports', WORKSPACE) }, d)).toBe(true);
+    expect(await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('ports', WORKSPACE) }, d)).toBe(true);
     // A ports pane must not point at some other session's sandbox.
-    expect(await authorizePaneScope({ viewerId: VIEWER, workspaceId: WORKSPACE, scope: scopeOf('ports', OTHER_WORKSPACE) }, d)).toBe(false);
+    expect(await authorizePaneScope({ viewer: credentialActor(VIEWER, null), workspaceId: WORKSPACE, scope: scopeOf('ports', OTHER_WORKSPACE) }, d)).toBe(false);
   });
 });

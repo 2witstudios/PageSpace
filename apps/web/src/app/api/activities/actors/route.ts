@@ -8,6 +8,7 @@ import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
+import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -85,10 +86,10 @@ export async function GET(request: Request) {
         // Verify principal can view drive
         const canViewDrive = await isPrincipalDriveMember(auth, params.driveId);
         if (!canViewDrive) {
-          return NextResponse.json(
+          return deniedResponse(actorFromAuth(auth), params.driveId, NextResponse.json(
             { error: 'Unauthorized - you do not have access to this drive' },
             { status: 403 }
-          );
+          ));
         }
 
         whereCondition = and(

@@ -25,7 +25,10 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), error: vi.fn(), warn: vi.fn() } },
 }));
-vi.mock('@pagespace/lib/billing/sandbox-payer', () => ({ lookupDriveOwnerId: vi.fn(async () => 'agent_1') }));
+vi.mock('@pagespace/lib/billing/sandbox-payer', () => ({
+  lookupDriveBillingFacts: vi.fn(async () => ({ ownerId: 'agent_1', orgId: null })),
+  payerForDrive: vi.fn((facts: { ownerId: string }) => ({ kind: 'user', userId: facts.ownerId })),
+}));
 vi.mock('@pagespace/lib/services/app-hosting/provisioner', () => ({
   getPublishedApp: vi.fn(async () => ({ id: 'app_1', driveId: 'drive_1', guestPreset: 'small' })),
 }));

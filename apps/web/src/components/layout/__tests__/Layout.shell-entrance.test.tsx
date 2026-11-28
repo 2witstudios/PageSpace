@@ -46,6 +46,9 @@ vi.mock('@/stores/useLayoutStore', () => ({
 vi.mock('@/stores/useEditingStore', () => ({
   useEditingStore: {
     getState: () => ({ clearAllSessions: () => {}, clearStaleSessions: () => {} }),
+    // useOrgs defers org:changed refreshes while anything is editing and resubscribes
+    // when editing ends; the tests never edit, so subscribe only needs to unsubscribe.
+    subscribe: (_listener: (state: unknown) => void) => () => {},
   },
 }));
 vi.mock('next/navigation', () => ({

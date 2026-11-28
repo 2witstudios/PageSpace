@@ -1,5 +1,19 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+// SPEND-6: each mentioned agent's reply is gated on the channel's drive wallet
+// (mention-credit-gate, unit-tested on its own). This suite covers other behaviour,
+// so the gate admits every reply here.
+// POL-9: the responder asks the channel drive's org whether agents may reply on their own; no org in these tests.
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies: vi.fn() }));
+
+vi.mock('@/lib/channels/mention-credit-gate', () => ({
+  acquireMentionCreditHold: async () => ({
+    allowed: true,
+    creditSpend: { spend: { kind: 'automation', driveId: 'drive-1' }, walletId: 'w-drive-1' },
+    release: () => {},
+  }),
+}));
+
 vi.mock('@pagespace/db/db', () => ({
   db: {
     query: {
@@ -36,10 +50,12 @@ vi.mock('@pagespace/lib/permissions/agent-permissions', () => ({
   hasAgentDriveMembership: vi.fn().mockResolvedValue(false),
 }));
 vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  toolActor: (ctx: { userId: string; accessActor?: unknown }) => ctx.accessActor ?? { via: 'credential', userId: ctx.userId, authentication: null },
   canActorEditPage: vi.fn().mockResolvedValue(true),
   canActorConsultAgent: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   canUserViewPage: vi.fn().mockResolvedValue(true),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
@@ -83,6 +99,11 @@ vi.mock('@pagespace/lib/permissions/file-access', () => ({
   canUserAccessFile: (...args: unknown[]) => mockCanUserAccessFile(...args),
 }));
 
+const mockFindBlockedHashes = vi.fn();
+vi.mock('@pagespace/lib/content-safety/blocklist', () => ({
+  findBlockedHashes: (...args: unknown[]) => mockFindBlockedHashes(...args),
+}));
+
 const mockGeneratePresignedUrl = vi.fn();
 vi.mock('@/lib/presigned-url', () => ({
   generatePresignedUrl: (...args: unknown[]) => mockGeneratePresignedUrl(...args),
@@ -95,6 +116,7 @@ vi.mock('@/lib/presigned-url', () => ({
 
 import { db } from '@pagespace/db/db';
 import { triggerMentionedAgentResponses, type TriggerMentionedAgentResponsesParams } from '../agent-mention-responder';
+import { credentialActor } from '@pagespace/lib/permissions/access-actor';
 
 const mockPagesFindMany = db.query.pages.findMany as unknown as Mock;
 const mockChannelMessagesFindMany = db.query.channelMessages.findMany as unknown as Mock;
@@ -111,7 +133,7 @@ const fileRow = {
 };
 
 const baseParams: TriggerMentionedAgentResponsesParams = {
-  userId: 'user-1',
+  sender: credentialActor('user-1', null),
   channelId: 'channel-1',
   channelTitle: 'General',
   channelType: 'CHANNEL',
@@ -147,7 +169,27 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     mockAskAgentExecute.mockResolvedValue({ success: true, response: 'Reply' });
     mockSendChannelExecute.mockResolvedValue({ success: true });
     mockCanUserAccessFile.mockResolvedValue(true);
+    mockFindBlockedHashes.mockResolvedValue(new Set());
     mockGeneratePresignedUrl.mockResolvedValue('https://example.com/signed/screenshot.png');
+  });
+
+  it('given an image attachment that was taken down, signs no URL for it and passes the agent no image', async () => {
+    mockFindBlockedHashes.mockResolvedValue(new Set([STORED_CONTENT_HASH]));
+    mockPagesFindMany.mockResolvedValue([
+      { id: 'agent-1', title: 'Vision Agent', enabledTools: ['send_channel_message'], aiProvider: 'anthropic', aiModel: 'claude-sonnet-4.5' },
+    ]);
+
+    await triggerMentionedAgentResponses({
+      ...baseParams,
+      content: '@[Vision Agent](agent-1:page) look at this',
+    });
+
+    expect(mockFindBlockedHashes).toHaveBeenCalledTimes(1);
+    expect(mockFindBlockedHashes).toHaveBeenCalledWith([STORED_CONTENT_HASH]);
+    expect(mockCanUserAccessFile).not.toHaveBeenCalled();
+    expect(mockGeneratePresignedUrl).not.toHaveBeenCalled();
+    expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
+    expect(mockAskAgentExecute.mock.calls[0][0].imageAttachments ?? []).toEqual([]);
   });
 
   it('given an eligible agent with vision and a recent image attachment, passes resolved imageAttachments to ask_agent', async () => {
@@ -161,7 +203,7 @@ describe('triggerMentionedAgentResponses — image attachment plumbing', () => {
     });
 
     // Access-checked against the file row's own drive, not the channel's.
-    expect(mockCanUserAccessFile).toHaveBeenCalledWith('user-1', 'file-1', 'file-drive-1');
+    expect(mockCanUserAccessFile).toHaveBeenCalledWith(expect.objectContaining({ via: 'credential', userId: 'user-1' }), 'file-1', 'file-drive-1');
     expect(mockAskAgentExecute).toHaveBeenCalledTimes(1);
     const askArgs = mockAskAgentExecute.mock.calls[0][0];
     expect(askArgs.imageAttachments).toEqual([

@@ -1,4 +1,5 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
+import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
 
 // ============================================================================
 // Tests for workflow-executor.ts
@@ -36,35 +37,6 @@ const {
   mockDeleteWhere: vi.fn(),
   mockToolExecute: vi.fn(),
   mockResolveSandboxToolEligibility: vi.fn(),
-}));
-
-// The credit gate executeWorkflow runs on EVERY entry point (Phase 1b / D-33).
-// Plain recorders, not vi.fn(), so resetAllMocks in each suite cannot wipe the
-// default "allowed" decision the pre-existing tests rely on.
-const creditGate = vi.hoisted(() => ({
-  decision: { allowed: true, holdId: 'hold_1' } as
-    | { allowed: true; holdId?: string }
-    | { allowed: false; reason: 'too_many_in_flight' | 'daily_cap_exceeded' | 'out_of_credits' | 'requires_funding' | 'needs_init' },
-  calls: [] as unknown[],
-  released: [] as string[],
-  throws: null as Error | null,
-  onCall: null as (() => void) | null,
-}));
-vi.mock('../workflow-credit-gate', () => ({
-  acquireWorkflowCredit: async (input: unknown) => {
-    creditGate.calls.push(input);
-    creditGate.onCall?.();
-    if (creditGate.throws) throw creditGate.throws;
-    return creditGate.decision;
-  },
-}));
-vi.mock('@pagespace/lib/billing/credit-consume', () => ({
-  // Records only after a macrotask, so a `released` assertion made when
-  // executeWorkflow resolves proves the release was AWAITED, not fired off.
-  releaseHold: async (holdId: string) => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    creditGate.released.push(holdId);
-  },
 }));
 
 vi.mock('@/lib/ai/core/sandbox-tool-eligibility', () => ({
@@ -121,14 +93,12 @@ vi.mock('@/lib/ai/core/deterministic-tools', async () => {
     }),
   };
 });
-vi.mock('@pagespace/db/operators', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   and: vi.fn(),
   inArray: vi.fn(),
 }));
-vi.mock('@pagespace/db/schema/auth', async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
+vi.mock('@pagespace/db/schema/auth', () => ({
   users: { id: 'id', name: 'name' },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -155,6 +125,12 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
+// The pro-model gate for the funder's tier (WAL-8, POL-8). Default: entitled.
+const modelEntitlement = vi.hoisted(() => vi.fn(async (_input: { userId: string; provider: string; model: string; spend: unknown }) => ({ allowed: true } as { allowed: true } | { allowed: false; reason: 'provider_admin_only' | 'subscription_required' })));
+vi.mock('@/lib/ai/core/model-entitlement', () => ({
+  modelEntitlement,
+  MODEL_ENTITLEMENT_MESSAGES: { provider_admin_only: 'admin only', subscription_required: 'This model is available on paid plans, and whoever pays for this run is not on one.' },
+}));
 vi.mock('@/lib/ai/core/provider-factory', () => ({
   createAIProvider: vi.fn(),
   isProviderError: vi.fn(),
@@ -185,6 +161,13 @@ vi.mock('@/lib/repositories/message-repository', () => ({
 // Every run that does NOT bind a session conversation mints a plain page
 // conversation here, so the run's messages have a real parent row (#2686).
 const { mockCreateConversation } = vi.hoisted(() => ({ mockCreateConversation: vi.fn() }));
+
+// Wallets are dark in every test unless one turns them on (SPEND-6 fail-closed cases).
+const walletFlags = vi.hoisted(() => ({ billingEnabled: false }));
+vi.mock('@pagespace/lib/deployment-mode', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@pagespace/lib/deployment-mode')>()),
+  isBillingEnabled: () => walletFlags.billingEnabled,
+}));
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: { createConversation: mockCreateConversation },
 }));
@@ -193,11 +176,20 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
   resolvePageAgentIntegrationTools: mockResolvePageAgentIntegrationTools,
 }));
 
+// POL-9: the executor asks the drive's org whether agents may run on their own; the default here is no org.
+const getDrivePolicies = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/policy-reader', () => ({ getDrivePolicies }));
+
+// [D-OW-36] The executor re-reads who the workflow runs as inside its claim; unset here = the row is gone (runs as before).
+const readWorkflowOwnership = vi.hoisted(() => vi.fn());
+vi.mock('@pagespace/lib/organizations/automation-ownership', () => ({ readWorkflowOwnership }));
+
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
 }));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  explainSignInRefusal: vi.fn().mockResolvedValue(null),
   isUserDriveMember: vi.fn(),
 }));
 
@@ -213,6 +205,8 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { createId } from '@paralleldrive/cuid2';
+import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { DEFAULT_ORG_POLICIES } from '@pagespace/lib/organizations/policies-core';
 
 const createInputFixture = (overrides: Partial<WorkflowExecutionInput> = {}): WorkflowExecutionInput => ({
   workflowId: 'wf_1',
@@ -269,12 +263,18 @@ function setupSelectChain(...results: unknown[][]) {
 describe('executeWorkflow', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    // Billing off by default: the SPEND-6 unreserved-run skip would otherwise
+    // pre-empt every configuration-validation test. The gate tests below turn
+    // it on explicitly ("with wallets on").
+    walletFlags.billingEnabled = false;
+    modelEntitlement.mockResolvedValue({ allowed: true });
     // resetAllMocks wipes implementations — restore the session-mint defaults
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
+    getDrivePolicies.mockResolvedValue(null);
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
@@ -283,6 +283,7 @@ describe('executeWorkflow', () => {
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [{}] }],
       usage: { inputTokens: 100, outputTokens: 50 },
+      totalUsage: { inputTokens: 100, outputTokens: 50 },
     } as never);
 
     // Default workflow_runs claim: succeeds with a fake run id.
@@ -343,6 +344,130 @@ describe('executeWorkflow', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('AI provider error');
+  });
+
+  test('POL-8 (partial) the workflow\'s drive is named to the provider factory, and an org-policy refusal fails the run with the policy message', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    vi.mocked(isProviderError).mockReturnValue(true);
+    vi.mocked(createAIProvider).mockResolvedValue({ error: "This organization doesn't allow that AI model.", status: 403, code: 'org_policy', policy: 'modelAllowlist' } as never);
+    const input = createInputFixture();
+
+    const result = await executeWorkflow(input);
+
+    expect(vi.mocked(createAIProvider)).toHaveBeenCalledWith(input.createdBy, expect.anything(), { driveId: input.driveId });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("doesn't allow that AI model");
+  });
+
+  test('POL-8 (partial) WAL-8 (partial) the pro-model gate takes the run\'s funder tier on its spend: a model the funder is not entitled to fails the run before any model call', async () => {
+    setupSelectChain([mockAgent], [mockDrive]);
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-6-sol' } as never);
+    modelEntitlement.mockResolvedValueOnce({ allowed: false, reason: 'subscription_required' });
+    const input = createInputFixture();
+
+    const result = await executeWorkflow(input);
+
+    expect(modelEntitlement).toHaveBeenCalledWith({ userId: input.createdBy, provider: 'openai', model: 'openai/gpt-6-sol', spend: { kind: 'automation', driveId: input.driveId } });
+    expect(result).toMatchObject({ success: false, error: expect.stringContaining('paid plans') });
+  });
+
+  describe('the org autonomy policy', () => {
+    const off = () => getDrivePolicies.mockResolvedValue({ orgId: 'org-1', policies: { ...DEFAULT_ORG_POLICIES, agentsAutonomous: false } });
+    const fire = (table: 'cron' | 'manual' | 'taskTriggers' | 'calendarTriggers' | 'webhookTriggers') => {
+      const base = createInputFixture();
+      return { ...base, source: { table, id: table === 'cron' || table === 'manual' ? null : 'trig-1', triggerAt: table === 'manual' ? null : new Date() } as WorkflowExecutionInput['source'] };
+    };
+
+    test.each(['cron', 'taskTriggers', 'calendarTriggers', 'webhookTriggers'] as const)('POL-9 autonomy OFF skips a %s run before any credit is reserved or model built, finalizing it cancelled with the policy message', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      off();
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain("doesn't let agents run on their own");
+      expect(admit).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+    });
+
+    test('POL-9 a MANUAL run (a person pressed run) is never blocked by the autonomy policy', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      off();
+      const result = await executeWorkflow(fire('manual'));
+      expect(result.skipped).toBeUndefined();
+      expect(vi.mocked(createAIProvider)).toHaveBeenCalled();
+    });
+
+    test('POL-9 autonomy ON, or a drive with no org, runs the automatic source as before; the policy is read every run', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const result = await executeWorkflow(fire('cron'));
+      expect(result.skipped).toBeUndefined();
+      expect(getDrivePolicies).toHaveBeenCalledWith(createInputFixture().driveId);
+    });
+  });
+
+  describe('a workflow whose owner left ([D-OW-36])', () => {
+    const fire = (table: 'cron' | 'manual' | 'taskTriggers' | 'calendarTriggers' | 'webhookTriggers') => {
+      const base = createInputFixture();
+      return { ...base, source: { table, id: table === 'cron' || table === 'manual' ? null : 'trig-1', triggerAt: table === 'manual' ? null : new Date() } as WorkflowExecutionInput['source'] };
+    };
+
+    test.each(['cron', 'manual', 'taskTriggers', 'calendarTriggers', 'webhookTriggers'] as const)('SPEND-6 (partial) a flagged owner-left workflow is skipped on a %s run before the policy, the admission or any hold, recorded cancelled with owner_left', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_123', ownerLeftAt: new Date() });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(readWorkflowOwnership).toHaveBeenCalledWith('wf_1');
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_left');
+      expect(admit).not.toHaveBeenCalled();
+      expect(getDrivePolicies).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: expect.stringContaining('owner_left') }));
+    });
+
+    test('SPEND-6 (partial) a workflow whose creator deleted their account (no creator) is skipped the same way: nothing runs under a missing person', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: null, ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+      const result = await executeWorkflow(fire('cron'), { admit });
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(admit).not.toHaveBeenCalled();
+    });
+
+    test.each(['cron', 'manual', 'taskTriggers', 'webhookTriggers'] as const)('SPEND-6 (partial) a %s run composed as the old creator of a since-reassigned workflow is skipped owner_changed before any gate, never run as them (review #2831 P2-2)', async (table) => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_new_owner', ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+
+      const result = await executeWorkflow(fire(table), { admit });
+
+      expect(result).toMatchObject({ success: false, skipped: true });
+      expect(result.error).toContain('owner_changed');
+      expect(admit).not.toHaveBeenCalled();
+      expect(vi.mocked(createAIProvider)).not.toHaveBeenCalled();
+    });
+
+    test('a calendar run is not compared: it runs as its scheduler, whom its executor re-read before gating', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_other', ownerLeftAt: null });
+      const result = await executeWorkflow(fire('calendarTriggers'));
+      expect(result.skipped).toBeUndefined();
+    });
+
+    test('the claim is won BEFORE the ownership read, so an overlapping fire records nothing; a standing owner runs as before', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      readWorkflowOwnership.mockResolvedValue({ createdBy: 'user_123', ownerLeftAt: null });
+      const admit = vi.fn(async () => ({ admitted: true as const, release: vi.fn() }));
+      const result = await executeWorkflow(fire('cron'), { admit });
+      expect(result.skipped).toBeUndefined();
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(mockInsertReturning.mock.invocationCallOrder[0]).toBeLessThan(readWorkflowOwnership.mock.invocationCallOrder[0]);
+    });
   });
 
   test('usage tracking is awaited — the usage write is durable before executeWorkflow resolves', async () => {
@@ -429,7 +554,7 @@ describe('executeWorkflow', () => {
       const result = await executeWorkflow(createInputFixture());
 
       expect(result.success).toBe(true);
-      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', 'user_123');
+      expect(mockResolveSandboxToolEligibility).toHaveBeenCalledWith('drive_abc', expect.objectContaining({ via: 'automation', userId: 'user_123' }));
       const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
       const toolKeys = Object.keys(genCall.tools as object);
       expect(toolKeys).toContain('list_pages');
@@ -746,9 +871,10 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(true);
     expect(mockResolvePageAgentIntegrationTools).toHaveBeenCalledWith({
       agentId: 'agent_1',
-      userId: 'user_123',
+      actor: automationActor('user_123', 'workflow:cron', inDrives('drive_abc')),
       driveId: 'drive_abc',
       currentTools: {},
+      contextDriveId: 'drive_abc',
     });
 
     const genCall = vi.mocked(generateText).mock.calls[0][0] as Record<string, unknown>;
@@ -918,6 +1044,202 @@ describe('executeWorkflow', () => {
     expect(result.success).toBe(true);
     expect(result.finalizeError).toBe('connection terminated');
   });
+
+  // ==========================================================================
+  // Admission hook: the caller's credit gate runs INSIDE the claim, so only the
+  // fire that holds the running claim can be refused and record the refusal —
+  // an overlapping fire loses the claim first and never reaches the gate.
+  // ==========================================================================
+
+  describe('admit hook', () => {
+    test('runs after the running claim and before any model is built', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const admit = vi.fn().mockResolvedValue({ admitted: true, release: vi.fn() });
+
+      await executeWorkflow(createInputFixture(), { admit });
+
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(mockInsertReturning.mock.invocationCallOrder[0]).toBeLessThan(admit.mock.invocationCallOrder[0]);
+      expect(admit.mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(createAIProvider).mock.invocationCallOrder[0]);
+    });
+
+    test('is never consulted when the claim is lost to an in-flight run', async () => {
+      mockInsertReturning.mockResolvedValueOnce([]);
+      const admit = vi.fn();
+
+      const result = await executeWorkflow(createInputFixture(), { admit });
+
+      expect(result.claimConflict).toBe(true);
+      expect(admit).not.toHaveBeenCalled();
+    });
+
+    test('a refusal runs no model and finalizes the claimed run as cancelled with the reason', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const admit = vi.fn().mockResolvedValue({ admitted: false, error: 'AI credit gate denied: out_of_credits' });
+
+      const result = await executeWorkflow(createInputFixture(), { admit });
+
+      expect(result).toEqual(expect.objectContaining({
+        success: false,
+        skipped: true,
+        error: 'AI credit gate denied: out_of_credits',
+        runId: 'run_1',
+      }));
+      expect(createAIProvider).not.toHaveBeenCalled();
+      expect(generateText).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'cancelled',
+        error: 'AI credit gate denied: out_of_credits',
+      }));
+    });
+
+    test('an admitted run releases exactly once, after the model call settles', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const release = vi.fn();
+
+      const result = await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release }),
+      });
+
+      expect(result.success).toBe(true);
+      expect(release).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(generateText).mock.invocationCallOrder[0]).toBeLessThan(release.mock.invocationCallOrder[0]);
+    });
+
+    test('an admitted run releases when the run fails', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      vi.mocked(generateText).mockRejectedValue(new Error('Agent crashed'));
+      const release = vi.fn();
+
+      await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release }) });
+
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    test('SPEND-6 (partial) an admitted run settles its usage on the wallet the gate reserved on, and its tools spend the same drive wallet', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }),
+      });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product', source: 'workflow' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: unknown } };
+      expect(genCall.experimental_context.creditSpend).toEqual({ ...creditSpend, automationRef: 'workflow:wf_1' });
+    });
+
+    test('HIST-03 a tool-loop step settles its AGGREGATE usage — totalUsage, never just the last round', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      // A tool loop's last round used 150/100 tokens, but every round together used
+      // 1,500/1,000. Accounting on `usage` would under-count by an order of magnitude
+      // (#2736): caps and the daily ceiling would admit spend the run actually made.
+      vi.mocked(generateText).mockResolvedValue({
+        text: 'done',
+        steps: [
+          { text: 'round 1', toolCalls: [{}], usage: { inputTokens: 900, outputTokens: 600 } },
+          { text: 'round 2', toolCalls: [], usage: { inputTokens: 150, outputTokens: 100 } },
+        ],
+        usage: { inputTokens: 150, outputTokens: 100 },
+        totalUsage: { inputTokens: 1050, outputTokens: 700 },
+      } as never);
+
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result.success).toBe(true);
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({
+        inputTokens: 1050,
+        outputTokens: 700,
+        totalTokens: 1750,
+      }));
+      expect(result.usage).toEqual({ inputTokens: 1050, outputTokens: 700 });
+    });
+
+    test('SPEND-10 (partial) a run no person is present for records its workflow on its usage and hands it to its tools; a manual Run records none', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const scheduled = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: scheduled }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_creator', automationRef: 'workflow:wf_1' }));
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { creditSpend?: { automationRef?: string } } };
+      expect(genCall.experimental_context.creditSpend?.automationRef).toBe('workflow:wf_1');
+
+      setupSelectChain([mockAgent], [mockDrive]);
+      const pressed = { spend: { kind: 'automation' as const, driveId: 'drive_1', personPresent: true as const }, walletId: 'w_product', userId: 'user_presser' };
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend: pressed }) });
+      expect(AIMonitoring.trackUsage).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user_presser', automationRef: undefined }));
+    });
+
+    test('SPEND-6 (partial) WAL-7 (partial) a MANUAL Run records its usage under the person who pressed Run (the consumer its gate bound), not the workflow\'s creator (review #2817 P2-3)', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1', personPresent: true as const }, walletId: 'w_product', userId: 'user_presser' };
+
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), {
+        admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }),
+      });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_presser', walletId: 'w_product', source: 'workflow' }));
+      // Content access and the run's own records stay with the creator; only the spend is the presser's.
+      const genCall = vi.mocked(generateText).mock.calls[0][0] as { experimental_context: { userId: string; creditSpend?: unknown } };
+      expect(genCall.experimental_context.userId).toBe('user_creator');
+      expect(genCall.experimental_context.creditSpend).toEqual(creditSpend);
+    });
+
+    test('SPEND-6 (partial) a scheduled run (no presser) still records its usage under the creator', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product', userId: 'user_creator' };
+
+      await executeWorkflow(createInputFixture({ createdBy: 'user_creator' }), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }) });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ userId: 'user_creator' }));
+    });
+
+    test('SPEND-6 (partial) a run gated before the claim settles on the wallet its caller names', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      await executeWorkflow(createInputFixture(), { creditSpend });
+
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product' }));
+    });
+
+    test('SPEND-6 (partial) with wallets on, an automation run with no reserved wallet is refused before any model runs, so nothing can settle on a person', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      walletFlags.billingEnabled = true;
+
+      // No admit and no creditSpend: the executor's own default names the drive and no wallet.
+      const result = await executeWorkflow(createInputFixture());
+
+      expect(result).toEqual(expect.objectContaining({ success: false, skipped: true }));
+      expect(result.error).toMatch(/no drive wallet reserved/);
+      expect(createAIProvider).not.toHaveBeenCalled();
+      expect(generateText).not.toHaveBeenCalled();
+      expect(AIMonitoring.trackUsage).not.toHaveBeenCalled();
+    });
+
+    test('SPEND-6 (partial) with wallets on, an admitted automation that names a drive wallet runs and settles there', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+      walletFlags.billingEnabled = true;
+      const creditSpend = { spend: { kind: 'automation' as const, driveId: 'drive_1' }, walletId: 'w_product' };
+
+      const result = await executeWorkflow(createInputFixture(), { admit: vi.fn().mockResolvedValue({ admitted: true, release: vi.fn(), creditSpend }) });
+
+      expect(result.success).toBe(true);
+      expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(expect.objectContaining({ walletId: 'w_product' }));
+    });
+
+    test('a throwing gate fails the run (finalized, not left running) and runs no model', async () => {
+      setupSelectChain([mockAgent], [mockDrive]);
+
+      const result = await executeWorkflow(createInputFixture(), {
+        admit: vi.fn().mockRejectedValue(new Error('gate db down')),
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('gate db down');
+      expect(createAIProvider).not.toHaveBeenCalled();
+      expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'gate db down' }));
+    });
+  });
 });
 
 describe('executeWorkflow — explicit step chains', () => {
@@ -941,6 +1263,7 @@ describe('executeWorkflow — explicit step chains', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    modelEntitlement.mockResolvedValue({ allowed: true });
     // resetAllMocks wipes implementations — restore the session-mint defaults
     // (spawn refused ⇒ the executor degrades to running without sandbox tools).
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
@@ -955,6 +1278,7 @@ describe('executeWorkflow — explicit step chains', () => {
       text: 'AI step done',
       steps: [{ text: 'AI step done', toolCalls: [] }],
       usage: { inputTokens: 10, outputTokens: 5 },
+      totalUsage: { inputTokens: 10, outputTokens: 5 },
     } as never);
     setupStepInserts();
     mockUpdate.mockReturnValue({ set: mockUpdateSet });
@@ -1106,18 +1430,20 @@ describe('executeWorkflow — explicit step chains', () => {
   });
 });
 
-describe('executeWorkflow — credit gate inside the run claim', () => {
+describe('executeWorkflow — credit refusal inside the run claim (retry semantics)', () => {
+  type Refusal = 'too_many_in_flight' | 'daily_cap_exceeded' | 'out_of_credits' | 'requires_funding' | 'source_refused';
+  const refuse = (reason: Refusal) =>
+    vi.fn().mockResolvedValue({ admitted: false, error: `AI credit gate denied: ${reason}`, reason });
+
   beforeEach(() => {
     vi.resetAllMocks();
-    creditGate.decision = { allowed: true, holdId: 'hold_1' };
-    creditGate.calls = [];
-    creditGate.released = [];
-    creditGate.throws = null;
-    creditGate.onCall = null;
+    walletFlags.billingEnabled = false;
+    modelEntitlement.mockResolvedValue({ allowed: true });
     mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
     mockCreateConversationInSession.mockResolvedValue(undefined);
     mockCreateConversation.mockResolvedValue('created');
     mockEndSession.mockResolvedValue({ ok: true });
+    getDrivePolicies.mockResolvedValue(null);
     vi.mocked(isProviderError).mockReturnValue(false);
     vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
     mockResolvePageAgentIntegrationTools.mockResolvedValue({});
@@ -1126,6 +1452,7 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
       text: 'Report complete',
       steps: [{ text: 'Report complete', toolCalls: [] }],
       usage: { inputTokens: 1, outputTokens: 1 },
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
     } as never);
     mockInsert.mockReturnValue({ values: mockInsertValues });
     mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
@@ -1138,38 +1465,14 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
     mockDeleteWhere.mockResolvedValue(undefined);
   });
 
-  const at = (table: 'cron' | 'calendarTriggers' | 'taskTriggers' | 'webhookTriggers', ageMs: number, id: string | null = table === 'cron' ? null : `${table}_1`) =>
-    createInputFixture({ source: { table, id, triggerAt: new Date(Date.now() - ageMs) } as never });
+  const at = (table: 'cron' | 'calendarTriggers' | 'taskTriggers' | 'webhookTriggers', ageMs: number) =>
+    createInputFixture({
+      source: { table, id: table === 'cron' ? null : `${table}_1`, triggerAt: new Date(Date.now() - ageMs) } as WorkflowExecutionInput['source'],
+    });
   const DAY = 24 * 60 * 60 * 1000;
 
-  test('gates AFTER the running claim is won and BEFORE any model is built', async () => {
-    setupSelectChain([mockAgent], [mockDrive]);
-    const gateOrder: number[] = [];
-    creditGate.onCall = () => gateOrder.push(mockInsertReturning.mock.calls.length);
-
-    await executeWorkflow(createInputFixture());
-
-    expect(creditGate.calls).toHaveLength(1);
-    // The claim insert had already returned when the gate ran.
-    expect(gateOrder).toEqual([1]);
-    expect(generateText).toHaveBeenCalledTimes(1);
-  });
-
-  test('is never consulted when the claim is lost to an in-flight run (an overlapping fire cannot record a refusal)', async () => {
-    mockInsertReturning.mockResolvedValue([]);
-
-    const result = await executeWorkflow(createInputFixture());
-
-    expect(result.claimConflict).toBe(true);
-    expect(creditGate.calls).toHaveLength(0);
-    expect(creditGate.released).toEqual([]);
-    expect(generateText).not.toHaveBeenCalled();
-  });
-
   test('given a terminal refusal (an unclaimed agent), should finalize the claimed run as cancelled with the reason and never resolve a model', async () => {
-    creditGate.decision = { allowed: false, reason: 'requires_funding' };
-
-    const result = await executeWorkflow(at('cron', 60_000));
+    const result = await executeWorkflow(at('cron', 60_000), { admit: refuse('requires_funding') });
 
     expect(result).toMatchObject({
       success: false,
@@ -1194,9 +1497,8 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
     ['taskTriggers'],
     ['cron'],
   ] as const)('given a transient refusal for a fresh %s occurrence, should give the claim back (delete the row, no finalize) and report it RETRYABLE', async (table) => {
-    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
-
-    const result = await executeWorkflow(at(table, 60_000));
+    const release = vi.fn();
+    const result = await executeWorkflow(at(table, 60_000), { admit: refuse('too_many_in_flight') });
 
     expect(result).toMatchObject({
       success: false,
@@ -1209,13 +1511,11 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
     expect(mockDelete).toHaveBeenCalledTimes(1);
     expect(mockUpdateSet).not.toHaveBeenCalled();
     expect(generateText).not.toHaveBeenCalled();
-    expect(creditGate.released).toEqual([]);
+    expect(release).not.toHaveBeenCalled();
   });
 
   test('given a transient refusal for an occurrence older than 24h, should stop retrying and settle the claimed run as cancelled', async () => {
-    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
-
-    const result = await executeWorkflow(at('taskTriggers', DAY + 60 * 60 * 1000));
+    const result = await executeWorkflow(at('taskTriggers', DAY + 60 * 60 * 1000), { admit: refuse('too_many_in_flight') });
 
     expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { kind: 'transient' } });
     expect(result.retryable).toBeFalsy();
@@ -1223,20 +1523,19 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: too_many_in_flight' }));
   });
 
-  test('given the daily cap is hit on a FRESH scheduled occurrence, should settle it (terminal: it clears only when the UTC day rolls)', async () => {
-    creditGate.decision = { allowed: false, reason: 'daily_cap_exceeded' };
+  test.each([
+    ['daily_cap_exceeded'],
+    ['source_refused'],
+  ] as const)('given %s on a FRESH scheduled occurrence, should settle it (terminal)', async (reason) => {
+    const result = await executeWorkflow(at('taskTriggers', 60_000), { admit: refuse(reason) });
 
-    const result = await executeWorkflow(at('taskTriggers', 60_000));
-
-    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason: 'daily_cap_exceeded', kind: 'terminal' } });
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason, kind: 'terminal' } });
     expect(result.retryable).toBeFalsy();
     expect(mockDelete).not.toHaveBeenCalled();
   });
 
   test('given a transient refusal on a webhook fire (nothing re-fires it), should settle the run instead of dropping the event', async () => {
-    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
-
-    const result = await executeWorkflow(at('webhookTriggers', 0));
+    const result = await executeWorkflow(at('webhookTriggers', 0), { admit: refuse('too_many_in_flight') });
 
     expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason: 'too_many_in_flight', kind: 'transient' } });
     expect(result.retryable).toBeFalsy();
@@ -1248,9 +1547,7 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
     ['taskTriggers'],
     ['cron'],
   ] as const)('given the gate itself throws for a fresh %s occurrence, should give the claim back and report it RETRYABLE (no refusal)', async (table) => {
-    creditGate.throws = new Error('db down');
-
-    const result = await executeWorkflow(at(table, 60_000));
+    const result = await executeWorkflow(at(table, 60_000), { admit: vi.fn().mockRejectedValue(new Error('db down')) });
 
     expect(result).toMatchObject({ success: false, error: 'db down', retryable: true });
     expect(result.refusal).toBeUndefined();
@@ -1260,9 +1557,7 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
   });
 
   test('given the gate keeps throwing past the 24h window, should fail the claimed run (finalized, not left running) so the occurrence stops being re-discovered', async () => {
-    creditGate.throws = new Error('db down');
-
-    const result = await executeWorkflow(at('calendarTriggers', DAY + 60 * 60 * 1000));
+    const result = await executeWorkflow(at('calendarTriggers', DAY + 60 * 60 * 1000), { admit: vi.fn().mockRejectedValue(new Error('db down')) });
 
     expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_1' });
     expect(result.retryable).toBeFalsy();
@@ -1272,43 +1567,23 @@ describe('executeWorkflow — credit gate inside the run claim', () => {
   });
 
   test('given the claim cannot be given back, should settle the run instead of leaving it running, and report it NOT retryable', async () => {
-    creditGate.decision = { allowed: false, reason: 'too_many_in_flight' };
     mockDeleteWhere.mockRejectedValue(new Error('connection terminated'));
 
-    const result = await executeWorkflow(at('calendarTriggers', 60_000));
+    const result = await executeWorkflow(at('calendarTriggers', 60_000), { admit: refuse('too_many_in_flight') });
 
     expect(result.retryable).toBeFalsy();
     expect(result.runId).toBe('run_1');
     expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ error: 'AI credit gate denied: too_many_in_flight' }));
   });
 
-  test('given a manual run, should gate the input it was handed (billed to createdBy)', async () => {
-    setupSelectChain([mockAgent], [mockDrive]);
-    const input = createInputFixture({ source: { table: 'manual', id: null, triggerAt: null } });
+  test('is never consulted when the claim is lost to an in-flight run (an overlapping fire cannot record a refusal)', async () => {
+    mockInsertReturning.mockResolvedValue([]);
+    const admit = refuse('too_many_in_flight');
 
-    await executeWorkflow(input);
+    const result = await executeWorkflow(at('cron', 60_000), { admit });
 
-    expect(creditGate.calls).toEqual([input]);
-  });
-
-  test('given an allowed gate, should run and release the hold once, after the model call settles', async () => {
-    setupSelectChain([mockAgent], [mockDrive]);
-
-    const result = await executeWorkflow(createInputFixture());
-
-    expect(result.success).toBe(true);
-    expect(generateText).toHaveBeenCalledTimes(1);
-    expect(creditGate.released).toEqual(['hold_1']);
-  });
-
-  test('given a run that throws, should still release the hold', async () => {
-    mockSelect.mockImplementation(() => {
-      throw new Error('db down');
-    });
-
-    const result = await executeWorkflow(createInputFixture({ steps: [{ kind: 'ai', prompt: 'p' }] }));
-
-    expect(result.success).toBe(false);
-    expect(creditGate.released).toEqual(['hold_1']);
+    expect(result.claimConflict).toBe(true);
+    expect(admit).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 });

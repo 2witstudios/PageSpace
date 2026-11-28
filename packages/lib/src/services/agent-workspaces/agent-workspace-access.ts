@@ -22,6 +22,7 @@ import {
   type AgentSessionAccessSubject,
   type DriveMembership,
 } from '../../agent-workspaces/decide-workspace-access';
+import type { AccessActor } from '../../permissions/access-actor';
 
 export interface AgentSessionAccessDeps {
   /** The session row, reduced to the three identity columns the decision needs. `null` = no such session. */
@@ -31,7 +32,7 @@ export interface AgentSessionAccessDeps {
    * session; a `null` answer (unresolved) denies — unknown is never a grant.
    */
   resolveDriveMembership: (input: {
-    userId: string;
+    actor: AccessActor;
     driveId: string;
   }) => Promise<DriveMembership | null>;
   /**
@@ -40,7 +41,7 @@ export interface AgentSessionAccessDeps {
    * Consulted ONLY by the END check below — the main session-surface check is
    * deliberately capability-free (see `decideAgentSessionAccess`'s doc).
    */
-  canRunCode: (input: { userId: string; driveId: string | null; ownerId: string }) => Promise<boolean>;
+  canRunCode: (input: { actor: AccessActor; driveId: string | null; ownerId: string }) => Promise<boolean>;
 }
 
 /**
@@ -55,14 +56,16 @@ export type AgentSessionAccessCheck =
   | { allowed: false; reason: 'session_not_found' };
 
 export async function checkAgentSessionAccess({
-  requesterId,
+  requester,
   workspaceId,
   deps,
 }: {
-  requesterId: string;
+  /** The requester's credential: drive membership is asked through it, sign-in policy included. */
+  requester: AccessActor;
   workspaceId: string;
   deps: AgentSessionAccessDeps;
 }): Promise<AgentSessionAccessCheck> {
+  const requesterId = requester.userId;
   const session = await deps.findSession(workspaceId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
@@ -71,7 +74,7 @@ export async function checkAgentSessionAccess({
   const driveMembership =
     session.driveId === null
       ? null
-      : await deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId });
+      : await deps.resolveDriveMembership({ actor: requester, driveId: session.driveId });
 
   return decideAgentSessionAccess({ requesterId, session, driveMembership });
 }
@@ -85,22 +88,23 @@ export async function checkAgentSessionAccess({
  * members with no code-execution rights).
  */
 export async function checkAgentSessionEndAccess({
-  requesterId,
+  requester,
   workspaceId,
   deps,
 }: {
-  requesterId: string;
+  requester: AccessActor;
   workspaceId: string;
   deps: AgentSessionAccessDeps;
 }): Promise<AgentSessionAccessCheck> {
+  const requesterId = requester.userId;
   const session = await deps.findSession(workspaceId);
   if (!session) return { allowed: false, reason: 'session_not_found' };
 
   const [driveMembership, canRunCode] = await Promise.all([
     session.driveId === null
       ? Promise.resolve(null)
-      : deps.resolveDriveMembership({ userId: requesterId, driveId: session.driveId }),
-    deps.canRunCode({ userId: requesterId, driveId: session.driveId, ownerId: session.ownerId }),
+      : deps.resolveDriveMembership({ actor: requester, driveId: session.driveId }),
+    deps.canRunCode({ actor: requester, driveId: session.driveId, ownerId: session.ownerId }),
   ]);
 
   return decideAgentSessionEndAccess({ requesterId, session, driveMembership, canRunCode });

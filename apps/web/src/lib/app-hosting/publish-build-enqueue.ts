@@ -2,6 +2,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { createUserServiceToken } from '@pagespace/lib/services/validated-service-token';
+import type { AccessActor } from '@pagespace/lib/permissions/access-actor';
 
 /**
  * Enqueue a publish build on the processor's `app-build` pg-boss queue.
@@ -31,7 +32,7 @@ export interface EnqueuePublishBuildParams {
   /** Path to the tarball on local disk — see `env-snapshot.ts`. Never read into memory here. */
   tarPath: string;
   /** The authenticated caller minting the token (the publisher). */
-  callerUserId: string;
+  caller: AccessActor;
 }
 
 export interface EnqueuePublishBuildResult {
@@ -40,7 +41,7 @@ export interface EnqueuePublishBuildResult {
 }
 
 export async function enqueuePublishBuild(params: EnqueuePublishBuildParams): Promise<EnqueuePublishBuildResult> {
-  const { token } = await createUserServiceToken(params.callerUserId, ['app-hosting:publish'], '2m');
+  const { token } = await createUserServiceToken(params.caller, ['app-hosting:publish'], '2m');
   const { size } = await stat(params.tarPath);
 
   const res = await fetch(`${PROCESSOR_URL}/api/app-hosting/build`, {
