@@ -8,7 +8,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
-vi.mock('@pagespace/db/operators', () => ({ and: vi.fn(), eq: vi.fn(), isNull: vi.fn() }));
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
 vi.mock('@pagespace/db/schema/auth', () => ({ users: {} }));
 vi.mock('@pagespace/db/schema/agent-identities', () => ({ agentIdentities: {} }));
 

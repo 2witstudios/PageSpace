@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMCP } from "@/hooks/useMCP";
 import { useAuth } from "@/hooks/useAuth";
+import { useAuthStore } from "@/stores/useAuthStore";
 import { useBillingVisibility } from "@/hooks/useBillingVisibility";
 import { useCapacitor } from "@/hooks/useCapacitor";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,8 @@ export default function SettingsPage() {
   const router = useRouter();
   const mcp = useMCP();
   const { user } = useAuth();
+  // ADR 0008: the store's user carries accountType (useAuth's narrower view does not).
+  const isAgentAccount = useAuthStore((state) => state.user?.accountType === 'agent');
   const { showBilling, channel: billingChannel } = useBillingVisibility();
   const isDesktop = mcp.isDesktop;
   const isAdmin = user?.role === 'admin';
@@ -124,7 +127,7 @@ export default function SettingsPage() {
         },
         // ADR 0008 Phase 4: AI agents with their own accounts that this person claimed and pays
         // for. Only a person can own an agent, so an agent's own settings never list it.
-        ...(user?.accountType === 'agent' ? [] : [{
+        ...(isAgentAccount ? [] : [{
           title: "Agents",
           description: "AI agents you have claimed — revoke, rotate secrets, or claim a new one",
           icon: Bot,

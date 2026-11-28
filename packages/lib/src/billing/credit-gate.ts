@@ -511,13 +511,13 @@ async function gatePersonalRoot(
   const now = new Date();
   const tier = payer.tier;
   // Whose personal root wallet this is: the starter grant, the balance and the lock are the payer's.
-  const walletOwnerId = payer.payerId;
+  const walletUserId = payer.payerId;
 
   // Read at most once per call, and only where a decision needs it. The wallet owner's account
   // decides its starter grant; the consumer's decides the refusal copy below.
   let account: GateAccount | null = null;
-  const getAccount = async (): Promise<GateAccount> => (account ??= await readGateAccount(walletOwnerId));
-  const getConsumerAccount = async (): Promise<GateAccount> => (walletOwnerId === userId ? getAccount() : readGateAccount(userId));
+  const getAccount = async (): Promise<GateAccount> => (account ??= await readGateAccount(walletUserId));
+  const getConsumerAccount = async (): Promise<GateAccount> => (payer.viaAgentOwner ? readGateAccount(userId) : getAccount());
 
   const readBalance = async (): Promise<BalanceRow | null> => {
     const rows = await db
@@ -529,7 +529,7 @@ async function gatePersonalRoot(
         monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
       .from(wallets)
-      .where(personalRootWalletOf(walletOwnerId))
+      .where(personalRootWalletOf(walletUserId))
       .limit(1);
     return rows[0] ?? null;
   };
@@ -558,7 +558,7 @@ async function gatePersonalRoot(
       const balanceInserted = await tx
         .insert(wallets)
         .values({
-          userId: walletOwnerId,
+          userId: walletUserId,
           monthlyRemainingCents: monthly,
           monthlyAllowanceCents: monthly,
           topupRemainingCents: 0,
@@ -575,7 +575,7 @@ async function gatePersonalRoot(
       if (balanceInserted.length > 0 && monthly > 0) {
         await tx
           .insert(creditLedger)
-          .values(starterGrantLedgerRow(walletOwnerId, balanceInserted[0].id, monthly))
+          .values(starterGrantLedgerRow(walletUserId, balanceInserted[0].id, monthly))
           .onConflictDoNothing(STRIPE_REF_ARBITER);
       }
     });
@@ -606,7 +606,7 @@ async function gatePersonalRoot(
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)
-        .values(starterGrantLedgerRow(walletOwnerId, walletId, monthly))
+        .values(starterGrantLedgerRow(walletUserId, walletId, monthly))
         .onConflictDoNothing(STRIPE_REF_ARBITER)
         .returning({ id: creditLedger.id });
       if (granted.length === 0) return;
@@ -618,7 +618,7 @@ async function gatePersonalRoot(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: addOneMonth(now),
         })
-        .where(personalRootWalletOf(walletOwnerId));
+        .where(personalRootWalletOf(walletUserId));
     });
     row = await readBalance();
   }
@@ -639,7 +639,7 @@ async function gatePersonalRoot(
         monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
       .from(wallets)
-      .where(personalRootWalletOf(walletOwnerId))
+      .where(personalRootWalletOf(walletUserId))
       .for('update');
     const bal = balRows[0] ?? null;
 

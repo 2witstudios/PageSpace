@@ -20,7 +20,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, isNull } from '@pagespace/db/operators';
+import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { resolveBillingPayer } from './agent-payer';
@@ -39,16 +39,22 @@ export type LookupAgentBillingOwner = (userId: string) => Promise<AgentBillingOw
  * The owner of a LIVE agent identity, with the owner's stored tier. Null for a
  * human (no identity row), an unclaimed agent, and a revoked agent — a revoked
  * agent's spend never reaches its owner, it pays as itself (and has nothing).
- * One indexed read: `agent_identities` by primary key, joined to the owner.
+ * One primary-key read of `agent_identities` (every human stops there), and for a
+ * claimed agent one more for the owner's tier.
  */
 export async function lookupAgentBillingOwner(userId: string): Promise<AgentBillingOwner | null> {
-  const [row] = await db
-    .select({ ownerUserId: users.id, ownerTier: users.subscriptionTier })
+  const [identity] = await db
+    .select({ ownerUserId: agentIdentities.ownerUserId, revokedAt: agentIdentities.revokedAt })
     .from(agentIdentities)
-    .innerJoin(users, eq(users.id, agentIdentities.ownerUserId))
-    .where(and(eq(agentIdentities.userId, userId), isNull(agentIdentities.revokedAt)))
+    .where(eq(agentIdentities.userId, userId))
     .limit(1);
-  return row ?? null;
+  if (!identity?.ownerUserId || identity.revokedAt) return null;
+  const [owner] = await db
+    .select({ subscriptionTier: users.subscriptionTier })
+    .from(users)
+    .where(eq(users.id, identity.ownerUserId))
+    .limit(1);
+  return owner ? { ownerUserId: identity.ownerUserId, ownerTier: owner.subscriptionTier } : null;
 }
 
 export interface OwnCreditsPayer {

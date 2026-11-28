@@ -225,6 +225,10 @@ const KEY_SCOPE_READ_LEDGER: Readonly<Record<string, Verdict>> = {
   'apps/web/src/app/api/oauth/token/route.ts#handleDeviceCodeGrant': ISSUANCE,
   'apps/web/src/app/api/oauth/token/route.ts#handleRefreshTokenGrant': ISSUANCE,
   'apps/web/src/app/api/oauth/token/route.ts#keyGrantSuccessResponse': ISSUANCE,
+  // ADR 0008 Phase 4: the agent claim grant mints the AGENT's own account grant (account +
+  // offline_access, never a drive or key scope — resolveAgentAssertionScopes) and echoes it.
+  'apps/web/src/app/api/oauth/token/route.ts#handleAgentClaimGrant': notAccess("token issuance for the agent's OWN account (account + offline_access only, the jwt-bearer narrowing); no drive or key scope can be named on this grant"),
+  'apps/web/src/lib/repositories/agent-claim-repository.ts#pollAgentClaim': notAccess("token issuance for the agent's OWN account on an approved claim (account + offline_access only); the token then resolves through the owner-bound helpers"),
   'apps/web/src/lib/repositories/oauth-repository.ts#createAuthorizationCode': notAccess('stores the requested grant on an authorization code (the authorize route authority-checks it first: checkGrantAuthority)'),
   'apps/web/src/lib/repositories/oauth-repository.ts#createDeviceAuthorization': notAccess('stores the requested scope on a device code; approval is authority-checked later (device decision)'),
   'apps/web/src/lib/repositories/oauth-repository.ts#toDeviceCodeRecord': notAccess('shapes a device-code row for the lifecycle decisions below'),
