@@ -2,10 +2,10 @@
  * ORG-1: an org has one HUMAN Owner. createOrganization and transferOwnership ask
  * here before anyone becomes Owner, so an agent never does.
  *
- * Today a users row is a person: agent accounts are not users rows yet
- * (schema/agent-accounts.ts is types only), and an AI agent is a page. When agent
- * accounts become users rows, loadOrgPrincipalKind is the one place that must
- * answer 'agent' for them.
+ * An AI agent is either a page (AI_CHAT) or an agent account — a users row with
+ * accountType 'agent' (ADR 0008). loadOrgPrincipalKind is the one place that
+ * answers 'agent' for both, so neither can ever own an org (nor be the billing
+ * contact of its Stripe customer).
  */
 import { db } from '@pagespace/db/db';
 import { and, eq, inArray, isNotNull, or } from '@pagespace/db/operators';
@@ -28,10 +28,14 @@ export const decideOrgOwnerCandidate = (kind: OrgPrincipalKind | null): OrgOwner
 
 type Executor = Pick<typeof db, 'select'>;
 
-/** What `id` names: a person (a users row), an AI agent (an AI_CHAT page), or nothing. */
+/** What `id` names: a person (a human users row), an AI agent (an agent account or an AI_CHAT page), or nothing. */
 export async function loadOrgPrincipalKind(executor: Executor, id: string): Promise<OrgPrincipalKind | null> {
-  const [user] = await executor.select({ id: users.id }).from(users).where(eq(users.id, id)).limit(1);
-  if (user) return 'human';
+  const [user] = await executor
+    .select({ id: users.id, accountType: users.accountType })
+    .from(users)
+    .where(eq(users.id, id))
+    .limit(1);
+  if (user) return user.accountType === 'agent' ? 'agent' : 'human';
   const [agent] = await executor
     .select({ id: pages.id })
     .from(pages)

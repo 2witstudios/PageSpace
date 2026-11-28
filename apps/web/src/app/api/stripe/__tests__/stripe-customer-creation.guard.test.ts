@@ -41,6 +41,9 @@ const GUARDED_SITES: Record<string, string> = {
   'apps/admin/src/lib/stripe-customer.ts': 'assertMayHoldStripeCustomer(user)',
   'apps/web/src/app/api/stripe/billing-address/route.ts': 'assertMayHoldStripeCustomer(user)',
   'apps/web/src/app/api/stripe/customer/route.ts': "user.accountType === 'agent'",
+  // The ORG's customer (organizations.stripeCustomerId), billed to its Owner: ORG-1 keeps an agent off the Owner
+  // seat (loadOrgPrincipalKind), and ensureOrgStripeCustomer refuses an agent owner again before any create.
+  'apps/web/src/lib/org-billing/org-subscription.ts': "owner?.accountType === 'agent'",
 };
 
 describe('Stripe customer creation guard', () => {
