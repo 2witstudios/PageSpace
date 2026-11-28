@@ -30,6 +30,13 @@ vi.mock('../../../../../../lib/auth', () => ({
   }),
 }));
 
+// Agent Signup Phase 2c: the actor's live accountType is joined at read time.
+const accountTypes = vi.hoisted(() => new Map<string, string>());
+vi.mock('@/lib/activities/actor-account-types', () => ({
+  withActorAccountTypes: vi.fn(async (rows: { userId?: string | null }[]) =>
+    rows.map((row) => ({ ...row, actorAccountType: (row.userId && accountTypes.get(row.userId)) || null }))),
+}));
+
 // Mock permissions
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
   explainSignInRefusal: vi.fn().mockResolvedValue(null),
@@ -374,6 +381,26 @@ describe('GET /api/pages/[pageId]/history', () => {
   // ============================================
 
   describe('response format', () => {
+    it('returns each version with its actor live accountType (Agent Signup Phase 2c)', async () => {
+      accountTypes.clear();
+      accountTypes.set('agent-1', 'agent');
+      accountTypes.set(mockUserId, 'human');
+      vi.mocked(getPageVersionHistory).mockResolvedValue({
+        activities: [
+          createMockActivity({ id: 'act_1', userId: 'agent-1' }),
+          createMockActivity({ id: 'act_2', userId: mockUserId }),
+          createMockActivity({ id: 'act_3', userId: null, actorDisplayName: 'Deleted User' }),
+        ],
+        total: 3,
+      } as never);
+
+      const response = await GET(createRequest(), { params: mockParams });
+      const body = await response.json();
+
+      expect(body.versions.map((v: { actorAccountType: string | null }) => v.actorAccountType)).toEqual(['agent', 'human', null]);
+      expect(body.versions[2].actorDisplayName).toBe('Deleted User');
+    });
+
     it('returns versions with canRollback flag', async () => {
       const mockActivities = [
         createMockActivity({ id: 'act_1', operation: 'update' }),

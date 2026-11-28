@@ -8,6 +8,8 @@ export interface HistoryVersion {
   userId: string | null;
   actorEmail: string;
   actorDisplayName: string | null;
+  /** The actor's live `users.accountType`; null for an erased actor (Agent Signup Phase 2c). */
+  actorAccountType?: string | null;
   operation: string;
   resourceTitle: string | null;
   isAiGenerated: boolean;

@@ -203,3 +203,45 @@ describe('SidebarActivityTab (Integration)', () => {
     });
   });
 });
+
+// Agent Signup Phase 2c: an agent actor is marked from its live accountType.
+describe('SidebarActivityTab agent marker', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const serve = (activities: ActivityItem[]) =>
+    mockFetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        activities,
+        pagination: { total: activities.length, limit: 50, offset: 0, hasMore: false },
+      }),
+    } as unknown as Response);
+
+  it('renders the agent badge beside an agent actor', async () => {
+    serve([createActivity({ user: { id: 'agent-1', name: 'Helper', email: 'a@agents.invalid', image: null, accountType: 'agent' } })]);
+    render(<SidebarActivityTab />);
+    await screen.findByText('Helper');
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+
+  it('renders no badge for a human actor', async () => {
+    serve([createActivity({ user: { id: 'u-1', name: 'Jane', email: 'j@example.com', image: null, accountType: 'human' } })]);
+    render(<SidebarActivityTab />);
+    await screen.findByText('Jane');
+    expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+  });
+
+  it('marks a grouped agent stream on its summary line', async () => {
+    const agent = { id: 'agent-1', name: 'Helper', email: 'a@agents.invalid', image: null, accountType: 'agent' };
+    serve([
+      createActivity({ id: 'g1', isAiGenerated: true, aiConversationId: 'conv', user: agent }),
+      createActivity({ id: 'g2', isAiGenerated: true, aiConversationId: 'conv', user: agent }),
+    ]);
+    render(<SidebarActivityTab />);
+    await screen.findByText(/AI updated/);
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+});
+

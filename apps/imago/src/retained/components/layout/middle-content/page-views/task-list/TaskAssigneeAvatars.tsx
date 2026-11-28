@@ -4,6 +4,7 @@ import { Bot } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/retained/components/ui/avatar';
 import { cn } from '@/retained/lib/utils';
 import type { TaskItem } from './task-list-types';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 
 export interface AssigneeAvatar {
   readonly id: string;
@@ -14,6 +15,10 @@ export interface AssigneeAvatar {
 
 type AssigneeSource = Pick<TaskItem, 'assignees' | 'assignee' | 'assigneeAgent'>;
 
+/** A person's name, plain-text-marked when it is an AI agent account (Agent Signup 2c). */
+const personName = (user: { name: string | null; accountType?: string | null }): string =>
+  user.name === null ? 'Unnamed' : withAgentMarker(user.name, user.accountType);
+
 /**
  * Who a task is with, one entry per assignee. Multiple assignees come from the
  * assignee rows; the legacy single-assignee relations fill in only when no row
@@ -21,7 +26,7 @@ type AssigneeSource = Pick<TaskItem, 'assignees' | 'assignee' | 'assigneeAgent'>
  */
 export function assigneeAvatars(task: AssigneeSource): readonly AssigneeAvatar[] {
   const fromRows = (task.assignees ?? []).flatMap((row): AssigneeAvatar[] => {
-    if (row.user) return [{ id: row.id, kind: 'user', name: row.user.name ?? 'Unnamed', image: row.user.image }];
+    if (row.user) return [{ id: row.id, kind: 'user', name: personName(row.user), image: row.user.image }];
     if (row.agentPage) return [{ id: row.id, kind: 'agent', name: row.agentPage.title ?? 'Agent', image: null }];
     return [];
   });
@@ -29,7 +34,7 @@ export function assigneeAvatars(task: AssigneeSource): readonly AssigneeAvatar[]
 
   const legacy: AssigneeAvatar[] = [];
   if (task.assignee) {
-    legacy.push({ id: `user-${task.assignee.id}`, kind: 'user', name: task.assignee.name ?? 'Unnamed', image: task.assignee.image });
+    legacy.push({ id: `user-${task.assignee.id}`, kind: 'user', name: personName(task.assignee), image: task.assignee.image });
   }
   if (task.assigneeAgent) {
     legacy.push({ id: `agent-${task.assigneeAgent.id}`, kind: 'agent', name: task.assigneeAgent.title ?? 'Agent', image: null });

@@ -45,7 +45,8 @@ interface ActiveStreamRow {
    * is not blank, then replaced wholesale by the first folded write off the channel.
    */
   parts?: UIMessagePart[];
-  triggeredBy: { userId: string; displayName: string; browserSessionId: string };
+  /** `accountType` is present only for an agent account (Agent Signup Phase 2c). */
+  triggeredBy: { userId: string; displayName: string; browserSessionId: string; accountType?: 'agent' };
 }
 
 export interface UseChannelStreamSocketOptions {
@@ -255,6 +256,7 @@ export function useChannelStreamSocket(
             triggeredBy: {
               userId: stream.triggeredBy.userId,
               displayName: stream.triggeredBy.displayName,
+              ...(stream.triggeredBy.accountType === 'agent' ? { accountType: 'agent' as const } : {}),
             },
             isOwn: isOwnStream(stream.triggeredBy, localUserId()),
             startedAt: stream.startedAt ?? new Date().toISOString(),
@@ -311,6 +313,7 @@ export function useChannelStreamSocket(
         triggeredBy: {
           userId: payload.triggeredBy.userId,
           displayName: payload.triggeredBy.displayName,
+          ...(payload.triggeredBy.accountType === 'agent' ? { accountType: 'agent' as const } : {}),
         },
         isOwn: isOwnStream(payload.triggeredBy, localUserId()),
         // Optional on the wire for cross-version safety: during a rolling deploy an

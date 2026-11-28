@@ -21,6 +21,8 @@ export interface CalendarEventAttendee {
     id: string;
     name: string | null;
     image: string | null;
+    /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+    accountType?: string | null;
   };
 }
 
@@ -47,6 +49,8 @@ export interface CalendarEvent {
     id: string;
     name: string | null;
     image: string | null;
+    /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+    accountType?: string | null;
   };
   attendees: CalendarEventAttendee[];
   page?: {

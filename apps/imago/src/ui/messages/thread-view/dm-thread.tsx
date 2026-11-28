@@ -4,6 +4,7 @@ import { useMemo } from 'react';
 import { useDirectThreads } from '../use-messages/use-messages';
 import { useDmThread } from '../dm-thread/use-dm-thread';
 import { namedPosts, type DmPerson } from '../message-model/dm-message';
+import { withAccountType } from '../message-model/account-type';
 import { threadPosts } from '../thread/thread-state';
 import { todayOf } from '../../time/time';
 import { renderErrorState } from '../../frame/edge-state/edge-state.render';
@@ -42,8 +43,10 @@ export function DmThread({ conversationId, viewerId, now = systemNow, markReadDe
 
   const people = useMemo((): Readonly<Record<string, DmPerson>> => {
     if (!other?.otherUserId || other.name === '') return {};
-    return { [other.otherUserId]: { name: other.name, image: other.avatarUrl } };
-  }, [other?.otherUserId, other?.name, other?.avatarUrl]);
+    return {
+      [other.otherUserId]: { name: other.name, image: other.avatarUrl, ...withAccountType('accountType', other.accountType) },
+    };
+  }, [other?.otherUserId, other?.name, other?.avatarUrl, other?.accountType]);
 
   if (state.status === 'not-found')
     return renderNotFound({ ...CONVERSATION_NOT_FOUND, homeHref: '/dm', linkLabel: 'Back to Messages' });
@@ -54,6 +57,7 @@ export function DmThread({ conversationId, viewerId, now = systemNow, markReadDe
       kind="dm"
       name={other?.name || 'Direct message'}
       image={other?.avatarUrl ?? null}
+      accountType={other?.accountType}
       viewerId={viewerId}
       state={state}
       posts={namedPosts(threadPosts(state), { viewerId, people })}

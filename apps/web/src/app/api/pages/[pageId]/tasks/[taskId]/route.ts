@@ -446,13 +446,13 @@ export async function PATCH(
     where: eq(taskItems.id, updatedTask.id),
     with: {
       assignee: {
-        columns: { id: true, name: true, image: true },
+        columns: { id: true, name: true, image: true, accountType: true },
       },
       assigneeAgent: {
         columns: { id: true, title: true, type: true },
       },
       user: {
-        columns: { id: true, name: true, image: true },
+        columns: { id: true, name: true, image: true, accountType: true },
       },
       page: {
         columns: { id: true, title: true, position: true },
@@ -460,7 +460,7 @@ export async function PATCH(
       assignees: {
         with: {
           user: {
-            columns: { id: true, name: true, image: true },
+            columns: { id: true, name: true, image: true, accountType: true },
           },
           agentPage: {
             columns: { id: true, title: true, type: true },

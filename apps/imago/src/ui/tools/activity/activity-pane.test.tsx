@@ -45,10 +45,12 @@ const settle = async (check: () => void): Promise<void> => {
   check();
 };
 
-const show = (search = '') => {
+const DANA = { id: 'a1', name: 'Dana', email: 'dana@example.com', image: null };
+
+const show = (search = '', actors: readonly object[] = [DANA]) => {
   nav.search = search;
   const web = fakeWeb({
-    [ACTORS]: () => Response.json({ actors: [{ id: 'a1', name: 'Dana', email: 'dana@example.com', image: null }] }),
+    [ACTORS]: () => Response.json({ actors }),
   });
   const container = mount(
     <ImagoSWRProvider client={web.client}>
@@ -169,3 +171,21 @@ describe('ActivityPane', () => {
     });
   });
 });
+
+describe('ActivityPane agent marker (Agent Signup Phase 2c)', () => {
+  test('marks an agent actor in the People & agents list, and leaves a human unchanged', async () => {
+    const { container } = show('', [
+      { ...DANA, accountType: 'human' },
+      { id: 'a2', name: 'Helper', email: 'helper@agents.invalid', image: null, accountType: 'agent' },
+      { id: 'a3', name: null, email: 'gone@example.com', image: null, accountType: null },
+    ]);
+    await settle(() => expect(container.querySelector('#activity-actor option[value="a2"]')).not.toBeNull());
+    assert({
+      given: 'a human, an agent account and an erased actor',
+      should: 'read the agent as "Name (AI agent)" from its accountType, the others as before',
+      actual: Array.from(container.querySelectorAll('#activity-actor option')).map((option) => option.textContent),
+      expected: ['Everyone', 'Dana', 'Helper (AI agent)', 'gone@example.com'],
+    });
+  });
+});
+

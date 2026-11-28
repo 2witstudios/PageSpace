@@ -5,6 +5,8 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, asc, eq } from '@pagespace/db/operators';
 import { aiStreamSessions } from '@pagespace/db/schema/ai-streams';
+import { users } from '@pagespace/db/schema/auth';
+import { isAgentAccount } from '@pagespace/lib/auth/agent/display-name';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
@@ -129,6 +131,9 @@ export async function GET(request: Request) {
         conversationId: aiStreamSessions.conversationId,
         userId: aiStreamSessions.userId,
         displayName: aiStreamSessions.displayName,
+        // Joined at read time (Agent Signup Phase 2c): the stored displayName is a
+        // plain copy, so the agent marker comes from the live account row.
+        accountType: users.accountType,
         browserSessionId: aiStreamSessions.browserSessionId,
         parts: aiStreamSessions.parts,
         rawPartsCount: aiStreamSessions.rawPartsCount,
@@ -136,6 +141,7 @@ export async function GET(request: Request) {
         lastHeartbeatAt: aiStreamSessions.lastHeartbeatAt,
       })
       .from(aiStreamSessions)
+      .leftJoin(users, eq(users.id, aiStreamSessions.userId))
       .where(
         and(
           eq(aiStreamSessions.channelId, channelId),
@@ -199,6 +205,8 @@ export async function GET(request: Request) {
           userId: s.userId,
           displayName: s.displayName,
           browserSessionId: s.browserSessionId,
+          // Agent only, so a human's entry is unchanged (same shape as chat:stream_start).
+          ...(isAgentAccount(s.accountType) ? { accountType: 'agent' as const } : {}),
         },
       })),
     });

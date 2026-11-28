@@ -1575,3 +1575,31 @@ describe('channel mirror edit propagation (#2153)', () => {
     });
   });
 });
+
+describe('channelMessageRepository reactor accountType (Agent Signup Phase 2c)', () => {
+  it('loads each reactor\'s accountType so the reactions tooltip can mark an agent', async () => {
+    testDbState.seed('users', [
+      { id: 'u-1', name: 'Alice', accountType: 'human' },
+      { id: 'u-2', name: 'Helper', accountType: 'agent' },
+    ]);
+    testDbState.seed('channelMessages', [
+      { id: 'msg-1', pageId: 'page-1', userId: 'u-1', isActive: true, content: 'hi' },
+    ]);
+    testDbState.seed('channelMessageReactions', [
+      { id: 'rx-1', messageId: 'msg-1', userId: 'u-2', emoji: '👍' },
+    ]);
+
+    const message = await channelMessageRepository.loadChannelMessageWithRelations('msg-1');
+    const reaction = await channelMessageRepository.loadChannelReactionWithUser('rx-1');
+
+    assert({
+      given: 'a reaction by an agent account',
+      should: 'carry the reactor accountType on both the message relation and the reaction broadcast load',
+      actual: {
+        onMessage: (message?.reactions as Array<{ user: { accountType: string } }> | undefined)?.[0]?.user?.accountType,
+        onReaction: (reaction?.user as { accountType: string } | null)?.accountType,
+      },
+      expected: { onMessage: 'agent', onReaction: 'agent' },
+    });
+  });
+});

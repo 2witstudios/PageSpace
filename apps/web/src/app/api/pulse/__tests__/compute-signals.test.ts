@@ -33,7 +33,7 @@ const userPageViews = { userId: 'userId', pageId: 'pageId', viewedAt: 'viewedAt'
 const pageVersions = { pageId: 'pageId', driveId: 'driveId', createdAt: 'createdAt', createdBy: 'createdBy' };
 const agentWorkspaces = { id: 'id', ownerId: 'ownerId', driveId: 'driveId', endedAt: 'endedAt' };
 const drives = { id: 'id', name: 'name' };
-const users = { id: 'id', name: 'name' };
+const users = { id: 'id', name: 'name', accountType: 'accountType' };
 
 vi.mock('@pagespace/db/db', async () => {
   const { createFixtureSelect } = await import('./task-fixture-db');
@@ -355,3 +355,41 @@ describe('computeFootprint', () => {
     expect(result.lastVisitAt).toBeNull();
   });
 });
+
+// Agent Signup Phase 2c: a Home signal line is plain text built from another
+// user's name, so an agent actor is marked "Name (AI agent)" from its live
+// accountType — never from the name. Human lines stay byte-identical (above).
+describe('Home signals — agent marker', () => {
+  it('marks an agent mentioner in the lead, short text and user subject', async () => {
+    seed(notifications, [
+      { userId: USER, type: 'MENTION', isRead: false, pageId: 'p1', createdAt: NOW, name: 'Helper', accountType: 'agent', title: 'design-review', id: 'p1' },
+    ]);
+    const withPage = await computeMentionSignal(USER, ['p1'], NOW);
+    expect(withPage.text.lead).toBe('Helper (AI agent) is waiting on you in design-review');
+    expect(withPage.text.short).toBe('Helper (AI agent) in design-review');
+
+    seed(notifications, [
+      { userId: USER, type: 'MENTION', isRead: false, pageId: null, createdAt: NOW, name: 'Helper', accountType: 'agent' },
+    ]);
+    const noPage = await computeMentionSignal(USER, ['p1'], NOW);
+    expect(noPage.text.lead).toBe('Helper (AI agent) mentioned you');
+    expect(noPage.subject).toEqual({ type: 'user', id: '', title: 'Helper (AI agent)' });
+  });
+
+  it('leaves a human mentioner unmarked', async () => {
+    seed(notifications, [
+      { userId: USER, type: 'MENTION', isRead: false, pageId: null, createdAt: NOW, name: 'Sarah', accountType: 'human' },
+    ]);
+    expect((await computeMentionSignal(USER, ['p1'], NOW)).text.lead).toBe('Sarah mentioned you');
+  });
+
+  it('marks an agent editor in the pages-changed line', async () => {
+    const since = new Date('2026-09-10T00:00:00Z');
+    seed(pageVersions, [
+      { pageId: 'p1', driveId: 'd1', createdAt: NOW, createdBy: 'agent-1', title: 'Spec', name: 'Helper', accountType: 'agent', isTrashed: false },
+    ]);
+    const result = await computePagesChangedSignal(USER, ['p1'], ['d1'], since, NOW);
+    expect(result.text.lead).toBe('Spec changed by Helper (AI agent)');
+  });
+});
+

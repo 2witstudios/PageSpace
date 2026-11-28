@@ -7,6 +7,8 @@ import { users } from '@pagespace/db/schema/auth'
 import { activityLogs } from '@pagespace/db/schema/monitoring'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { isAgentAccount } from '@pagespace/lib/auth/agent/display-name';
+import { modelContextName } from '../core/model-context-name';
 import { isUserDriveMember } from '@pagespace/lib/permissions/permissions';
 import { getMemberDriveIds } from '@pagespace/lib/permissions/member-drives';
 import {
@@ -181,6 +183,35 @@ function createCompactDelta(
   }
 
   return Object.keys(delta).length > 0 ? delta : undefined;
+}
+
+/** The activity fields an actor entry is built from. */
+export interface ActorSource {
+  actorEmail: string;
+  actorDisplayName: string | null;
+  isAiGenerated: boolean;
+  userId: string | null;
+  /** The live user row; null for an erased actor. */
+  user: { name: string | null; accountType?: string | null } | null;
+}
+
+/**
+ * One actor entry of the get_activity output, which enters the model's
+ * context: an agent actor's name is labelled from its live accountType
+ * (Agent Signup Phase 2c); a human's is unchanged. Pure.
+ */
+export function compactActorFor(
+  activity: ActorSource,
+  { userId, currentUserEmail }: { userId: string; currentUserEmail: string | null },
+): CompactActor {
+  return {
+    email: activity.actorEmail,
+    name: modelContextName(activity.actorDisplayName || activity.user?.name || null, activity.user?.accountType),
+    isYou: activity.isAiGenerated
+      ? currentUserEmail !== null && activity.actorEmail === currentUserEmail
+      : activity.userId === userId,
+    count: 0,
+  };
 }
 
 /**
@@ -551,7 +582,7 @@ When summarizing multiple changes, group them thematically and describe the over
               : and(...conditions),
             with: {
               user: {
-                columns: { id: true, name: true, email: true },
+                columns: { id: true, name: true, email: true, accountType: true },
               },
               drive: {
                 columns: { id: true, name: true, slug: true, drivePrompt: true },
@@ -639,14 +670,7 @@ When summarizing multiple changes, group them thematically and describe the over
           const email = activity.actorEmail;
           let entry = actorMap.get(email);
           if (!entry) {
-            const actor: CompactActor = {
-              email,
-              name: activity.actorDisplayName || activity.user?.name || null,
-              isYou: activity.isAiGenerated
-                ? currentUserEmail !== null && activity.actorEmail === currentUserEmail
-                : activity.userId === userId,
-              count: 0,
-            };
+            const actor = compactActorFor(activity, { userId, currentUserEmail });
             entry = { idx: actorsList.length, actor };
             actorsList.push(actor);
             actorMap.set(email, entry);
@@ -764,7 +788,10 @@ When summarizing multiple changes, group them thematically and describe the over
                 aiConversationId: activity.aiConversationId,
                 isAiGenerated: activity.isAiGenerated,
                 actorEmail: activity.actorEmail,
-                actorDisplayName: activity.actorDisplayName,
+                // The diff's actor list enters the model's context too.
+                actorDisplayName: isAgentAccount(activity.user?.accountType)
+                  ? modelContextName(activity.actorDisplayName || activity.user?.name || null, activity.user?.accountType)
+                  : activity.actorDisplayName,
                 // Store inline snapshot for fallback (legacy data without contentRef)
                 content: activity.contentSnapshot ?? null,
                 driveId: activity.driveId!,

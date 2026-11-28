@@ -113,3 +113,31 @@ describe('MessageQuoteBlock — jump interaction', () => {
     });
   });
 });
+
+describe('MessageQuoteBlock — agent marker (Agent Signup Phase 2c)', () => {
+  it('marks a quote whose author is an agent account', () => {
+    render(<MessageQuoteBlock quoted={activeQuote({ authorName: 'PageSpace Support', authorAccountType: 'agent' })} />);
+    assert({
+      given: 'a quote of an agent-authored message',
+      should: 'render the agent marker beside the (unchanged) author name',
+      actual: {
+        name: screen.getByText('PageSpace Support').textContent,
+        marked: screen.queryByLabelText('AI agent account') !== null,
+      },
+      expected: { name: 'PageSpace Support', marked: true },
+    });
+  });
+
+  it('leaves a human or unknown author unmarked', () => {
+    for (const authorAccountType of ['human', null, undefined]) {
+      const { unmount } = render(<MessageQuoteBlock quoted={activeQuote({ authorAccountType })} />);
+      assert({
+        given: `a quote whose author accountType is ${String(authorAccountType)}`,
+        should: 'render no agent marker',
+        actual: screen.queryByLabelText('AI agent account'),
+        expected: null,
+      });
+      unmount();
+    }
+  });
+});

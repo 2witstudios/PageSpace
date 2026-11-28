@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { Actor } from './types';
 import { getInitials } from './utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 interface ActorFilterProps {
   driveId?: string;
@@ -98,6 +99,7 @@ export function ActorFilter({ driveId, context, value, onChange }: ActorFilterPr
                   </AvatarFallback>
                 </Avatar>
                 <span className="truncate">{selectedActor.name || selectedActor.email}</span>
+                <AgentBadge accountType={selectedActor.accountType} />
               </>
             ) : (
               <>
@@ -141,6 +143,7 @@ export function ActorFilter({ driveId, context, value, onChange }: ActorFilterPr
                     </AvatarFallback>
                   </Avatar>
                   <span className="truncate">{actor.name || actor.email}</span>
+                  <AgentBadge accountType={actor.accountType} className="ml-1" />
                   <Check
                     className={cn(
                       'ml-auto h-4 w-4',

@@ -118,6 +118,8 @@ export async function GET(request: Request) {
         name: sql<string>`COALESCE(${users.name}, ${activityLogs.actorDisplayName})`.as('name'),
         email: sql<string>`COALESCE(${users.email}, ${activityLogs.actorEmail})`.as('email'),
         image: users.image,
+        // Agent marker at render (Agent Signup Phase 2c): null for an erased actor.
+        accountType: users.accountType,
         sortKey: sortExpression.as('sort_key'),
       })
       .from(activityLogs)

@@ -103,7 +103,7 @@ interface ToolPart {
 /** Extended UIMessage with extra fields stored in our database */
 type MessageStatus = 'streaming' | 'complete' | 'interrupted';
 
-type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; status?: MessageStatus; source?: string | null };
+type ExtendedUIMessage = UIMessage & { editedAt?: Date | null; messageType: string; createdAt?: Date; userName?: string | null; userAccountType?: string | null; status?: MessageStatus; source?: string | null };
 
 interface DatabaseMessage {
   id: string;
@@ -126,6 +126,8 @@ interface DatabaseMessage {
   editedAt?: Date | null;
   messageType?: 'standard' | 'todo_list';
   userName?: string | null;
+  /** The author's `users.accountType`; carried to the UI so an agent author is marked. */
+  userAccountType?: string | null;
   status?: MessageStatus;
   /**
    * The transport the row was authored over — `MESSAGE_SOURCE_VOICE` for a turn
@@ -322,7 +324,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
 
     try {
       const structured = await reconstructFromStructuredContent(dbMessage, parsed);
-      return { ...structured, userName: dbMessage.userName, status: dbMessage.status, source: dbMessage.source ?? null } as ExtendedUIMessage;
+      return { ...structured, userName: dbMessage.userName, userAccountType: dbMessage.userAccountType, status: dbMessage.status, source: dbMessage.source ?? null } as ExtendedUIMessage;
     } catch (error) {
       // Reconstruction failed (e.g. S3 presign error) — fall back to the
       // original plain-text content rather than leaking the raw structured
@@ -336,6 +338,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
         editedAt: dbMessage.editedAt,
         messageType: dbMessage.messageType || 'standard',
         userName: dbMessage.userName,
+        userAccountType: dbMessage.userAccountType,
         status: dbMessage.status,
         source: dbMessage.source ?? null,
       } as ExtendedUIMessage;
@@ -354,6 +357,7 @@ export async function convertDbMessageToUIMessage(dbMessage: DatabaseMessage): P
     messageType: dbMessage.messageType || 'standard',
     status: dbMessage.status,
     userName: dbMessage.userName,
+    userAccountType: dbMessage.userAccountType,
     source: dbMessage.source ?? null,
   } as ExtendedUIMessage;
 }

@@ -14,6 +14,7 @@ import { driveDeniedByAppToken, filterDriveIdsByAppTokenScope, isMcpScoped, tool
 import { normalizeTimezone, getTimezoneOffsetMinutes, formatDateInTimezone, isNaiveISODatetime, parseNaiveDatetimeInTimezone } from '../core/timestamp-utils';
 import { expandRecurringEvents } from '../../workflows/recurrence-utils';
 import { checkActorDriveAuthentication } from '@pagespace/lib/permissions/actor-authentication';
+import { modelContextName } from '../core/model-context-name';
 
 /**
  * Check if user can access an event based on visibility rules
@@ -82,13 +83,13 @@ async function formatEventForResponse(event: {
   metadata?: unknown;
   driveId: string | null;
   createdById: string;
-  createdBy?: { id: string; name: string | null; image: string | null } | null;
+  createdBy?: { id: string; name: string | null; image: string | null; accountType?: string | null } | null;
   attendees?: Array<{
     id: string;
     status: string;
     isOrganizer: boolean;
     isOptional: boolean;
-    user: { id: string; name: string | null; image: string | null } | null;
+    user: { id: string; name: string | null; image: string | null; accountType?: string | null } | null;
   }>;
   page?: { id: string; title: string; type: string } | null;
   drive?: { id: string; name: string; slug: string } | null;
@@ -96,11 +97,14 @@ async function formatEventForResponse(event: {
   const displayTz = timezone ?? event.timezone;
   // Decrypt PII at the edge (GDPR #965) so creator/attendee names are plaintext
   // (legacy plaintext passes through unchanged).
-  const createdByName = event.createdBy ? await decryptField(event.createdBy.name) : null;
+  // A name entering model context: an AI agent account's is labelled (Agent Signup 2c).
+  const createdByName = event.createdBy
+    ? modelContextName(await decryptField(event.createdBy.name), event.createdBy.accountType)
+    : null;
   const decryptedAttendees = event.attendees
     ? await Promise.all(event.attendees.map(async (a) => ({
         userId: a.user?.id,
-        name: await decryptField(a.user?.name),
+        name: modelContextName(await decryptField(a.user?.name), a.user?.accountType),
         status: a.status,
         isOrganizer: a.isOrganizer,
         isOptional: a.isOptional,
@@ -343,12 +347,12 @@ export const calendarReadTools = {
             ),
             with: {
               createdBy: {
-                columns: { id: true, name: true, image: true },
+                columns: { id: true, name: true, image: true, accountType: true },
               },
               attendees: {
                 with: {
                   user: {
-                    columns: { id: true, name: true, image: true },
+                    columns: { id: true, name: true, image: true, accountType: true },
                   },
                 },
               },
@@ -464,12 +468,12 @@ export const calendarReadTools = {
           ),
           with: {
             createdBy: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
             attendees: {
               with: {
                 user: {
-                  columns: { id: true, name: true, image: true },
+                  columns: { id: true, name: true, image: true, accountType: true },
                 },
               },
             },
@@ -556,13 +560,13 @@ export const calendarReadTools = {
           ),
           with: {
             createdBy: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
             ...(includeAttendees && {
               attendees: {
                 with: {
                   user: {
-                    columns: { id: true, name: true, image: true },
+                    columns: { id: true, name: true, image: true, accountType: true },
                   },
                 },
               },

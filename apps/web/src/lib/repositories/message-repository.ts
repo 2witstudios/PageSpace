@@ -332,6 +332,8 @@ export interface UnifiedPageMessageRow extends UnifiedMessageRow {
 /** A page-chat row with its author's display fields, for client-facing history. */
 export interface UnifiedPageMessageWithAuthor extends UnifiedPageMessageRow {
   userName?: string | null;
+  /** The author's `users.accountType`, so an agent author is marked (Agent Signup Phase 2c). */
+  userAccountType?: string | null;
   userImage?: string | null;
 }
 
@@ -1299,6 +1301,7 @@ export const messageRepository = {
         ...unifiedColumns,
         pageId: derivedPageId(),
         userName: users.name,
+        userAccountType: users.accountType,
         userImage: users.image,
       })
       .from(messages)

@@ -8,6 +8,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { optionalAbsoluteInstant } from '@/lib/validation/date-params';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
+import { withActorAccountTypes } from '@/lib/activities/actor-account-types';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: false };
 
@@ -105,7 +106,8 @@ export async function GET(
   });
 
   // Add rollback eligibility to each activity
-  const versionsWithRollback = activities.map((activity) => ({
+  // The actor's live accountType marks an agent at render (Agent Signup Phase 2c).
+  const versionsWithRollback = (await withActorAccountTypes(activities)).map((activity) => ({
     ...activity,
     canRollback: isActivityEligibleForRollback(activity),
   }));

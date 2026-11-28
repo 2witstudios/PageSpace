@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { useSearchParams } from 'next/navigation';
 import useSWR from 'swr';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import { useApiClient } from '@/api/swr-provider';
 import type { ApiClient } from '@/api/client';
 import { cn } from '../../cn';
@@ -24,7 +25,13 @@ const operations = ['create', 'update', 'delete', 'move', 'restore', 'rollback']
 
 const rangeText: Readonly<Record<ActivityRange, string>> = { '24h': '24h', '7d': '7 days', '30d': '30 days' };
 
-type Actor = { readonly id: string; readonly name: string | null; readonly email: string };
+type Actor = {
+  readonly id: string;
+  readonly name: string | null;
+  readonly email: string;
+  /** The live account type; null for an erased actor (Agent Signup Phase 2c). */
+  readonly accountType?: string | null;
+};
 
 const fetchActors = async (client: ApiClient, driveId: string): Promise<readonly Actor[]> => {
   const body = await client.apiFetch<{ actors?: readonly Actor[] }>(
@@ -104,7 +111,8 @@ export function ActivityPane({ driveId, close, variant, scope: scopeSwitch = nul
           >
             <option value="">Everyone</option>
             {actors.map((actor) => (
-              <option key={actor.id} value={actor.id}>{actor.name || actor.email}</option>
+              // An <option> holds plain text only, so an agent reads "Name (AI agent)".
+              <option key={actor.id} value={actor.id}>{withAgentMarker(actor.name || actor.email, actor.accountType)}</option>
             ))}
           </select>
         </div>}

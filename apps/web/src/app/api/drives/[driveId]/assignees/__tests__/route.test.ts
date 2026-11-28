@@ -37,6 +37,7 @@ vi.mock('@pagespace/db/schema/auth', () => ({
       email: 'col_users_email',
       name: 'col_users_name',
       image: 'col_users_image',
+      accountType: 'col_users_accountType',
     },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -243,6 +244,48 @@ describe('GET /api/drives/[driveId]/assignees', () => {
       });
       // GUEST rows (redeemed page share links) are not assignable members.
       expect(ne).toHaveBeenCalledWith('col_dm_role', 'GUEST');
+    });
+
+    it('selects users.accountType and returns it on member and owner assignees, so an agent account is marked (Agent Signup 2c)', async () => {
+      const selections: unknown[] = [];
+      let selectCallCount = 0;
+      vi.mocked(db.select).mockImplementation(((selection: unknown) => {
+        selections.push(selection);
+        selectCallCount++;
+        if (selectCallCount === 1) {
+          const mockLeftJoin2 = vi.fn(() => ({
+            where: vi.fn().mockResolvedValue([
+              {
+                userId: 'member-1',
+                role: 'MEMBER',
+                user: { id: 'member-1', email: null, name: 'Helper', image: null, accountType: 'agent' },
+                profile: null,
+              },
+            ]),
+          }));
+          return { from: vi.fn(() => ({ leftJoin: vi.fn(() => ({ leftJoin: mockLeftJoin2 })) })) } as never;
+        }
+        if (selectCallCount === 2) {
+          return { from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn().mockResolvedValue([]) })) })) } as never;
+        }
+        const mockOwnerLeftJoin = vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([
+              { user: { id: MOCK_OWNER_ID, email: 'owner@test.com', name: 'Owner', image: null, accountType: 'human' }, profile: null },
+            ]),
+          })),
+        }));
+        return { from: vi.fn(() => ({ leftJoin: mockOwnerLeftJoin })) } as never;
+      }) as never);
+
+      const response = await GET(new Request('https://example.com/api/drives/d/assignees'), createContext(MOCK_DRIVE_ID));
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(selections[0]).toMatchObject({ user: { accountType: 'col_users_accountType' } });
+      expect(selections[2]).toMatchObject({ user: { accountType: 'col_users_accountType' } });
+      expect(body.assignees[0]).toMatchObject({ id: MOCK_OWNER_ID, name: 'Owner', accountType: 'human' });
+      expect(body.assignees[1]).toMatchObject({ id: 'member-1', name: 'Helper', accountType: 'agent' });
     });
 
     it('should not add owner twice when owner is in members list', async () => {

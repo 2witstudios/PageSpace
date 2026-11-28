@@ -21,6 +21,7 @@ import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/t
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
 import { decryptTaskUserRelations } from '@/lib/tasks/decrypt-task-relations';
 import { isStartAfterDue, parseTaskDateInput, START_AFTER_DUE_ERROR } from '@/lib/tasks/task-dates';
+import { modelContextName } from '../core/model-context-name';
 
 /**
  * The Drizzle transaction handle passed to `db.transaction(async (tx) => ...)`.
@@ -191,12 +192,12 @@ export async function fetchEnrichedTasks(parentPageId: string) {
       eq(pages.isTrashed, false),
     ))),
     with: {
-      assignee: { columns: { id: true, name: true, image: true } },
+      assignee: { columns: { id: true, name: true, image: true, accountType: true } },
       assigneeAgent: { columns: { id: true, title: true, type: true } },
       page: { columns: { title: true, content: true, position: true } },
       assignees: {
         with: {
-          user: { columns: { id: true, name: true } },
+          user: { columns: { id: true, name: true, accountType: true } },
           agentPage: { columns: { id: true, title: true } },
         },
       },
@@ -226,10 +227,12 @@ export function serializeTaskItem(t: EnrichedTaskItem) {
     position: t.page?.position ?? 0,
     completedAt: t.completedAt,
     pageId: t.pageId,
+    // A user's name enters model context: an AI agent account's is labelled (Agent Signup 2c).
     assignee: t.assignee ? {
       id: t.assignee.id,
-      name: t.assignee.name,
+      name: modelContextName(t.assignee.name, t.assignee.accountType),
       image: t.assignee.image,
+      accountType: t.assignee.accountType,
     } : null,
     assigneeAgent: t.assigneeAgent ? {
       id: t.assigneeAgent.id,
@@ -239,7 +242,7 @@ export function serializeTaskItem(t: EnrichedTaskItem) {
     assignees: t.assignees?.map(a => ({
       userId: a.userId,
       agentPageId: a.agentPageId,
-      user: a.user ? { id: a.user.id, name: a.user.name } : null,
+      user: a.user ? { id: a.user.id, name: modelContextName(a.user.name, a.user.accountType), accountType: a.user.accountType } : null,
       agentPage: a.agentPage ? { id: a.agentPage.id, title: a.agentPage.title } : null,
     })) || [],
   };

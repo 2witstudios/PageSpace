@@ -177,3 +177,32 @@ describe('GET /api/activities PII decryption', () => {
     expect(vi.mocked(decryptUsersByIdOnce).mock.calls[0][0]).toHaveLength(50);
   });
 });
+
+describe('GET /api/activities agent marker (Agent Signup Phase 2c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+    vi.mocked(getAllowedDriveIds).mockReturnValue([]);
+  });
+
+  it('selects the actor accountType so the feed can mark agents at render', async () => {
+    await GET(new Request('http://localhost/api/activities?context=user'));
+    const args = vi.mocked(db.query.activityLogs.findMany).mock.calls[0][0] as {
+      with: { user: { columns: Record<string, boolean> } };
+    };
+    expect(args.with.user.columns.accountType).toBe(true);
+  });
+
+  it('returns the actor accountType beside the decrypted name', async () => {
+    vi.mocked(db.query.activityLogs.findMany).mockResolvedValue([
+      { id: 'act-1', user: { id: 'agent-1', name: 'Helper', email: 'a@agents.invalid', image: null, accountType: 'agent' } },
+      { id: 'act-2', user: { id: 'user-1', name: 'Jane', email: 'j@example.com', image: null, accountType: 'human' } },
+    ] as never);
+
+    const res = await GET(new Request('http://localhost/api/activities?context=user'));
+    const body = await res.json();
+
+    expect(body.activities[0].user).toMatchObject({ name: 'Helper', accountType: 'agent' });
+    expect(body.activities[1].user).toMatchObject({ name: 'Jane', accountType: 'human' });
+  });
+});

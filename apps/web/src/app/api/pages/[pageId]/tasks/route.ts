@@ -251,6 +251,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           id: true,
           name: true,
           image: true,
+          accountType: true,
         },
       },
       assigneeAgent: {
@@ -265,6 +266,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
           id: true,
           name: true,
           image: true,
+          accountType: true,
         },
       },
       page: {
@@ -284,6 +286,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ pageId: 
               id: true,
               name: true,
               image: true,
+              accountType: true,
             },
           },
           agentPage: {
@@ -651,13 +654,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     where: eq(taskItems.id, result.task.id),
     with: {
       assignee: {
-        columns: { id: true, name: true, image: true },
+        columns: { id: true, name: true, image: true, accountType: true },
       },
       assigneeAgent: {
         columns: { id: true, title: true, type: true },
       },
       user: {
-        columns: { id: true, name: true, image: true },
+        columns: { id: true, name: true, image: true, accountType: true },
       },
       page: {
         columns: { id: true, title: true },
@@ -665,7 +668,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assignees: {
         with: {
           user: {
-            columns: { id: true, name: true, image: true },
+            columns: { id: true, name: true, image: true, accountType: true },
           },
           agentPage: {
             columns: { id: true, title: true, type: true },

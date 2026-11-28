@@ -70,6 +70,26 @@ describe('renderTreeView()', () => {
     });
   });
 
+  test('an agent account on a row', () => {
+    const { container } = setup({
+      list: taskList('l1', [
+        task('z', {
+          title: 'Book venue',
+          assignees: [
+            { type: 'user', id: 'u-1', name: 'Ada', accountType: 'human' },
+            { type: 'user', id: 'u-2', name: 'Helper', accountType: 'agent' },
+          ],
+        }),
+      ], { title: 'Launch' }),
+    });
+    assert({
+      given: 'a row with a person and an AI agent account on it',
+      should: 'mark only the agent account in the faces\' accessible name (Agent Signup 2c)',
+      actual: container.querySelector('[aria-label^="Assigned to"]')?.getAttribute('aria-label'),
+      expected: 'Assigned to Ada, Helper (AI agent)',
+    });
+  });
+
   test('carets and progress', () => {
     const { container } = setup();
     const caret = container.querySelector('[aria-label="Toggle Plan launch"]');

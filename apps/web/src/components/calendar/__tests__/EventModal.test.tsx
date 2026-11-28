@@ -572,3 +572,32 @@ describe('EventModal — RSVP section', () => {
     });
   });
 });
+
+describe('EventModal — agent marker on attendees (Agent Signup 2c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useEditingStore.getState().clearAllSessions();
+    mockUseAuthStore('user-1');
+    cannedFetch({ trigger: null });
+  });
+
+  test('marks an AI agent account attendee and not a human one', async () => {
+    renderModal({
+      event: baseEvent({
+        attendees: [
+          attendeeFixture({ id: 'att-h', userId: 'user-h', user: { id: 'user-h', name: 'Ada', image: null, accountType: 'human' } }),
+          attendeeFixture({ id: 'att-a', userId: 'user-a', user: { id: 'user-a', name: 'Helper', image: null, accountType: 'agent' } }),
+        ],
+      }),
+    });
+
+    const agentName = await screen.findByText('Helper');
+    const markers = screen.getAllByLabelText('AI agent account');
+    assert({
+      given: 'a human and an agent-account attendee',
+      should: 'render exactly one agent marker, beside the agent account',
+      actual: [markers.length, agentName.parentElement?.contains(markers[0]), screen.getByText('Ada').parentElement?.querySelector('[aria-label="AI agent account"]') ?? null],
+      expected: [1, true, null],
+    });
+  });
+});

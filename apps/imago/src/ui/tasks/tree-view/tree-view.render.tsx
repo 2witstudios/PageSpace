@@ -20,6 +20,7 @@ import {
 } from '../task-row/task-row-class';
 import { canNestUnder, isDone, progress } from '../task-tree/task-tree';
 import { treeDueClass, treeGripClass, treeMetaClass, treePriorityClass, treeRowShellClass } from './tree-view-class';
+import { assigneeLabel } from '../task-model/assignee-label';
 
 /** Why an edit was refused; `at` is the task (or list page) it was made on. */
 export type TaskNotice = { readonly at: string; readonly message: string };
@@ -109,7 +110,7 @@ const meta = (props: TreeViewRenderProps, task: Task, done: boolean): ReactNode 
         </span>
       )}
       {task.assignees.length === 0 ? null : (
-        <AvatarGroup names={task.assignees.map((entry) => entry.name)} agents={agents} label="Assigned to" />
+        <AvatarGroup names={task.assignees.map(assigneeLabel)} agents={agents} label="Assigned to" />
       )}
       {tone === null || props.today === undefined ? null : (
         <time dateTime={dueDay(task.dueDate)} data-tone={tone} className={treeDueClass(tone)}>

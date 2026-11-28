@@ -127,6 +127,29 @@ describe('NotificationItem', () => {
       expect(screen.getByText('by Jonathan Woodall')).toBeInTheDocument();
     });
 
+    it('badges an agent author from accountType (Agent Signup Phase 2c)', () => {
+      render(
+        <NotificationItem
+          notification={build({
+            triggeredByUser: { id: 'a1', name: 'PageSpace Support', email: 'a@agents.invalid', accountType: 'agent' },
+          })}
+        />,
+      );
+      expect(screen.getByText('by PageSpace Support')).toBeInTheDocument();
+      expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+    });
+
+    it('does not badge a human author', () => {
+      render(
+        <NotificationItem
+          notification={build({
+            triggeredByUser: { id: 'u2', name: 'Jonathan Woodall', email: 'j@ex.com', accountType: 'human' },
+          })}
+        />,
+      );
+      expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+    });
+
     it('omits triggered-by separator when no author', () => {
       render(<NotificationItem notification={build({ triggeredByUser: null })} />);
       expect(screen.queryByText(/^by /)).not.toBeInTheDocument();

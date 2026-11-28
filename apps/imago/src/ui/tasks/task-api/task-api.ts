@@ -25,7 +25,7 @@ import type {
   TaskTriggerResponse,
   TaskTriggersResponse,
 } from '../task-model/task';
-import { driveTaskLists, statusesFrom, taskListFrom } from '../task-model/from-api';
+import { driveTaskLists, personAssignee, statusesFrom, taskListFrom } from '../task-model/from-api';
 import { MAX_LEVELS, withSubtasks } from '../task-tree/task-tree';
 import { uniqueAssignees, type ReorderPlan, type TaskPatch } from '../task-edit/task-edit';
 
@@ -252,11 +252,10 @@ export const reorderTasks = (client: ApiClient, plan: ReorderPlan) =>
 
 /** Who can be put on a drive's tasks: its members, then the agents the viewer can see. */
 export const fetchAssignable = async (client: ApiClient, driveId: string): Promise<readonly Assignee[]> =>
-  (await client.apiFetch<AssignablesResponse>(taskPaths.assignees(driveId))).assignees.map(({ type, id, name }) => ({
-    type,
-    id,
-    name,
-  }));
+  (await client.apiFetch<AssignablesResponse>(taskPaths.assignees(driveId))).assignees.map(
+    ({ type, id, name, accountType }): Assignee =>
+      type === 'user' ? personAssignee(id, name, accountType) : { type, id, name },
+  );
 
 /** One step of where a page sits. */
 export type TrailEntry = { readonly id: string; readonly title: string };

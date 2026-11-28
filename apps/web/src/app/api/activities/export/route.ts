@@ -6,6 +6,7 @@ import { activityLogs } from '@pagespace/db/schema/monitoring';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, checkMCPPageScope, canPrincipalViewPage, isPrincipalDriveMember, getAllowedDriveIds } from '@/lib/auth';
 import { format } from 'date-fns';
 import { optionalAbsoluteInstant, exclusiveEndBound } from '@/lib/validation/date-params';
@@ -245,7 +246,7 @@ export async function GET(request: Request) {
               where: finalWhereCondition,
               with: {
                 user: {
-                  columns: { id: true, name: true, email: true },
+                  columns: { id: true, name: true, email: true, accountType: true },
                 },
               },
               orderBy: [desc(activityLogs.timestamp), desc(activityLogs.id)],
@@ -265,7 +266,9 @@ export async function GET(request: Request) {
             for (const activity of decryptedBatch) {
               const row = [
                 format(new Date(activity.timestamp), 'yyyy-MM-dd HH:mm:ss'),
-                activity.actorDisplayName || activity.user?.name || '',
+                // Agent marker from the live user row (Agent Signup Phase 2c);
+                // an erased actor keeps its stored name unmarked.
+                withAgentMarker(activity.actorDisplayName || activity.user?.name || '', activity.user?.accountType),
                 activity.actorEmail || activity.user?.email || '',
                 activity.operation,
                 activity.resourceType,

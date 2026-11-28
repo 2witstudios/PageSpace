@@ -214,3 +214,24 @@ describe('renderMessagesPane()', () => {
     });
   });
 });
+
+describe('renderMessagesPane() agent marker (Agent Signup Phase 2c)', () => {
+  test('a DM with an agent', () => {
+    const markup = html({ direct: { status: 'ready', rows: [{ ...grace, name: 'PageSpace Support', accountType: 'agent' }] } });
+    assert({
+      given: 'a DM row whose other person is an agent account',
+      should: 'draw the agent marker in the row, after the unchanged name',
+      actual: /PageSpace Support<\/span><span[^>]*aria-label="AI agent account"/.test(markup),
+      expected: true,
+    });
+  });
+
+  test('a DM with a person', () => {
+    assert({
+      given: 'DM rows of people, typed or not',
+      should: 'draw no agent marker',
+      actual: html({ direct: { status: 'ready', rows: [grace, { ...grace, id: 'm2', accountType: 'human' }] } }).includes('AI agent account'),
+      expected: false,
+    });
+  });
+});

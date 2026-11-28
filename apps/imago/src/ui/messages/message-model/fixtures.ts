@@ -75,7 +75,7 @@ export const channelMessage = (
 export const channelReaction = (
   id: string,
   emoji: string,
-  user: { readonly id: string; readonly name: string | null },
+  user: ChannelReactionResponse['user'],
   createdAt = '2026-10-05T09:01:00.000Z',
 ): ChannelReactionResponse => ({ id, messageId: 'm', userId: user.id, emoji, createdAt, user });
 

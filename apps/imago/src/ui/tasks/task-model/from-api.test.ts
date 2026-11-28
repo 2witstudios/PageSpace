@@ -123,6 +123,35 @@ describe('assigneesOf()', () => {
     });
   });
 
+  test('account types', () => {
+    const item = taskItem('t1', {
+      assignees: [
+        { id: 'a1', taskId: 't1', userId: 'u-bot', agentPageId: null, user: { id: 'u-bot', name: 'Helper', image: null, accountType: 'agent' } },
+        { id: 'a2', taskId: 't1', userId: 'u-ada', agentPageId: null, user: { id: 'u-ada', name: 'Ada', image: null, accountType: 'human' } },
+        { id: 'a3', taskId: 't1', userId: 'u-old', agentPageId: null, user: { id: 'u-old', name: 'Old', image: null, accountType: null } },
+      ],
+    });
+    const legacy = taskItem('t2', {
+      assignees: [],
+      assigneeId: 'u-bot',
+      assignee: { id: 'u-bot', name: 'Helper', image: null, accountType: 'agent' },
+    });
+
+    assert({
+      given: 'people whose users.accountType the API sent, and one it did not',
+      should: 'carry the account type on each person that has one (Agent Signup 2c)',
+      actual: [assigneesOf(item), assigneesOf(legacy)],
+      expected: [
+        [
+          { type: 'user', id: 'u-bot', name: 'Helper', accountType: 'agent' },
+          { type: 'user', id: 'u-ada', name: 'Ada', accountType: 'human' },
+          { type: 'user', id: 'u-old', name: 'Old' },
+        ],
+        [{ type: 'user', id: 'u-bot', name: 'Helper', accountType: 'agent' }],
+      ],
+    });
+  });
+
   test('legacy ids without relations', () => {
     const item = taskItem('t1', { assignees: undefined, assigneeId: 'u-ada', assigneeAgentId: null });
 

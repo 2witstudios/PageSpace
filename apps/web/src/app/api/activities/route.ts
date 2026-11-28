@@ -222,7 +222,7 @@ export async function GET(request: Request) {
       where: finalWhereCondition,
       with: {
         user: {
-          columns: { id: true, name: true, email: true, image: true },
+          columns: { id: true, name: true, email: true, image: true, accountType: true },
         },
       },
       orderBy: [desc(activityLogs.timestamp)],

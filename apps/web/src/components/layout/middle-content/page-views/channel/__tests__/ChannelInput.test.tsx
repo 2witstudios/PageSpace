@@ -478,3 +478,18 @@ describe('ChannelInput mention selection', () => {
     expect(inserted.endsWith(' ')).toBe(true);
   });
 });
+
+describe('ChannelInput — quote chip agent marker (Agent Signup Phase 2c)', () => {
+  it('marks the quoted author when it is an agent account', () => {
+    renderInput({ quotedPreview: { authorName: 'PageSpace Support', snippet: 'hi', authorAccountType: 'agent' } });
+    const chip = screen.getByTestId('channel-input-quote-chip');
+    expect(chip).toHaveTextContent('Replying to PageSpace Support');
+    expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+  });
+
+  it('leaves a human quoted author unmarked, text unchanged', () => {
+    renderInput({ quotedPreview: { authorName: 'Ada', snippet: 'hi' } });
+    expect(screen.getByText('Replying to Ada').textContent).toBe('Replying to Ada');
+    expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+  });
+});

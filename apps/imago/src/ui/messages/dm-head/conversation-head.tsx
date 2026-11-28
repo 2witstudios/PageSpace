@@ -32,5 +32,5 @@ export function ConversationHead({ conversationId, leading, trailing }: Conversa
         onBlocked={() => router.push('/dm')}
       />
     );
-  return <DmHead title={title} options={options} leading={leading} trailing={trailing} />;
+  return <DmHead title={title} accountType={thread?.accountType} options={options} leading={leading} trailing={trailing} />;
 }

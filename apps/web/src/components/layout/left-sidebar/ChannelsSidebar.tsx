@@ -10,6 +10,7 @@ import { Search, Hash } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
 import SidebarShell from './SidebarShell';
@@ -201,7 +202,11 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
                     {item.lastMessagePreview && (
                       <p className="text-xs text-muted-foreground truncate mt-0.5">
                         {item.lastMessageSender && (
-                          <span className="font-medium">{item.lastMessageSender}: </span>
+                          <span className="font-medium">
+                            {item.lastMessageSender}
+                            <AgentBadge accountType={item.lastMessageSenderAccountType} className="ml-1" />
+                            {': '}
+                          </span>
                         )}
                         {item.lastMessagePreview}
                       </p>

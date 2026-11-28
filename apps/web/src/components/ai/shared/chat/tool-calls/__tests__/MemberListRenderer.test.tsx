@@ -19,4 +19,23 @@ describe('MemberListRenderer — agent accounts', () => {
     expect(screen.getByText('AI')).toBeInTheDocument();
     expect(screen.getByText('AL')).toBeInTheDocument();
   });
+
+  it('given an agent member, renders the AgentBadge from accountType; a human gets none (Phase 2c)', () => {
+    render(
+      <MemberListRenderer
+        members={[
+          { userId: 'a1', name: '[AI agent account, self-named] "Support"', displayName: '[AI agent account, self-named] "Support"', accountType: 'agent' },
+          { userId: 'h1', name: 'Ada Lovelace', displayName: 'Ada Lovelace', accountType: 'human' },
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByLabelText('AI agent account')).toHaveLength(1);
+  });
+
+  it('given only humans, renders no AgentBadge', () => {
+    render(<MemberListRenderer members={[{ userId: 'h1', name: 'Ada Lovelace', accountType: 'human' }]} />);
+
+    expect(screen.queryByLabelText('AI agent account')).toBeNull();
+  });
 });

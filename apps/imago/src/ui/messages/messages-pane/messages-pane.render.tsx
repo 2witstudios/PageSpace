@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { renderAgentMark } from '../../components/agent-mark/agent-mark.render';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderButton } from '../../components/button/button.render';
 import { iconButtonClass } from '../../components/icon-button/icon-button-class';
@@ -24,6 +25,8 @@ export type MessageRowView = {
   /** basePath-relative: Link adds /imago. */
   readonly href: string;
   readonly avatarUrl: string | null;
+  /** A DM partner's `users.accountType`: `agent` draws the agent marker (Agent Signup Phase 2c). */
+  readonly accountType?: string;
   readonly unreadCount: number;
   /** The thread open as the object. */
   readonly selected: boolean;
@@ -70,7 +73,7 @@ export const directNotes: MessagesGroupNotes = {
 /* The list stays calm, as the canvases draw it: a glyph, the name and an
    unread count, with no previews or times. The open thread is being read,
    so it draws no count; its name still carries it. */
-const renderRow = ({ id, kind, name, href, avatarUrl, unreadCount, selected }: MessageRowView): ReactNode => {
+const renderRow = ({ id, kind, name, href, avatarUrl, accountType, unreadCount, selected }: MessageRowView): ReactNode => {
   const unread = unreadCount > 0;
   return (
     <li key={`${kind}:${id}`}>
@@ -85,6 +88,7 @@ const renderRow = ({ id, kind, name, href, avatarUrl, unreadCount, selected }: M
           ? renderIcon({ name: 'hash', className: messageGlyphClass })
           : renderAvatar({ name, size: 'xs', src: avatarUrl ?? undefined })}
         <span className={messageNameClass}>{name}</span>
+        {renderAgentMark({ accountType })}
         {selected ? null : renderUnreadCount({ count: unreadCount })}
       </Link>
     </li>

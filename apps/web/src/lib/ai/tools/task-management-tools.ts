@@ -34,6 +34,7 @@ import {
   buildTaskListResponse,
   broadcastTaskUpdated,
 } from './task-helpers';
+import { modelContextName } from '../core/model-context-name';
 
 const STATUS_GROUP_DEFAULT_COLORS: Record<string, string> = {
   todo: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
@@ -603,7 +604,7 @@ This helps agents understand their responsibilities and coordinate work with oth
           where: and(...conditions),
           with: {
             assignee: {
-              columns: { id: true, name: true },
+              columns: { id: true, name: true, accountType: true },
             },
             page: {
               columns: { id: true, title: true, isTrashed: true, parentId: true, position: true },
@@ -728,9 +729,11 @@ This helps agents understand their responsibilities and coordinate work with oth
               } : null;
             })(),
             // Include user co-assignee if present
+            // Model context: an AI agent account's name is labelled (Agent Signup 2c).
             userAssignee: t.assignee ? {
               id: t.assignee.id,
-              name: t.assignee.name,
+              name: modelContextName(t.assignee.name, t.assignee.accountType),
+              accountType: t.assignee.accountType,
             } : null,
           })),
           message: `Found ${filteredTasks.length} task(s) assigned to agent "${agent.title}"`,

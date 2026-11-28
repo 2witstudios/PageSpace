@@ -23,6 +23,8 @@ export interface TaskAssigneeData {
     id: string;
     name: string | null;
     image: string | null;
+    /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+    accountType?: string | null;
   } | null;
   agentPage?: {
     id: string;
@@ -59,6 +61,8 @@ export interface TaskItem {
     id: string;
     name: string | null;
     image: string | null;
+    /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+    accountType?: string | null;
   } | null;
   assigneeAgent?: {
     id: string;
@@ -71,6 +75,8 @@ export interface TaskItem {
     id: string;
     name: string | null;
     image: string | null;
+    /** `users.accountType`: an agent account is marked beside its name (Agent Signup 2c). */
+    accountType?: string | null;
   } | null;
   page?: {
     id: string;

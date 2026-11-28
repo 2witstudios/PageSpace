@@ -39,6 +39,13 @@ export const statusesFrom = (configs: readonly TaskStatusConfigResponse[]): read
       wipLimit: wipLimit ?? null,
     }));
 
+/** A person on a task, carrying users.accountType only when the API sent one. */
+export const personAssignee = (
+  id: string,
+  name: string | null | undefined,
+  accountType: string | null | undefined,
+): Assignee => ({ type: 'user', id, name: name ?? '', ...(accountType ? { accountType } : {}) });
+
 /**
  * Everyone on a task. task_assignees is the source; a row from before it
  * existed has only the legacy single person and agent, which are read instead.
@@ -47,13 +54,13 @@ export const assigneesOf = (item: TaskItemResponse): readonly Assignee[] => {
   const rows = item.assignees ?? [];
   if (rows.length > 0) {
     return rows.flatMap((row): Assignee[] => {
-      if (row.userId) return [{ type: 'user', id: row.userId, name: row.user?.name ?? '' }];
+      if (row.userId) return [personAssignee(row.userId, row.user?.name, row.user?.accountType)];
       if (row.agentPageId) return [{ type: 'agent', id: row.agentPageId, name: row.agentPage?.title ?? '' }];
       return [];
     });
   }
   return [
-    ...(item.assigneeId ? [{ type: 'user' as const, id: item.assigneeId, name: item.assignee?.name ?? '' }] : []),
+    ...(item.assigneeId ? [personAssignee(item.assigneeId, item.assignee?.name, item.assignee?.accountType)] : []),
     ...(item.assigneeAgentId
       ? [{ type: 'agent' as const, id: item.assigneeAgentId, name: item.assigneeAgent?.title ?? '' }]
       : []),
