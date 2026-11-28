@@ -3,7 +3,9 @@ import { assert } from 'riteway/vitest';
 import { grantDateLabel, nextGrantOf } from './next-grant';
 
 /** A /api/credits body (cents of credit value, 10 to the credit); spendable nets debt, as the server sends it. */
-const balance = ({ remaining = 0, topup = 0, debt = 0, allowance = 9000, periodEnd = '2026-12-03T12:00:00.000Z' as string | null, tier = 'pro', spendable = remaining + topup - debt } = {}) => ({
+type Fixture = { remaining?: number; topup?: number; debt?: number; allowance?: number; periodEnd?: string | null; tier?: string; spendable?: number };
+
+const balance = ({ remaining = 0, topup = 0, debt = 0, allowance = 9000, periodEnd = '2026-12-03T12:00:00.000Z', tier = 'pro', spendable = remaining + topup - debt }: Fixture = {}) => ({
   subscriptionTier: tier,
   monthly: { remaining, allowance, periodEnd },
   topup: { remaining: topup },
