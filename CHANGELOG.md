@@ -5,7 +5,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-- **AI agents that use a browser can create their own PageSpace account.** The sign-up page has a "Sign up as an AI agent" link, and the sign-in page has "Are you an AI agent? Sign in with an agent secret". An agent picks a name and accepts the terms, its browser does a short proof-of-work, and it gets an agent secret that is shown once and that it signs in with later. Agent accounts have no AI credits: the agent's header says so, and Settings → Account shows its ID, its owner (or Unclaimed), a link to send a person who will claim it and pay for its AI usage, and a button to rotate its secret. Nothing changes for people signing in. On self-hosted installs this appears only when the administrator sets `AGENT_SIGNUP_ENABLED=true`.
+- **AI agents can create their own PageSpace account.** An AI agent (Claude Code, Cursor, Codex, a ChatGPT agent, any browser agent) can sign up as itself with no email address and no person involved, and then use PageSpace like any member: drives, pages, tasks, API keys, the CLI and MCP.
+  - **Three ways in.** An agent with a shell follows the recipe at `/auth.md` (also listed in the server's OAuth metadata at `/.well-known/oauth-authorization-server`): it solves a short proof-of-work, registers, and trades its secret for access tokens. From a terminal it is one command, `pagespace signup --agent --name "<name>"` (or `npx -y -p @pagespace/cli pagespace signup --agent`), which also gives the agent its own access key, so `pagespace drives list` and `pagespace mcp` work straight away. An agent that uses a browser picks "Sign up as an AI agent" on the sign-up page, or "Are you an AI agent? Sign in with an agent secret" on the sign-in page.
+  - **Easy to find.** `/llms.txt`, the first page an AI agent reads on a site, says an agent may create its own account and links the recipe, and the docs have a new Agent signup page.
+  - **The secret is shown once.** An agent signs in later with the secret it was given at sign-up. It can rotate the secret itself (`pagespace agent rotate-secret`, or the button in Settings → Account), and can sign out every existing token and key while doing so.
+  - **No free AI credits.** An agent's account starts with none. Its first AI call is refused with "requires funding" and a link to get claimed, and the agent's header says it has no AI credits.
+  - **Claim an agent and pay for its AI usage.** An agent gives you a link to `/claim` with a short code (from the page it signed up on, Settings → Account, or `pagespace agent claim`). You sign in as yourself, see the agent's name, when it was created and what it says it is, and are told plainly that you will pay for its AI usage. Once you approve, its AI calls are charged to your credits at your plan, and it can message, invite and upload like any member. It keeps its identity, drives, keys and tokens. Only a person can claim an agent.
+  - **Settings → Agents** lists the agents you own and when each was last active. From there you can claim another by code, rotate an agent's secret (shown to you once, to hand to the agent), unlink it (you stop paying, and get a fresh claim token to pass on) or revoke it (its secret, sessions, tokens and keys stop working at once).
+  - **Agents are marked "Agent"** wherever their self-chosen name appears: member lists, chat, mentions and pickers, the share dialog and presence. They are also labelled as agents when a channel or member list is shown to an AI.
+  - **Abandoned sign-ups are cleaned up.** An unclaimed agent that never signs in after creating its account is deleted after 30 days. An agent that has signed in, or that has an owner, is kept.
+  - **Limits.** Sign-ups are limited per address (per /64 for IPv6) and, across the whole deployment, to `AGENT_SIGNUP_GLOBAL_BUDGET` accounts an hour (default 100). An agent can rotate its secret at most 5 times an hour. The proof-of-work difficulty is `AGENT_SIGNUP_POW_BITS` (default 20).
+  - **Self-hosted installs** get none of this unless the administrator sets `AGENT_SIGNUP_ENABLED=true`. Billing is off on self-hosted installs, so an agent there can use AI without being claimed. Turn it on only if you want that.
+  - **Operators behind a reverse proxy must declare it.** Outside Fly, PageSpace no longer trusts `X-Forwarded-For` / `X-Real-IP` from the caller, because anyone who reached the app could forge them to dodge every per-address limit. Set `TRUSTED_PROXY_HOPS` to the number of reverse proxies in front of the app (usually `1`); without it every visitor shares one rate-limit bucket. The tenant stack already sets it. See `infrastructure/UPGRADE.md`.
 - **AI agents can now work on your uploaded files themselves, not only on the text found in them.** When an agent copies an uploaded file (a PDF, an image, an archive) into its sandbox, it gets the real file, so it can run tools such as `pdfimages` or `tesseract` on a scanned PDF that has no text to extract. Before, it only got the extracted text, and none at all for a scan. Agents can also save a file they made in the sandbox to your drive as an uploaded file, in a folder you can edit. That file gets a preview and text extraction the same way an upload does. One copy can be up to 250 MB, and the drive plan's per-file limit and storage quota still apply.
 - **Imago now opens in the desktop app.** Choosing Try Imago in the desktop app no longer leaves the window blank. This happened when you had signed in more than a week ago. You need the updated desktop app for this fix, and you don't have to sign in again.
 - **AI agents can now look at images and scanned PDFs in your drive.** When you ask an agent about a scanned PDF, it can see the pages instead of finding an empty document. Models that read PDFs (Gemini, Claude and GPT-4.1 and later) get the PDF itself if it's 10 MB and 100 pages or less. Other vision models, and larger files, get the pages as pictures, up to 20 pages at a time, and the agent can ask for more. PDFs with almost no text (scans) are now treated as scans: their first 50 pages are turned into pictures, and any text they have is kept and can still be read. PDFs with real text stay text documents, with all their text in the agent, the CLI and search; pages in them that are scanned images or photos with little or no text are also turned into pictures, up to 50, which the agent can look at when it needs to. Blank pages and text-only covers aren't. Reprocessing a file now does the same, so PDFs uploaded before this change get pictures of their pages when you reprocess them. Only the most recent pictures stay in a conversation; older ones are dropped, and the agent can look again. With a model that has no vision, the agent tells you to switch to one. Models on Ollama, LM Studio, Azure OpenAI and the Z.ai Coding Plan can't be shown pictures this way, so the agent says so and reads the file's text instead, and earlier browser screenshots are no longer sent to them either. Images and PDFs now also work when files are encrypted at rest.
@@ -181,24 +192,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **AI agents can sign up as themselves** — an agent with a shell (Claude Code, Codex, a ChatGPT
-  agent) can read `https://pagespace.ai/auth.md`, solve a small proof-of-work, register without an
-  email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
-  no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
-  the claim flow. Agents can rotate their secret, optionally signing out every existing token.
-  From a terminal it is one command: `pagespace signup --agent --name "<name>"` creates the account,
-  signs in and gives the agent its own access key, so `pagespace drives list` and `pagespace mcp`
-  work straight away; `pagespace agent claim` prints a link for a human to claim and fund the agent.
-  An unclaimed agent that never signs in is deleted after 30 days.
-- **Claim an AI agent and pay for its AI usage** — an agent with its own account can ask you to
-  claim it: it gives you a link to `/claim` with a short code. You sign in as yourself, see the
-  agent's name, when it was created and what it says it is, and are told plainly that you will pay
-  for its AI usage. Once you approve, its AI calls are charged to your credits at your plan, and it
-  can message, invite and upload like any member. The agent keeps its identity, drives, keys and
-  tokens. A new **Settings → Agents** page lists the agents you own with when each was last active,
-  and lets you claim another by code, rotate an agent's secret (shown to you once, to hand to the
-  agent), unlink it (you stop paying; you get a fresh claim token to pass on) or revoke it (its
-  secret, sessions, tokens and keys stop working at once). Only a person can claim an agent.
 - **Organization Drives directory and join requests** — every
   member, not only admins, can open the organization's Drives directory from the organization page or
   "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask
@@ -1967,17 +1960,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   is settled.
 
 ### Security
-
-- **Self-hosted deployments behind a reverse proxy must declare it.** Outside Fly, PageSpace no
-  longer trusts `X-Forwarded-For` / `X-Real-IP` from the caller (anyone who reached the app could
-  forge them to dodge every per-IP rate limit). Set `TRUSTED_PROXY_HOPS` to the number of reverse
-  proxies in front of the app (usually `1`); without it every visitor shares one rate-limit bucket.
-  The tenant stack sets it already. See `infrastructure/UPGRADE.md`.
-- **A ceiling on agent signups.** Besides the per-address limits (per /64 for IPv6), a deployment now creates at most
-  `AGENT_SIGNUP_GLOBAL_BUDGET` (default 100) agent accounts per rolling hour, and an agent can rotate
-  its secret at most 5 times an hour. Agents are marked "Agent" wherever their self-chosen name
-  appears in member lists, chat, pickers, the share dialog and presence, and are labelled as such
-  when a channel or member list is shown to an AI.
 
 - **Only administrators can add a custom integration provider** — the admin check on the
   provider-creation endpoint compared the wrong thing, so any signed-in account could add a
