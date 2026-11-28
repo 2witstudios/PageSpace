@@ -38,7 +38,12 @@ const REFUSAL_COPY: Readonly<Record<string, string>> = {
 };
 const refusalCopy = (error: unknown, fallback: string) => REFUSAL_COPY[refusalOf(error)] ?? fallback;
 
-const dateInputOf = (until: number | null) => (until === null ? '' : new Date(until).toISOString().slice(0, 10));
+/** The LOCAL calendar date of a deadline (toISOString would shift it a day for anyone west of UTC). */
+const dateInputOf = (until: number | null) => {
+  if (until === null) return '';
+  const date = new Date(until);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
 /** End of the chosen day, local time. */
 const untilOf = (value: string): number | null => (value === '' ? null : new Date(`${value}T23:59:59`).getTime());
 
@@ -92,13 +97,14 @@ export function AgentAccountPermissionsDialog({
     onOpenChange(next);
   };
 
-  const applied = async (result: { settings: AgentAccountSettings } | 'awaiting_email', success: string) => {
+  /** `savedForm`: this change WAS the permission form; anything else (attach, unattended use) leaves unsaved edits alone. */
+  const applied = async (result: { settings: AgentAccountSettings } | 'awaiting_email', success: string, savedForm = false) => {
     if (result === 'awaiting_email') {
       toast.message('Check your email', { description: 'Open the link we sent you to confirm it is you; the change is applied when you come back.' });
       return;
     }
     await mutate(result.settings, { revalidate: false });
-    setDirty(false);
+    if (savedForm) setDirty(false);
     onChanged();
     toast.success(success);
   };
@@ -114,16 +120,17 @@ export function AgentAccountPermissionsDialog({
     }
   };
 
+  const storedUntil = settings?.autoApprove?.until ?? null;
   const savePermissions = () =>
     run(async () => {
       if (accountId === null) return;
       const body = {
         allowedOrigins: origins.map((origin) => origin.trim()).filter((origin) => origin !== ''),
-        autoApprove: autoApprove ? { enabled: true, maxUsesPerHour: Number(maxUsesPerHour), until: untilOf(untilDate) } : { enabled: false },
+        autoApprove: autoApprove ? { enabled: true, maxUsesPerHour: Number(maxUsesPerHour), until: untilDate === dateInputOf(storedUntil) ? storedUntil : untilOf(untilDate) } : { enabled: false },
       };
       const url = agentAccountSettingsUrl(accountId);
       const result = await sendAccountChange({ accountId, method: 'PATCH', url, body }, (payload) => patch<{ settings: AgentAccountSettings }>(url, payload));
-      await applied(result, 'Permissions saved.');
+      await applied(result, 'Permissions saved.', true);
     }, 'The permissions could not be saved.');
 
   const isAgentAccount = settings?.account.ownerKind === 'agent_page';
@@ -156,7 +163,8 @@ export function AgentAccountPermissionsDialog({
     : (settings?.bindings ?? []).map((binding) => ({ id: binding.agentPageId, title: binding.title ?? 'An agent' }));
   const [delegateTo, setDelegateTo] = useState('');
   const [delegateDays, setDelegateDays] = useState('30');
-  const delegateTarget = delegateTo !== '' ? delegateTo : (delegationTargets[0]?.id ?? '');
+  // A choice made for another account (or a target since detached) never carries over.
+  const delegateTarget = delegationTargets.some((target) => target.id === delegateTo) ? delegateTo : (delegationTargets[0]?.id ?? '');
 
   const delegate = () =>
     run(async () => {

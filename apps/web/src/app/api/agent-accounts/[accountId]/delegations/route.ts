@@ -30,7 +30,8 @@ export async function POST(request: Request, context: RouteContext) {
     const actor = actorFromAuth(auth);
     const expiresAt = Date.now() + parsed.data.days * 86_400_000;
     const result = await authority.createDelegation({ actor, accountId, agentPageId: parsed.data.agentPageId, expiresAt, stepUp: stepUp.proof });
-    if (result.ok) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'delegate', agentPageId: parsed.data.agentPageId, expiresAt } });
+    // Every step-up widening is audited, applied or not: the plane may hold it even when the row write failed.
+    if (result.ok || stepUp.proof !== null) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'delegate', agentPageId: parsed.data.agentPageId, expiresAt, steppedUp: stepUp.proof !== null, outcome: result.ok ? 'applied' : result.reason } });
     return await changeResponse(actor, result);
   } catch (error) {
     loggers.api.error('Error delegating agent account', error as Error);

@@ -11,13 +11,13 @@ const mockAttemptStepUp = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/step-up-ceremony', () => ({ attemptStepUp: mockAttemptStepUp }));
 
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
-import { PENDING_ACCOUNT_CHANGE_KEY, sendAccountChange } from '../useAgentAccountSettings';
+import { PENDING_ACCOUNT_CHANGE_KEY, sendAccountChange, takePendingAccountChange } from '../useAgentAccountSettings';
 
 const change = { accountId: 'acct_1', method: 'PATCH' as const, url: '/api/agent-accounts/acct_1', body: { allowedOrigins: ['https://a.example.com'] } };
 
 beforeEach(() => {
   vi.clearAllMocks();
-  sessionStorage.clear();
+  localStorage.clear();
 });
 
 describe('sendAccountChange', () => {
@@ -38,8 +38,16 @@ describe('sendAccountChange', () => {
   it('given no passkey, should park the change for the email link and report awaiting_email', async () => {
     const send = vi.fn().mockRejectedValueOnce(new ApiRequestError('step_up_required', 401));
     mockAttemptStepUp.mockResolvedValue({ status: 'awaiting_email' });
-    const actual = { result: await sendAccountChange(change, send), parked: JSON.parse(sessionStorage.getItem(PENDING_ACCOUNT_CHANGE_KEY) ?? 'null') };
-    expect(actual).toEqual({ result: 'awaiting_email', parked: change });
+    const result = await sendAccountChange(change, send);
+    const stored = localStorage.getItem(PENDING_ACCOUNT_CHANGE_KEY) !== null;
+    // localStorage, so the emailed link opening in a NEW tab still finds it; taken once, and never after it expires.
+    const actual = { result, stored, taken: takePendingAccountChange(Date.now()), again: takePendingAccountChange(Date.now()) };
+    expect(actual).toEqual({ result: 'awaiting_email', stored: true, taken: change, again: null });
+  });
+
+  it('given a parked change past its lifetime, should not hand it back', () => {
+    localStorage.setItem(PENDING_ACCOUNT_CHANGE_KEY, JSON.stringify({ change, expiresAt: Date.now() - 1 }));
+    expect(takePendingAccountChange(Date.now())).toBeNull();
   });
 
   it('given any other refusal, should rethrow it without asking for step-up', async () => {

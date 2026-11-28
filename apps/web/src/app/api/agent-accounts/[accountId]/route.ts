@@ -52,7 +52,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (!stepUp.ok) return stepUp.response;
     const actor = actorFromAuth(auth);
     const result = await authority.updateAccount({ actor, accountId, edit: { allowedOrigins: parsed.data.allowedOrigins, autoApprove: parsed.data.autoApprove }, stepUp: stepUp.proof });
-    if (result.ok) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'permissions', steppedUp: stepUp.proof !== null } });
+    // Every step-up widening is audited, applied or not: the plane may hold it even when the row write failed.
+    if (result.ok || stepUp.proof !== null) auditRequest(request, { eventType: 'authz.permission.granted', userId: auth.userId, resourceType: 'agent_account', resourceId: accountId, details: { change: 'permissions', steppedUp: stepUp.proof !== null, outcome: result.ok ? 'applied' : result.reason } });
     return await changeResponse(actor, result);
   } catch (error) {
     loggers.api.error('Error updating agent account', error as Error);

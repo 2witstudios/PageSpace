@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { patch, post } from '@/lib/auth/auth-fetch';
 import { readStepUpTokenFromHash, stripStepUpTokenFromHash } from '@/lib/auth/step-up-ceremony';
 import { useAgentAccounts, type AgentAccountScope } from '@/hooks/useAgentAccounts';
-import { PENDING_ACCOUNT_CHANGE_KEY, refusalOf, type PendingAccountChange } from '@/hooks/useAgentAccountSettings';
+import { refusalOf, takePendingAccountChange } from '@/hooks/useAgentAccountSettings';
 import { AddAgentAccountDialog } from './AddAgentAccountDialog';
 import { AgentAccountPermissionsDialog } from './AgentAccountPermissionsDialog';
 
@@ -18,16 +18,14 @@ import { AgentAccountPermissionsDialog } from './AgentAccountPermissionsDialog';
 function useResumePendingAccountChange(onApplied: () => void) {
   useEffect(() => {
     const token = readStepUpTokenFromHash(window.location.hash);
-    const raw = sessionStorage.getItem(PENDING_ACCOUNT_CHANGE_KEY);
-    if (token === null || raw === null) return;
-    sessionStorage.removeItem(PENDING_ACCOUNT_CHANGE_KEY);
-    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${stripStepUpTokenFromHash(window.location.hash)}`);
-    let change: PendingAccountChange;
-    try {
-      change = JSON.parse(raw) as PendingAccountChange;
-    } catch {
+    if (token === null) return;
+    const change = takePendingAccountChange(Date.now());
+    if (change === null) {
+      // The token is left in place: it may belong to another flow on this page.
+      toast.error('That confirmation link has no account change waiting (it may have expired). Make the change again.');
       return;
     }
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}${stripStepUpTokenFromHash(window.location.hash)}`);
     const send = change.method === 'PATCH' ? patch : post;
     send(change.url, { ...change.body, stepUpToken: token })
       .then(() => {
