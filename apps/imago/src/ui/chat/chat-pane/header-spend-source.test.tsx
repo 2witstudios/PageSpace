@@ -40,3 +40,11 @@ it('flags a refused source when there is another to choose', () => {
   render(<HeaderSpendSource agentId="agent-route" conversationId="c-route" />);
   expect(screen.getByTestId('spend-source-chip').getAttribute('aria-label')).toMatch(/^Spending from Product wallet: /);
 });
+
+it('leaves a single-source refusal to the composer strip', () => {
+  api.single = true;
+  api.refused = true;
+  useSpendContextStore.getState().register('focused', { conversationId: 'c-other', driveId: 'd-other', isGlobal: false });
+  render(<HeaderSpendSource agentId="agent-route" conversationId="c-route" />);
+  expect(screen.queryByTestId('spend-source-chip')).toBeNull();
+});
