@@ -18,7 +18,8 @@ const startBody = z
     ownership: z.enum(['dedicated', 'personal']),
     acknowledged: z.boolean(),
     autoApproveReads: z.boolean(),
-    returnTo: z.string().min(1).max(512).regex(/^\/(?!\/)/),
+    // A same-site path: no scheme, no `//` or `\` (both read as a host by browsers), no control characters.
+    returnTo: z.string().min(1).max(512).regex(/^\/(?![\/\\])[^\\\x00-\x1F\x7F]*$/),
   })
   .strict();
 

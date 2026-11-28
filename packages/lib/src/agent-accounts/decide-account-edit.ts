@@ -49,7 +49,7 @@ export type AccountEdit = {
 };
 
 export type AccountEditRefusal =
-  | { readonly ok: false; readonly reason: 'origins_empty' | 'origins_too_many' | 'limit_invalid' | 'until_invalid' | 'classes_invalid' }
+  | { readonly ok: false; readonly reason: 'origins_empty' | 'origins_too_many' | 'limit_invalid' | 'until_invalid' | 'classes_invalid' | 'origin_not_provider' }
   | { readonly ok: false; readonly reason: 'origin_invalid'; readonly index: number; readonly rule: Extract<NormalizeOriginVerdict, { readonly ok: false }>['reason'] };
 
 export type AccountEditVerdict =
@@ -74,8 +74,11 @@ export function decideAccountEdit({
   storedApprover,
   keepApprover,
   providerSlug,
+  providerOrigins = null,
   now,
 }: {
+  /** A provider account's possible origins (Google's APIs): its sites can only be narrowed within them. */
+  readonly providerOrigins?: readonly string[] | null;
   readonly edit: AccountEdit;
   /** The account's provider (`google`), or null for a generic account. */
   readonly providerSlug: string | null;
@@ -95,6 +98,7 @@ export function decideAccountEdit({
     origins.add(verdict.origin);
   }
   const allowedOrigins = [...origins].sort();
+  if (providerOrigins !== null && !allowedOrigins.every((origin) => providerOrigins.includes(origin))) return { ok: false, reason: 'origin_not_provider' };
 
   const { autoApprove } = edit;
   if (autoApprove.enabled !== true) return { ok: true, allowedOrigins, approvalPolicy: null };

@@ -5,10 +5,13 @@
  *
  * - `read`: lists and gets — mail, threads, labels, attachments, calendars,
  *   events, files, file contents, sharing settings.
- * - `write`: changes the person can undo — drafts, labels, trash/untrash,
- *   creating or editing events and files.
- * - `irreversible`: sending email (a sent message cannot be recalled),
- *   permanently deleting mail, events or files.
+ * - `write`: changes the person can undo and that reach no one else — drafts,
+ *   labels, trash/untrash.
+ * - `irreversible`: anything that can reach another person or cannot be taken
+ *   back — sending email; creating or editing calendar events (Google can
+ *   email the attendees); creating, copying, editing or uploading Drive files
+ *   (a file placed in a folder someone else shared inherits that folder's
+ *   sharing); permanently deleting drafts, mail, events or files.
  * - `privilege`: sharing a Drive file with someone (`permissions` create) — it
  *   grants another person access, so it always asks, with step-up.
  *
@@ -62,7 +65,7 @@ export const GOOGLE_OPERATIONS: OperationRegistry = [
   gmail('GET', '/drafts/{draftId}', 'read', 'drafts.get'),
   gmail('POST', '/drafts', 'write', 'drafts.create'),
   gmail('PUT', '/drafts/{draftId}', 'write', 'drafts.update'),
-  gmail('DELETE', '/drafts/{draftId}', 'write', 'drafts.delete'),
+  gmail('DELETE', '/drafts/{draftId}', 'irreversible', 'drafts.delete'),
   gmail('POST', '/messages/{messageId}/modify', 'write', 'messages.modify'),
   gmail('POST', '/threads/{threadId}/modify', 'write', 'threads.modify'),
   gmail('POST', '/messages/{messageId}/trash', 'write', 'messages.trash'),
@@ -77,9 +80,9 @@ export const GOOGLE_OPERATIONS: OperationRegistry = [
   calendar('GET', '/calendars/{calendarId}', 'read', 'calendars.get'),
   calendar('GET', '/calendars/{calendarId}/events', 'read', 'events.list'),
   calendar('GET', '/calendars/{calendarId}/events/{eventId}', 'read', 'events.get'),
-  calendar('POST', '/calendars/{calendarId}/events', 'write', 'events.insert'),
-  calendar('PATCH', '/calendars/{calendarId}/events/{eventId}', 'write', 'events.patch'),
-  calendar('PUT', '/calendars/{calendarId}/events/{eventId}', 'write', 'events.update'),
+  calendar('POST', '/calendars/{calendarId}/events', 'irreversible', 'events.insert'),
+  calendar('PATCH', '/calendars/{calendarId}/events/{eventId}', 'irreversible', 'events.patch'),
+  calendar('PUT', '/calendars/{calendarId}/events/{eventId}', 'irreversible', 'events.update'),
   calendar('DELETE', '/calendars/{calendarId}/events/{eventId}', 'irreversible', 'events.delete'),
   calendar('POST', '/freeBusy', 'read', 'freebusy.query'),
   // Drive
@@ -88,15 +91,18 @@ export const GOOGLE_OPERATIONS: OperationRegistry = [
   drive('GET', '/drive/v3/files/{fileId}', 'read', 'files.get'),
   drive('GET', '/drive/v3/files/{fileId}/export', 'read', 'files.export'),
   drive('GET', '/drive/v3/files/{fileId}/permissions', 'read', 'permissions.list'),
-  drive('POST', '/drive/v3/files', 'write', 'files.create'),
-  drive('POST', '/drive/v3/files/{fileId}/copy', 'write', 'files.copy'),
-  drive('PATCH', '/drive/v3/files/{fileId}', 'write', 'files.update'),
-  drive('POST', '/upload/drive/v3/files', 'write', 'files.upload'),
-  drive('PATCH', '/upload/drive/v3/files/{fileId}', 'write', 'files.uploadUpdate'),
+  drive('POST', '/drive/v3/files', 'irreversible', 'files.create'),
+  drive('POST', '/drive/v3/files/{fileId}/copy', 'irreversible', 'files.copy'),
+  drive('PATCH', '/drive/v3/files/{fileId}', 'irreversible', 'files.update'),
+  drive('POST', '/upload/drive/v3/files', 'irreversible', 'files.upload'),
+  drive('PATCH', '/upload/drive/v3/files/{fileId}', 'irreversible', 'files.uploadUpdate'),
   drive('DELETE', '/drive/v3/files/{fileId}', 'irreversible', 'files.delete'),
   drive('POST', '/drive/v3/files/{fileId}/permissions', 'privilege', 'permissions.create'),
   drive('DELETE', '/drive/v3/files/{fileId}/permissions/{permissionId}', 'privilege', 'permissions.delete'),
 ];
+
+/** The API origins a Google account can ever be pinned to: an edit can narrow them, never add another site. */
+export const GOOGLE_ORIGINS: readonly CanonicalOrigin[] = [GMAIL_ORIGIN, GOOGLE_APIS_ORIGIN];
 
 /** Every registry the authority and the plane load. One constant, both sides, or every digest differs. */
 export const AGENT_ACCOUNT_OPERATIONS: OperationRegistry = [...GOOGLE_OPERATIONS];

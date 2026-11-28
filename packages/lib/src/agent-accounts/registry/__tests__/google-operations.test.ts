@@ -38,7 +38,7 @@ describe('the Google operation registry', () => {
     ]);
   });
 
-  it('given calendar and drive requests, should class deleting as irreversible and sharing a file as privilege', () => {
+  it('given calendar and drive requests, should class anything that can reach another person (invites, files in shared folders) or not be undone as irreversible, and sharing as privilege', () => {
     const actual = [
       operationOf('GET', 'https://www.googleapis.com/calendar/v3/calendars/primary/events'),
       operationOf('POST', 'https://www.googleapis.com/calendar/v3/calendars/primary/events'),
@@ -50,10 +50,10 @@ describe('the Google operation registry', () => {
     ];
     expect(actual).toEqual([
       'read/calendar.events.list',
-      'write/calendar.events.insert',
+      'irreversible/calendar.events.insert',
       'irreversible/calendar.events.delete',
       'read/drive.files.list',
-      'write/drive.files.update',
+      'irreversible/drive.files.update',
       'irreversible/drive.files.delete',
       'privilege/drive.permissions.create',
     ]);

@@ -47,6 +47,7 @@ import { decideAccountEdit, autoApproveOf, type AccountEdit, type AccountEditRef
 import { isScopeNarrowing } from './store/is-scope-narrowing';
 import { mintOwnerConsent } from './mint-owner-consent';
 import { GENERIC_REQUEST_OPERATION, type CreatableAccountKind } from './decide-account-creation';
+import { GOOGLE_ORIGINS } from './registry/google-operations';
 import { decideGoogleEnrollment, type GoogleEnrollmentInput, type GoogleEnrollmentVerdict } from './oauth/google-enrollment';
 import type { PlaneOAuthExchangeResult } from './executor/plane-wire';
 import type { ReleasedResponse } from './filter-response';
@@ -204,6 +205,8 @@ export type AccountAuthorityDeps = {
    * rebind → record must not interleave, or the plane and the row end at different versions and every
    * grant fails. `busy` when another change holds it.
    */
+  /** The origins each provider's accounts may be pinned to (default: Google's APIs); an edit never adds another. */
+  readonly providerOrigins?: Readonly<Record<string, readonly string[]>>;
   readonly lockAccount: <T>(accountId: string, fn: () => Promise<T>) => Promise<{ readonly acquired: true; readonly result: T } | { readonly acquired: false }>;
   /** SHA3-256. */
   readonly hash: HashBytes;
@@ -361,6 +364,9 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
   async function recordScope(row: AgentAccountRecord, next: { readonly allowedOrigins: readonly string[]; readonly approvalPolicy: AccountApprovalPolicy | null }, policyVersion: number): Promise<AgentAccountRecord | null> {
     return deps.accounts.updateScope({ id: row.id, expectedPolicyVersion: row.policyVersion, nextPolicyVersion: policyVersion, allowedOrigins: next.allowedOrigins, approvalPolicy: next.approvalPolicy, at: deps.now() });
   }
+
+  const providerOriginsMap: Readonly<Record<string, readonly string[]>> = deps.providerOrigins ?? { google: GOOGLE_ORIGINS };
+  const providerOriginsOf = (row: AgentAccountRecord) => (row.providerSlug === null ? null : (providerOriginsMap[row.providerSlug] ?? []));
 
   /** Run one account change under the account's lock, re-reading the row inside it. */
   async function serialized(accountId: string, actor: AccessActor, change: (row: AgentAccountRecord) => Promise<AccountChangeResult>): Promise<AccountChangeResult> {
@@ -569,11 +575,11 @@ export function createAccountAuthority(deps: AccountAuthorityDeps): AccountAutho
       const stored = (row.approvalPolicy ?? null) as AccountApprovalPolicy | null;
       const bound = await deps.accounts.boundAgentPageIds(row.id);
       // First as the stored approver: if that cannot widen the policy, the approver stays (no consent needed).
-      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, providerSlug: row.providerSlug, now: deps.now() });
+      const asStored = decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: stored?.approver ?? null, keepApprover: true, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!asStored.ok) return asStored;
       const current = planeBindingsFor({ row, boundAgentPageIds: bound, hash: deps.hash }).scope;
       const narrowsAsStored = isScopeNarrowing({ stored: current, next: { ...current, allowedOrigins: [...asStored.allowedOrigins].sort(), approvalPolicy: asStored.approvalPolicy } as PlaneScope });
-      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, providerSlug: row.providerSlug, now: deps.now() });
+      const verdict = narrowsAsStored ? asStored : decideAccountEdit({ edit, editor: actor.userId as UserId, storedApprover: null, keepApprover: false, providerSlug: row.providerSlug, providerOrigins: providerOriginsOf(row), now: deps.now() });
       if (!verdict.ok) return verdict;
       const next = { allowedOrigins: verdict.allowedOrigins, approvalPolicy: verdict.approvalPolicy };
       const rebound = await rebindTo({ row, next, boundAgentPageIds: bound, actor, stepUp });

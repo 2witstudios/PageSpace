@@ -249,7 +249,7 @@ export function AgentAccountPermissionsDialog({
                     <div className="col-span-2 flex items-start gap-2">
                       <Checkbox id={`${mountId}-writes`} checked={allowWrites} onCheckedChange={(value) => edit(setAllowWrites)(value === true)} className="mt-0.5" />
                       <Label htmlFor={`${mountId}-writes`} className="font-normal leading-snug text-sm">
-                        Also allow changes you can undo without asking (drafts, labels, trash, calendar events, editing files). Sending email, deleting for good and sharing always ask.
+                        Also allow tidying without asking: drafts, labels and trash. Sending email, calendar invites and edits, Drive file changes, deleting for good and sharing always ask.
                       </Label>
                     </div>
                   )}

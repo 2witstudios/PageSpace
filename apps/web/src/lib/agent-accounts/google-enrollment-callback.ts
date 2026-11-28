@@ -18,9 +18,18 @@ import { getAccountAuthority } from './account-authority-client';
 import { codeVerifierFor, ENROLLMENT_COOKIE, googleRedirectUri, readEnrollmentState } from './google-enrollment-flow';
 
 const baseUrl = () => process.env.WEB_APP_URL || process.env.NEXTAUTH_URL || 'http://localhost:3000';
+const FALLBACK_RETURN = '/settings/agent-accounts';
 
+/** A redirect to the person's own path on THIS site; anything that resolves elsewhere goes to the fallback. */
 function back(returnTo: string, outcome: string): NextResponse {
-  const url = new URL(returnTo, baseUrl());
+  const base = new URL(baseUrl());
+  let url = new URL(FALLBACK_RETURN, base);
+  try {
+    const candidate = new URL(returnTo, base);
+    if (candidate.origin === base.origin && !/[\\\x00-\x1F\x7F]/.test(returnTo)) url = candidate;
+  } catch {
+    // keep the fallback
+  }
   url.searchParams.set('agentAccount', outcome);
   const response = NextResponse.redirect(url);
   // The binding cookie is single-use: cleared whatever the outcome.
@@ -40,15 +49,16 @@ function cookieOf(request: Request, name: string): string | null {
 export async function handleAgentAccountGoogleCallback(request: Request): Promise<Response> {
   if (isOnPrem()) return Response.json({ error: 'Not available' }, { status: 404 });
   const secret = process.env.OAUTH_STATE_SECRET;
-  const fallback = '/settings/agent-accounts';
+  const fallback = FALLBACK_RETURN;
   const params = new URL(request.url).searchParams;
   const state = secret ? readEnrollmentState({ secret, state: params.get('state') ?? '', now: Date.now() }) : null;
   if (secret === undefined || state === null) return back(fallback, 'expired');
   const returnTo = state.returnTo.startsWith('/') && !state.returnTo.startsWith('//') ? state.returnTo : fallback;
 
-  // This browser started this flow: its binding cookie carries the state's nonce.
+  // This browser started this flow: its binding cookie carries the state's nonce. A browser that did not is
+  // sent to the fixed page, never to the state's path (a link someone else minted).
   const nonce = cookieOf(request, ENROLLMENT_COOKIE);
-  if (nonce === null || !secureCompare(nonce, state.nonce)) return back(returnTo, 'expired');
+  if (nonce === null || !secureCompare(nonce, state.nonce)) return back(fallback, 'expired');
   const error = params.get('error');
   if (error !== null) return back(returnTo, error === 'access_denied' ? 'cancelled' : 'refused');
   const code = params.get('code');

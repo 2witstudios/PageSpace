@@ -70,6 +70,14 @@ describe('decideAccountEdit — provider accounts', () => {
   });
 });
 
+describe('decideAccountEdit — a provider account\'s sites', () => {
+  it('given a Google account, should allow narrowing to its Google API origins and refuse any other site', () => {
+    const google = ['https://gmail.googleapis.com:443', 'https://www.googleapis.com:443'];
+    const of = (allowedOrigins: string[]) => decide({ providerSlug: 'google', providerOrigins: google, edit: edit({ allowedOrigins }) });
+    expect([of(['https://gmail.googleapis.com']).ok, of(['https://gmail.googleapis.com', 'https://evil.example'])]).toEqual([true, { ok: false, reason: 'origin_not_provider' }]);
+  });
+});
+
 describe('autoApproveOf', () => {
   it('given a stored policy, should read its cap and end; given none or a malformed one, should report every request asks', () => {
     const actual = [

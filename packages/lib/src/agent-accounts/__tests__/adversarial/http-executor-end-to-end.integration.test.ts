@@ -31,7 +31,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { createAccountChangeLock } from '../../account-change-lock';
 import { createPlaneRefreshWorker } from '../../executor/plane-refresh';
-import { AGENT_ACCOUNT_OPERATIONS } from '../../registry/google-operations';
+import { AGENT_ACCOUNT_OPERATIONS, GOOGLE_ORIGINS } from '../../registry/google-operations';
 import { eq, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives, pages } from '@pagespace/db/schema/core';
@@ -226,7 +226,7 @@ const CONSENT_PAIR = generateKeyPairSync('ed25519');
 const CONSENT_KEY = { sign: (message: Uint8Array) => new Uint8Array(nodeSign(null, message, CONSENT_PAIR.privateKey)) };
 
 const authorityOver = (plane: PlaneClient): AccountAuthority =>
-  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
+  createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: createAccountFactsRepository(), plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, providerOrigins: { google: [...GOOGLE_ORIGINS, new URL(origin).origin + (new URL(origin).port ? '' : ':443')] }, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
 
 const caller = (overrides: Partial<Parameters<AccountAuthority['requestOperation']>[0]['caller']> = {}) => ({
   actorUserId: OWNER,
@@ -749,7 +749,7 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     if (!created.ok) throw new Error(created.reason);
     // An authority that wrongly believes VIEWER is a drive admin signs a real consent for them: the plane, which pinned
     // only the drive's consenters at creation, still refuses it.
-    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
+    const forged = createAccountAuthority({ accounts: createAgentAccountRepository({ db }), facts: { ...createAccountFactsRepository(), driveRole: async () => 'ADMIN' }, plane, authorityKey: keyring.current, presenterKeyId: PRESENTER, registry: AGENT_ACCOUNT_OPERATIONS, providerOrigins: { google: [...GOOGLE_ORIGINS, new URL(origin).origin + (new URL(origin).port ? '' : ':443')] }, consentKey: CONSENT_KEY, lockAccount: createAccountChangeLock(getAdvisoryLockPool()), hash: sha3, now: () => Date.now() });
     const actual = await forged.updateAccount({ actor: credentialActor(VIEWER, null), accountId: created.account.id, edit: { allowedOrigins: [origin], autoApprove: on(10) }, stepUp: STEP_UP });
     expect(actual.ok ? 'widened' : actual.reason).toEqual('not_a_consenter');
   }, 60_000);
@@ -833,7 +833,8 @@ describe.skipIf(!ADMIN_TOKEN)('adversarial: the G2 thin slice end to end (real p
     const connected = await authority.completeOAuthEnrollment({ actor: owner, owner: { kind: 'agent_page', agentPageId: PAGE_A }, input: googleInput, code: GOOD_CODE, codeVerifier: VERIFIER, redirectUri: 'https://pagespace.e2e/callback' });
     if (!connected.ok) throw new Error(connected.reason);
     const id = connected.account.id;
-    // Point the account at this suite's upstream (a consented widening); its requests there are generic, so they ask.
+    // Point the account at this suite's upstream — admitted only because this suite's authority lists it as a
+    // Google origin (production lists Google's APIs alone) — with a consented widening; its requests there are generic, so they ask.
     await authority.updateAccount({ actor: owner, accountId: id, edit: { allowedOrigins: [origin], autoApprove: { enabled: false } }, stepUp: STEP_UP });
     const call = () => authority.requestOperation({ ...asHuman(caller()), accountId: id, request: get(`${origin}/v1/echo`) });
     const before = tokenCalls.length;

@@ -195,12 +195,12 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
                     </Label>
                   </div>
                 ))}
-                <p className="text-xs text-muted-foreground">Google asks only for these. Sending email, deleting for good and sharing files always ask you first.</p>
+                <p className="text-xs text-muted-foreground">Google asks only for these. Sending email, calendar invites and edits, Drive file changes, deleting for good and sharing always ask you first.</p>
               </div>
               <div className="flex items-start gap-2">
                 <Checkbox id={`${mountId}-reads`} checked={autoApproveReads} onCheckedChange={(value) => setAutoApproveReads(value === true)} className="mt-0.5" />
                 <Label htmlFor={`${mountId}-reads`} className="font-normal leading-snug text-sm">
-                  Let the agent read without asking me each time (up to 60 an hour). Changes ask until you allow them in Permissions.
+                  Let the agent read without asking me each time (up to 60 an hour). Changes ask you first.
                 </Label>
               </div>
               <p className="text-xs text-muted-foreground">You&apos;ll sign in to Google next. Choose the agent&apos;s own Google account if it has one. PageSpace stores the sign-in in its credential vault; the agent never sees it.</p>

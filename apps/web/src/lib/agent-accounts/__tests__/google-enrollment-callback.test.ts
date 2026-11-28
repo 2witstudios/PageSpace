@@ -62,4 +62,16 @@ describe('handleAgentAccountGoogleCallback', () => {
     const { state, nonce } = createEnrollmentState({ secret: SECRET, userId: 'user_1', owner: { kind: 'user' }, input, returnTo: '/settings/agent-accounts', now: Date.now() });
     expect(outcomeOf(await callback({ state, code: 'c' }, nonce))).toBe('no_refresh_token');
   });
+
+  it('given a state minted with a path that resolves to another site, or opened in a browser that did not start it, should return to this site only', async () => {
+    mockAuthority.completeOAuthEnrollment.mockResolvedValue({ ok: true, account: { id: 'acct_1' }, email: 'a@example.com' });
+    const location = async (returnTo: string, withCookie: boolean) => {
+      const { state, nonce } = createEnrollmentState({ secret: SECRET, userId: 'user_1', owner: { kind: 'user' }, input, returnTo, now: Date.now() });
+      const response = await callback({ state, code: 'c' }, withCookie ? nonce : undefined);
+      const url = new URL(response.headers.get('location') ?? '');
+      return `${url.origin}${url.pathname}`;
+    };
+    const actual = [await location('/\\evil.com', true), await location('/\t/evil.com', true), await location('/p/page_a', false), await location('/p/page_a', true)];
+    expect(actual).toEqual(['https://pagespace.test/settings/agent-accounts', 'https://pagespace.test/settings/agent-accounts', 'https://pagespace.test/settings/agent-accounts', 'https://pagespace.test/p/page_a']);
+  });
 });
