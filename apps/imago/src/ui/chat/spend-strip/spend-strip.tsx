@@ -41,7 +41,8 @@ export function SpendStrip({ conversationId = null, driveId = null, isGlobal = f
   const refusedChoice = resolved?.kind === 'refuse' ? spend?.options.find(option => option.source === resolved.source) ?? null : null;
   const refusedCopy = resolved?.kind === 'refuse' ? spendRefusalCopy({ reason: resolved.reason, source: refusedChoice, hasOptions: resolved.options.length > 0, now: new Date() }) : null;
   // A fallback is a problem, not a choice: its note ("X cannot cover this") shows even mid-thread.
-  const fallback = resolved?.kind === 'spend' && resolved.fallbackApplied;
+  // The same test composerStripModel uses to write the note: applied, and moved off a named source.
+  const fallback = resolved?.kind === 'spend' && resolved.fallbackApplied && resolved.fallbackFrom !== null;
   const strip = spend
     ? composerStripModel({ ...spend, hasMessages: hasMessages && !fallback }) ?? (refusedCopy ? { label: refusedChoice?.label ?? null, detail: refusedCopy.body, tone: 'refused' as const } : null)
     : null;
