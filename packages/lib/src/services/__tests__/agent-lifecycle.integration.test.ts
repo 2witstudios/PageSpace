@@ -1,0 +1,112 @@
+/**
+ * Agent Signup Phase 5 leaf 3 — the lifecycle store against a REAL Postgres.
+ * The orchestration is unit tested (`agent-lifecycle.test.ts`); what only a
+ * database shows is that the prunes delete exactly the expired rows and the
+ * candidate query returns exactly unclaimed, never-authenticated agents created
+ * at or before the cutoff.
+ *
+ * Excluded from the unit run (vitest.config.ts); CI's lib integration step
+ * picks it up by glob.
+ */
+import { afterAll, describe, expect, it } from 'vitest';
+import { createId } from '@paralleldrive/cuid2';
+import { db } from '@pagespace/db/db';
+import { inArray } from '@pagespace/db/operators';
+import { users } from '@pagespace/db/schema/auth';
+import { agentClaims, agentIdentities, agentSignupChallenges } from '@pagespace/db/schema/agent-identities';
+import { hashToken } from '../../auth/token-utils';
+import { agentSyntheticEmail } from '../../auth/agent/reserved-email';
+import { AGENT_UNAUTHENTICATED_TTL_MS } from '../../auth/agent/lifecycle-decision';
+import { agentLifecycleStore } from '../agent-lifecycle';
+
+const userIds: string[] = [];
+const challengeIds: string[] = [];
+
+afterAll(async () => {
+  if (userIds.length > 0) await db.delete(users).where(inArray(users.id, userIds));
+  if (challengeIds.length > 0) await db.delete(agentSignupChallenges).where(inArray(agentSignupChallenges.id, challengeIds));
+});
+
+const NOW = new Date();
+const CUTOFF = new Date(NOW.getTime() - AGENT_UNAUTHENTICATED_TTL_MS);
+
+async function insertUser(accountType: 'human' | 'agent'): Promise<string> {
+  const id = createId();
+  userIds.push(id);
+  await db.insert(users).values({
+    id,
+    name: 'lifecycle-test',
+    email: accountType === 'agent' ? agentSyntheticEmail(id) : `${id}@example.com`,
+    accountType,
+  });
+  return id;
+}
+
+async function insertAgent(fields: { createdAt: Date; lastAuthAt?: Date | null; ownerUserId?: string | null }): Promise<string> {
+  const userId = await insertUser('agent');
+  await db.insert(agentIdentities).values({
+    userId,
+    secretHash: hashToken(`secret-${userId}`),
+    secretPrefix: 'ps_agent_xx',
+    createdAt: fields.createdAt,
+    lastAuthAt: fields.lastAuthAt ?? null,
+    ownerUserId: fields.ownerUserId ?? null,
+  });
+  return userId;
+}
+
+describe('agentLifecycleStore (real Postgres)', () => {
+  it('prunes only expired signup challenges', async () => {
+    const expiredId = createId();
+    const liveId = createId();
+    challengeIds.push(expiredId, liveId);
+    await db.insert(agentSignupChallenges).values([
+      { id: expiredId, challengeHash: hashToken(`c-${expiredId}`), difficultyBits: 1, expiresAt: new Date(NOW.getTime() - 1000) },
+      { id: liveId, challengeHash: hashToken(`c-${liveId}`), difficultyBits: 1, expiresAt: new Date(NOW.getTime() + 60_000) },
+    ]);
+
+    expect(await agentLifecycleStore.pruneExpiredChallenges(NOW)).toBeGreaterThanOrEqual(1);
+
+    const left = await db.select({ id: agentSignupChallenges.id }).from(agentSignupChallenges).where(inArray(agentSignupChallenges.id, [expiredId, liveId]));
+    expect(left.map((row) => row.id)).toEqual([liveId]);
+  });
+
+  it('prunes only expired claims', async () => {
+    const agentId = await insertAgent({ createdAt: NOW, lastAuthAt: NOW });
+    const expiredId = createId();
+    const liveId = createId();
+    await db.insert(agentClaims).values([
+      { id: expiredId, agentUserId: agentId, userCodeHash: hashToken(`u-${expiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
+      { id: liveId, agentUserId: agentId, userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
+    ]);
+
+    expect(await agentLifecycleStore.pruneExpiredClaims(NOW)).toBeGreaterThanOrEqual(1);
+
+    const left = await db.select({ id: agentClaims.id }).from(agentClaims).where(inArray(agentClaims.id, [expiredId, liveId]));
+    expect(left.map((row) => row.id)).toEqual([liveId]);
+  });
+
+  it('finds unclaimed, never-authenticated agents created at or before the cutoff — and nothing else', async () => {
+    const owner = await insertUser('human');
+    const abandoned = await insertAgent({ createdAt: CUTOFF });
+    const young = await insertAgent({ createdAt: new Date(CUTOFF.getTime() + 60_000) });
+    const signedIn = await insertAgent({ createdAt: CUTOFF, lastAuthAt: NOW });
+    const claimed = await insertAgent({ createdAt: CUTOFF, ownerUserId: owner });
+
+    const candidates = await agentLifecycleStore.findCandidates({ createdAtOrBefore: CUTOFF, limit: 1000 });
+    const ids = candidates.map((row) => row.userId);
+
+    expect(ids).toContain(abandoned);
+    expect(ids).not.toContain(young);
+    expect(ids).not.toContain(signedIn);
+    expect(ids).not.toContain(claimed);
+  });
+
+  it('reads one lifecycle row fresh, and null for someone without an identity', async () => {
+    const agent = await insertAgent({ createdAt: CUTOFF });
+    const human = await insertUser('human');
+
+    expect(await agentLifecycleStore.getLifecycleRow(agent)).toMatchObject({ userId: agent, ownerUserId: null, lastAuthAt: null });
+    expect(await agentLifecycleStore.getLifecycleRow(human)).toBeNull();
+  });
+});

@@ -185,6 +185,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   email address, and exchange its secret for tokens to use PageSpace as its own account. Agents get
   no free AI credits: an AI call from an unclaimed agent answers "requires funding" and points at
   the claim flow. Agents can rotate their secret, optionally signing out every existing token.
+  From a terminal it is one command: `pagespace signup --agent --name "<name>"` creates the account,
+  signs in and gives the agent its own access key, so `pagespace drives list` and `pagespace mcp`
+  work straight away; `pagespace agent claim` prints a link for a human to claim and fund the agent.
+  An unclaimed agent that never signs in is deleted after 30 days.
 - **Organization Drives directory and join requests** — every
   member, not only admins, can open the organization's Drives directory from the organization page or
   "Browse … drives" in the drive picker: the drives they can open, and the Restricted drives they can ask

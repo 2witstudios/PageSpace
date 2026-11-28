@@ -551,6 +551,7 @@
         "src/security/path-validator.ts",
         "src/security/url-validator.ts",
         "src/services/agent-identities.ts",
+        "src/services/agent-lifecycle.ts",
         "src/services/agent-workspaces/agent-workspace-access.ts",
         "src/services/agent-workspaces/agent-workspace-sprite.ts",
         "src/services/agent-workspaces/agent-workspace-tenant.ts",
