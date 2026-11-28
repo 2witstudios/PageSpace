@@ -92,7 +92,7 @@ export async function authedContext(
  * What this does NOT buy: if a version bump changes what the categories MEAN, it flows
  * silently through and the banner stays suppressed. Re-check by hand when the semantics move.
  */
-function consentCookie(url: URL): Parameters<BrowserContext['addCookies']>[0][number] {
+export function consentCookie(url: URL): Parameters<BrowserContext['addCookies']>[0][number] {
   const decided = rejectNonEssential(defaultConsentState(), new Date(0).toISOString());
   return {
     name: CONSENT_COOKIE_NAME,

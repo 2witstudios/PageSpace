@@ -5,7 +5,7 @@
  * actually open on this deployment.
  */
 import { describe, it, expect } from 'vitest';
-import { buildLlmsTxt } from '../llms-txt';
+import { buildLlmsTxt, PUBLIC_DOCS_URL } from '../llms-txt';
 import { buildServerMetadata } from '@pagespace/lib/auth/oauth/metadata';
 
 const issuer = 'https://pagespace.ai';
@@ -39,11 +39,35 @@ describe('buildLlmsTxt', () => {
     expect(doc).not.toContain('/auth/agent');
   });
 
-  it('should build every URL from the issuer, tolerating a trailing slash', () => {
+  it('should build every app URL from the issuer, tolerating a trailing slash; documentation is the public docs site', () => {
     const doc = buildLlmsTxt({ issuer: `${issuer}/`, agentSignupOpen: true });
     expect(doc).not.toContain('pagespace.ai//');
-    const urls = doc.match(/https?:\/\/[^\s)>\]`]+/g) ?? [];
+    const urls = doc.match(/https?:\/\/[^\s)>\]`"]+/g) ?? [];
     expect(urls.length).toBeGreaterThan(0);
-    for (const url of urls) expect(url.startsWith(issuer)).toBe(true);
+    for (const url of urls) expect(url.startsWith(issuer) || url.startsWith(`${PUBLIC_DOCS_URL}/`) || url === PUBLIC_DOCS_URL).toBe(true);
+  });
+
+  it('given a self-hosted issuer, should send documentation links to the public docs site, which the app itself does not serve', () => {
+    const selfHosted = 'https://pages.example.com';
+    const doc = buildLlmsTxt({ issuer: selfHosted, agentSignupOpen: true });
+    expect(doc).not.toContain(`${selfHosted}/docs`);
+    expect(doc).toContain(`(${PUBLIC_DOCS_URL})`);
+    expect(doc).toContain(`(${PUBLIC_DOCS_URL}/integrations/mcp)`);
+  });
+
+  it('given an open agent door, should link the agent signup guide on the public docs site', () => {
+    expect(buildLlmsTxt({ issuer, agentSignupOpen: true })).toContain(`${PUBLIC_DOCS_URL}/features/agent-signup`);
+    expect(buildLlmsTxt({ issuer, agentSignupOpen: false })).not.toContain('/features/agent-signup');
+  });
+
+  it('given a self-hosted issuer, should point the CLI one-liner at that deployment, not the CLI default host', () => {
+    const selfHosted = 'https://pages.example.com';
+    const doc = buildLlmsTxt({ issuer: `${selfHosted}/`, agentSignupOpen: true });
+    expect(doc).toContain(`pagespace signup --agent --host=${selfHosted} --name`);
+    expect(doc).toContain(`npx -y -p @pagespace/cli pagespace signup --agent --host=${selfHosted} --name`);
+  });
+
+  it('given the CLI default host, should keep the CLI one-liner short (no --host)', () => {
+    expect(buildLlmsTxt({ issuer, agentSignupOpen: true })).not.toContain('--host');
   });
 });
