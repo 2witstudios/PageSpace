@@ -19,6 +19,29 @@ vi.mock('@/ui/components/theme-switcher/theme-switcher', () => ({
 vi.mock('@/ui/components/text-size-switcher/text-size-switcher', () => ({
   TextSizeSwitcher: () => h('div', { role: 'group', 'aria-label': 'Text size' }),
 }));
+// The live balance (retained useCreditBalance): /api/credits through fetchWithAuth, then the
+// realtime socket's credits:updated pushes. A stand-in socket lets a test push a new balance.
+const live = vi.hoisted(() => {
+  const handlers = new Map<string, Set<(payload: unknown) => void>>();
+  const socket = {
+    on: (event: string, handler: (payload: unknown) => void) => {
+      handlers.set(event, (handlers.get(event) ?? new Set()).add(handler));
+    },
+    off: (event: string, handler: (payload: unknown) => void) => {
+      handlers.get(event)?.delete(handler);
+    },
+  };
+  const store = { socket, connect: async () => {} };
+  return {
+    store,
+    emit: (event: string, payload: unknown) => handlers.get(event)?.forEach((handler) => handler(payload)),
+    fetchWithAuth: vi.fn(async (_url: string) => Response.json({})),
+  };
+});
+vi.mock('@/retained/stores/useSocketStore', () => ({
+  useSocketStore: (select: (store: typeof live.store) => unknown) => select(live.store),
+}));
+vi.mock('@/retained/lib/auth/auth-fetch', () => ({ fetchWithAuth: live.fetchWithAuth }));
 
 const { AvatarMenu, ME, profileFrom } = await import('./avatar-menu');
 
@@ -38,7 +61,6 @@ const CREDITS_BODY = {
 const web = (verified: boolean) =>
   fakeWeb({
     [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', image: '/api/avatar/user-1.png', emailVerified: verified }),
-    'GET /api/credits': () => Response.json(CREDITS_BODY),
   });
 
 const rowsOf = (container: HTMLElement) =>
@@ -46,6 +68,8 @@ const rowsOf = (container: HTMLElement) =>
 
 beforeEach(() => {
   signOut.mockClear();
+  live.fetchWithAuth.mockReset();
+  live.fetchWithAuth.mockImplementation(async (url: string) => (url === '/api/credits' ? Response.json(CREDITS_BODY) : new Response('{}', { status: 404 })));
 });
 
 afterEach(() => {
@@ -69,7 +93,7 @@ describe('AvatarMenu', () => {
       should: 'load each once, draw the avatar from its same-origin picture, show the total and the next grant, and list the account rows',
       actual: [
         fake.count(`GET ${ME}`),
-        fake.count('GET /api/credits'),
+        live.fetchWithAuth.mock.calls.filter(([url]) => url === '/api/credits').length,
         container.querySelector('summary img')?.getAttribute('src'),
         container.textContent?.includes('ada@example.com'),
         container.textContent?.includes('612 credits900 more on Nov 3'),
@@ -83,7 +107,6 @@ describe('AvatarMenu', () => {
   test('Verify Email resends the verification mail and closes the menu', async () => {
     const fake = fakeWeb({
       [`GET ${ME}`]: () => Response.json({ id: 'user-1', name: 'Ada Lovelace', email: 'ada@example.com', emailVerified: false }),
-      'GET /api/credits': () => Response.json(CREDITS_BODY),
       'POST /api/auth/resend-verification': () => Response.json({ message: 'sent' }),
     });
     const container = mount(
@@ -122,6 +145,39 @@ describe('AvatarMenu', () => {
       should: 'leave out the Verify Email row',
       actual: rowsOf(container).some((row) => row?.startsWith('Verify Email')),
       expected: false,
+    });
+  });
+
+  test('a credits:updated push updates the card', async () => {
+    const container = mount(
+      <ImagoSWRProvider client={web(true).client}>
+        <AvatarMenu />
+      </ImagoSWRProvider>,
+    );
+    await settle(() => {
+      if (!container.textContent?.includes('612 credits')) throw new Error('not loaded');
+    });
+    // A turn settles: the server pushes the authoritative balance (no subscriptionTier).
+    act(() => {
+      live.emit('credits:updated', {
+        billingEnabled: true,
+        monthly: { remaining: 5980, allowance: 9000, periodEnd: '2026-11-03T12:00:00.000Z' },
+        topup: { remaining: 0 },
+        debt: 0,
+        spendable: 5980,
+        reserved: 0,
+      });
+    });
+    await settle(() => {
+      if (!container.textContent?.includes('598 credits')) throw new Error('not updated');
+    });
+    const card = container.querySelector('[data-credits-card]')?.textContent?.replace(/\s+/g, ' ').trim();
+
+    assert({
+      given: 'a credits:updated push after a turn',
+      should: 'show the pushed total on the card, keep the plan, and not refetch the balance',
+      actual: [card, live.fetchWithAuth.mock.calls.filter(([url]) => url === '/api/credits').length],
+      expected: ['CreditsPro598 credits900 more on Nov 3Buy credits', 1],
     });
   });
 
