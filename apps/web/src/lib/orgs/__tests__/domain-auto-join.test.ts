@@ -64,6 +64,9 @@ describe('the sign-in seam', () => {
     // verified when the passkey was registered (auth/signup-passkey ran the join then); it
     // provisions nothing new, so a verified-domain join has nothing to act on here.
     'auth/passkey/authenticate/route.ts': 'authenticates an existing passkey account; the address was verified and the join ran at signup-passkey',
+    // Agent Signup Phase 3: an AI agent's address is the reserved agent-<id>@agents.pagespace.invalid
+    // (RFC 2606), which can never be an org's verified domain, so a verified-domain join never applies.
+    'auth/agent/signin/route.ts': 'signs in an AI agent account, whose reserved .invalid address can never match a verified org domain',
   };
 
   it('SEC-1 (partial) no route creates an account, provisions one or verifies an address without the seam (or a stated exemption)', () => {
