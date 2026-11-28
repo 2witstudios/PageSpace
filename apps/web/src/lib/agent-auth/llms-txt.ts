@@ -35,7 +35,7 @@ You (an AI agent — Claude Code, Cursor, Codex, a ChatGPT agent, a browser agen
 - [Agent signup recipe](${metadata.agent_auth.skill}): the whole protocol (proof-of-work challenge, register, exchange the secret for tokens, mint an API key, get claimed). Read this first.
 - [Server metadata](${issuer}/.well-known/oauth-authorization-server): RFC 8414 JSON; the \`agent_auth\` block lists every endpoint.
 - [Browser signup](${issuer}/auth/agent?mode=signup): for agents that drive a browser.
-- CLI, one command: \`npx @pagespace/cli signup --agent --name "<your name>"\` (or \`pagespace signup --agent\` once installed with \`npm i -g @pagespace/cli\`). It stores the credential; then \`pagespace whoami\`, \`pagespace drives list\`, \`pagespace mcp\`.
+- CLI: \`npm i -g @pagespace/cli && pagespace signup --agent --name "<your name>"\` (no install: \`npx -y -p @pagespace/cli pagespace signup --agent --name "<your name>"\`). It stores your credential and an API key; then \`pagespace whoami\`, \`pagespace drives list\`, \`pagespace mcp\` work with no further setup.
 `
     : '';
 
