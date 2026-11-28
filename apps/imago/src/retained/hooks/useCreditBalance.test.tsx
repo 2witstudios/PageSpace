@@ -26,7 +26,7 @@ afterEach(unmountAll);
 describe('useCreditBalance() in imago', () => {
   test('reads /api/credits through imago’s API client', async () => {
     const fake = fakeWeb({ 'GET /api/credits': () => Response.json({ billingEnabled: true, spendable: 6120 }) });
-    const view = mount(h(ImagoSWRProvider, { client: fake.client }, h(Probe)));
+    const view = mount(<ImagoSWRProvider client={fake.client}><Probe /></ImagoSWRProvider>);
     await settle(() => {
       if (view.textContent !== '6120') throw new Error('not loaded');
     });
@@ -46,7 +46,7 @@ describe('useCreditBalance() in imago', () => {
       seen.error = useSWR('/api/credits').error;
       return h(Probe);
     }
-    const view = mount(h(ImagoSWRProvider, { client: fake.client }, h(ErrorProbe)));
+    const view = mount(<ImagoSWRProvider client={fake.client}><ErrorProbe /></ImagoSWRProvider>);
     await settle(() => {
       if (view.textContent !== 'error') throw new Error('no error yet');
     });
