@@ -12,11 +12,48 @@ export const createAgentAccountBody = z
     allowedOrigins: z.array(z.string().min(1).max(2_048)).min(1).max(10),
     ownership: z.enum(['dedicated', 'personal']),
     acknowledged: z.boolean(),
+    /** Defaults to `api_key`; a `bearer` token is sent as `Authorization: Bearer <token>` and its placement is ignored. */
+    kind: z.enum(['api_key', 'bearer']).optional(),
     apiKey: z.string().min(1).max(8_192),
     placement: z.object({ in: z.enum(['header', 'query']), name: z.string().min(1).max(64) }).strict(),
     allowGenericRequests: z.boolean(),
   })
   .strict();
+
+/** A single-use step-up grant (`/api/auth/step-up/*`) bound to `agentAccountStepUpBinding(accountId)`. */
+const stepUpToken = z.string().min(1).max(512).optional();
+
+export const updateAgentAccountBody = z
+  .object({
+    allowedOrigins: z.array(z.string().min(1).max(2_048)).min(1).max(20),
+    autoApprove: z.discriminatedUnion('enabled', [
+      z.object({ enabled: z.literal(false) }).strict(),
+      z.object({ enabled: z.literal(true), maxUsesPerHour: z.number().int().min(1).max(1_000), until: z.number().int().positive().nullable() }).strict(),
+    ]),
+    stepUpToken,
+  })
+  .strict();
+
+export const bindAgentAccountBody = z.object({ agentPageId: z.string().min(1).max(64), stepUpToken }).strict();
+
+export const createDelegationBody = z.object({ agentPageId: z.string().min(1).max(64), expiresAt: z.number().int().positive(), stepUpToken }).strict();
+
+/** What a step-up for a change to this account is bound to — the client asks for exactly this. */
+export function agentAccountStepUpBinding(accountId: string): Record<string, string> {
+  return { action: 'agent_account_widen', accountId };
+}
+
+/** HTTP status per account-change refusal. `step_up_required` is 401 so the client runs the ceremony and retries. */
+export const CHANGE_REFUSAL_STATUS: Readonly<Record<string, number>> = {
+  account_unavailable: 404,
+  page_unavailable: 404,
+  step_up_required: 401,
+  not_a_consenter: 403,
+  consent_unavailable: 503,
+  plane_unavailable: 503,
+  store_refused: 502,
+  conflict: 409,
+};
 
 export const approveAgentAccountRequestBody = z
   .object({

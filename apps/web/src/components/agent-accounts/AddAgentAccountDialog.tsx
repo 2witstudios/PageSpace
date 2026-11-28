@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { post } from '@/lib/auth/auth-fetch';
+import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { agentAccountsUrl, type AgentAccountScope } from '@/hooks/useAgentAccounts';
 
@@ -74,7 +74,9 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
         allowedOrigins: [origin.trim()],
         ownership,
         acknowledged: ownership === 'personal' && acknowledged,
-        apiKey: placement === 'bearer' ? `Bearer ${apiKey}` : apiKey,
+        // A bearer token is stored as the token alone; the credential service adds "Bearer " when it sends it.
+        kind: placement === 'bearer' ? 'bearer' : 'api_key',
+        apiKey: placement === 'bearer' ? apiKey.trim().replace(/^bearer\s+/i, '') : apiKey,
         placement: placement === 'query' ? { in: 'query', name: placementName.trim() } : { in: 'header', name: placement === 'header' ? placementName.trim() : 'Authorization' },
         allowGenericRequests,
       });
@@ -83,7 +85,7 @@ export function AddAgentAccountDialog({ scope, open, onOpenChange, onCreated }: 
       onCreated();
       onOpenChange(false);
     } catch (error) {
-      const reason = error instanceof Error ? (/"error":"([a-z_]+)"/.exec(error.message)?.[1] ?? '') : '';
+      const reason = error instanceof ApiRequestError ? error.message : error instanceof Error ? (/"error":"([a-z_]+)"/.exec(error.message)?.[1] ?? '') : '';
       toast.error(REFUSAL_COPY[reason] ?? 'The account could not be added.');
     } finally {
       setSubmitting(false);
