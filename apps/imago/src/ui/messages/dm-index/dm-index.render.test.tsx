@@ -20,7 +20,7 @@ describe('renderDmGround()', () => {
         renderDmGround({
           people: {
             status: 'ready',
-            people: [{ id: 'u1', name: 'Priya', username: 'priya', avatarUrl: null }],
+            people: [{ id: 'u1', name: 'Priya', username: 'priya', avatarUrl: null, accountType: 'human' }],
           },
         }),
       ),
@@ -36,6 +36,30 @@ describe('renderDmGround()', () => {
         html.includes('Shares'),
       ],
       expected: [true, true, true, true, false],
+    });
+  });
+
+  test('an AI agent account among the people', () => {
+    const html = renderToString(
+      h(
+        'div',
+        null,
+        renderDmGround({
+          people: {
+            status: 'ready',
+            people: [
+              { id: 'u1', name: 'Priya', username: 'priya', avatarUrl: null, accountType: 'human' },
+              { id: 'a1', name: 'Priya', username: null, avatarUrl: null, accountType: 'agent' },
+            ],
+          },
+        }),
+      ),
+    );
+    assert({
+      given: 'a human and an agent with the same self-chosen name',
+      should: 'mark only the agent, from its account type, so the two cannot be confused',
+      actual: (html.match(/aria-label="AI agent account"/g) ?? []).length,
+      expected: 1,
     });
   });
 

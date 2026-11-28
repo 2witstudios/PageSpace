@@ -9,6 +9,8 @@ export type MessageableUserResponse = {
   readonly displayName: string | null;
   readonly image: string | null;
   readonly avatarUrl: string | null;
+  /** `users.accountType`: an agent's name is self-chosen, so the ground marks it from this, never the name. */
+  readonly accountType?: 'human' | 'agent';
 };
 
 export type MessageablePerson = {
@@ -16,6 +18,7 @@ export type MessageablePerson = {
   readonly name: string;
   readonly username: string | null;
   readonly avatarUrl: string | null;
+  readonly accountType?: 'human' | 'agent';
 };
 
 /** The name a person is drawn with: display name, then name, then username. */
@@ -29,4 +32,5 @@ export const messageablePeopleFrom = (users: readonly MessageableUserResponse[])
     name: personNameOf(user),
     username: user.username,
     avatarUrl: user.avatarUrl ?? user.image,
+    ...(user.accountType !== undefined && { accountType: user.accountType }),
   }));

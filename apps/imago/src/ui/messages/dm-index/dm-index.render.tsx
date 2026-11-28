@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { cn } from '../../cn';
+import { renderAgentMark } from '../../components/agent-mark/agent-mark.render';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { renderButton } from '../../components/button/button.render';
 import { listGroupLabelClass } from '../../components/list-group/list-group-class';
@@ -46,6 +47,7 @@ export function renderDmGround(props: { readonly people: DmGroundState }): React
           >
             {renderAvatar({ name: person.name, size: 'lg', src: person.avatarUrl ?? undefined })}
             <span className="w-full truncate text-sm font-medium text-ink">{person.name}</span>
+            {renderAgentMark({ accountType: person.accountType })}
           </li>
         ))}
       </ul>
