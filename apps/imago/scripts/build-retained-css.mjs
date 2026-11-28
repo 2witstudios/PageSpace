@@ -53,6 +53,19 @@ css += `
 await writeFile(source, css);
 const result = await postcss([tailwind({ base: appRoot, optimize: false })]).process(css, { from: source });
 const root = result.root;
+/** A type token as the compiled retained theme declares it (Tailwind's scale plus imago's two). */
+const retainedToken = (name) => {
+  let value;
+  root.walkAtRules('layer', (layer) => {
+    if (layer.params !== 'theme' || value !== undefined) return;
+    layer.walkDecls(name, (decl) => { value ??= decl.value; });
+  });
+  if (value === undefined) throw new Error(`the retained theme has no ${name}`);
+  return value;
+};
+const fieldFloor = ['--text-2xs', '--text-xs', '--text-sm', '--text-base', '--text-chat']
+  .map((name) => `${name}: max(16px, ${retainedToken(name)});`)
+  .join(' ');
 const scoped = postcss.atRule({ name: 'scope', params: '(.retained-ui)' });
 const output = postcss.root();
 root.walkRules(rule => {
@@ -73,6 +86,15 @@ output.append(postcss.parse(`
     font-size: 0.875rem;
     color: var(--foreground);
     line-height: 1.6;
+  }
+  /* Touch screens: imago's globals.css floors fields at 16px over IMAGO's scale (text-base
+     0.875rem). Retained fields size from Tailwind's scale (text-base 1rem), so they are floored
+     again over their own rems; unlayered, this wins over imago's layered rule, and a larger
+     text-size setting still enlarges them past 16px. */
+  @media (pointer: coarse) {
+    :scope :is(input, textarea, select, [contenteditable]:not([contenteditable='false'])) {
+      ${fieldFloor}
+    }
   }
 }
 `));

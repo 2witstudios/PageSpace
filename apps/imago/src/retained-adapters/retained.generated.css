@@ -10227,4 +10227,13 @@
     color: var(--foreground);
     line-height: 1.6;
   }
+  /* Touch screens: imago's globals.css floors fields at 16px over IMAGO's scale (text-base
+     0.875rem). Retained fields size from Tailwind's scale (text-base 1rem), so they are floored
+     again over their own rems; unlayered, this wins over imago's layered rule, and a larger
+     text-size setting still enlarges them past 16px. */
+  @media (pointer: coarse) {
+    :scope :is(input, textarea, select, [contenteditable]:not([contenteditable='false'])) {
+      --text-2xs: max(16px, 0.6875rem); --text-xs: max(16px, 0.75rem); --text-sm: max(16px, 0.875rem); --text-base: max(16px, 1rem); --text-chat: max(16px, 0.9375rem);
+    }
+  }
 }
