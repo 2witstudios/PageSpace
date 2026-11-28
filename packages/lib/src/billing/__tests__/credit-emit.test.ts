@@ -4,6 +4,7 @@ const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
 const mockGetCreditBalance = vi.hoisted(() => vi.fn());
 const mockResolveTier = vi.hoisted(() => vi.fn());
 const mockAiLogger = vi.hoisted(() => ({ debug: vi.fn(), error: vi.fn() }));
+const mockResolveOwnCreditsPayer = vi.hoisted(() => vi.fn());
 
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
 vi.mock('../../logging/logger-config', () => ({ loggers: { ai: mockAiLogger } }));
@@ -19,6 +20,8 @@ vi.mock('../credit-balance', () => ({
   getCreditBalance: mockGetCreditBalance,
   resolveTier: mockResolveTier,
 }));
+
+vi.mock('../agent-billing-owner', () => ({ resolveOwnCreditsPayer: mockResolveOwnCreditsPayer }));
 
 import { emitCreditsUpdated } from '../credit-emit';
 
@@ -38,6 +41,7 @@ beforeEach(() => {
   mockIsBillingEnabled.mockReturnValue(true);
   mockResolveTier.mockResolvedValue('pro');
   mockGetCreditBalance.mockResolvedValue(SUMMARY);
+  mockResolveOwnCreditsPayer.mockImplementation(async ({ userId, tier }: { userId: string; tier: string }) => ({ payerId: userId, tier, viaAgentOwner: false }));
   process.env.INTERNAL_REALTIME_URL = 'http://realtime.test';
   fetchMock = vi.fn().mockResolvedValue({ ok: true });
   vi.stubGlobal('fetch', fetchMock);
@@ -100,6 +104,24 @@ describe('emitCreditsUpdated', () => {
     const body = postedBody();
     expect(body.payload.conversationId).toBe('c1');
     expect(body.payload.pageId).toBe('p1');
+  });
+
+  it("given a claimed agent, pushes its OWNER's balance (what its calls spend) to the agent, and refreshes the owner too", async () => {
+    mockResolveOwnCreditsPayer.mockImplementation(async ({ userId, tier }: { userId: string; tier: string }) =>
+      userId === 'agent-1' ? { payerId: 'owner-1', tier: 'pro', viaAgentOwner: true } : { payerId: userId, tier, viaAgentOwner: false });
+    await emitCreditsUpdated('agent-1', { tier: 'free' });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    expect(mockGetCreditBalance).toHaveBeenCalledWith('owner-1', 'pro');
+    expect(mockGetCreditBalance).not.toHaveBeenCalledWith('agent-1', expect.anything());
+    const channels = fetchMock.mock.calls.map(([, init]) => JSON.parse((init as { body: string }).body).channelId).sort();
+    expect(channels).toEqual(['notifications:agent-1', 'notifications:owner-1']);
+  });
+
+  it('given a human or an unclaimed agent, pushes their own balance to them alone', async () => {
+    await emitCreditsUpdated('u1');
+    expect(mockResolveOwnCreditsPayer).toHaveBeenCalledWith({ userId: 'u1', tier: 'pro' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('never throws when the broadcast fails (best-effort fire-and-forget)', async () => {

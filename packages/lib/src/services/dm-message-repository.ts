@@ -54,6 +54,8 @@ const dmMessageWith = {
       id: true,
       name: true,
       image: true,
+      // Marks a self-named AI agent account wherever the author is shown (Phase 2b).
+      accountType: true,
     },
   },
   // Legacy single-attachment relation, still read so a row written by a pod on
@@ -86,6 +88,8 @@ const dmMessageWith = {
         columns: {
           id: true,
           name: true,
+          // The reactions tooltip marks an agent reactor (Phase 2c).
+          accountType: true,
         },
       },
     },
@@ -1167,6 +1171,7 @@ async function loadDmReactionWithUser(reactionId: string) {
         columns: {
           id: true,
           name: true,
+          accountType: true,
         },
       },
     },

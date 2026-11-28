@@ -1,0 +1,111 @@
+/**
+ * Rate-limit bucket keys for the `pagespace-agent` token grants — the
+ * jwt-bearer exchange and that client's refresh_token grant.
+ *
+ * Deliberately NOT a per-client bucket: `client_id=pagespace-agent` is shared
+ * by every agent on the platform, so a per-client bucket is one global bucket
+ * that a single IP can exhaust to lock every agent out. Agents are limited per
+ * client IP (AGENT_TOKEN_IP, generous: fleets behind one NAT or CI runner share
+ * an IP) and per presented credential (AGENT_TOKEN_CREDENTIAL, tight: a hot
+ * loop on one secret). The credential bucket is keyed by a DOMAIN-SEPARATED,
+ * TRUNCATED digest of the credential — never the raw secret and never the
+ * stored `hashToken` value (Phase 2b): the key is persisted in the rate-limit
+ * table and bound into its queries, and a failed query's message carries its
+ * bound params, so the key must be useless even if it reaches a log. 80 bits is
+ * ample to keep one credential's bucket apart from another's.
+ *
+ * The refresh_token grant is the exception to "per presented credential": a
+ * refresh token rotates on every use, so keying on it gives every refresh a
+ * fresh bucket and bounds nothing. Its bucket is the token FAMILY, which
+ * survives rotation (`agentRefreshRateLimitKey`).
+ *
+ * Secret rotation (`POST /api/agent/secret/rotate`) is limited per agent and
+ * per actor (`agentSecretRotateRateLimitKey`): a stolen agent token looping
+ * rotation exhausts only the agent's own bucket, never the owner's recovery.
+ *
+ * @module @pagespace/lib/auth/agent/token-rate-limit-keys
+ */
+
+import { hashToken } from '../token-utils';
+
+/** How many leading 16-bit groups of an IPv6 address a bucket keeps. */
+type Ipv6BucketGroups = 3 | 4;
+
+function bucketAddress(ip: string, groupsKept: Ipv6BucketGroups): string {
+  const trimmed = ip.trim().toLowerCase();
+  // A proxy may write `[v6]:port` or `v4:port`; the port must not mint a bucket.
+  const bracketed = /^\[([^\]]+)\](?::\d+)?$/.exec(trimmed);
+  const v4WithPort = /^(\d{1,3}(?:\.\d{1,3}){3}):\d+$/.exec(trimmed);
+  if (v4WithPort?.[1]) return v4WithPort[1];
+  const address = (bracketed?.[1] ?? trimmed).split('%')[0] ?? '';
+  if (!address.includes(':')) return ip;
+  const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(address);
+  if (mapped?.[1]) return mapped[1];
+
+  const halves = address.split('::');
+  if (halves.length > 2) return ip;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? head.length !== 8 : missing < 1) return ip;
+  const groups = [...head, ...Array.from({ length: halves.length === 2 ? missing : 0 }, () => '0'), ...tail];
+  if (groups.length !== 8 || !groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) return ip;
+  const words = groups.map((group) => Number.parseInt(group, 16));
+  // IPv4-mapped written in hex (`::ffff:cb00:7105`) is the IPv4 address too.
+  if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff) {
+    const high = words[6] ?? 0;
+    const low = words[7] ?? 0;
+    return [high >> 8, high & 0xff, low >> 8, low & 0xff].join('.');
+  }
+  return `${groups.slice(0, groupsKept).map((group) => group.padStart(4, '0')).join(':')}::/${groupsKept * 16}`;
+}
+
+/**
+ * The address a per-IP agent-door bucket is keyed on. An IPv4 address (or an
+ * IPv4-mapped IPv6 one) is itself; an IPv6 address is its /64, because one
+ * host is routinely handed a whole /64 and could otherwise mint a fresh bucket
+ * per address. Anything unparseable is returned unchanged (e.g. `unknown`).
+ */
+export function agentRateLimitAddress(ip: string): string {
+  return bucketAddress(ip, 4);
+}
+
+/**
+ * The address the doors that CREATE agent accounts (the PoW challenge, the API
+ * identity endpoint, the browser signup) bucket on: as `agentRateLimitAddress`,
+ * but an IPv6 address is its /48 (security review addendum). One site is
+ * routinely delegated a whole /48 (RFC 6177) — 65,536 /64s — so a /64 bucket
+ * would let a single site open enough per-IP buckets to drain the
+ * deployment-wide signup budget by itself. Sign-in, token and claim buckets
+ * stay per /64: they act on an existing identity and must not let a neighbour
+ * in the same /48 lock an agent out.
+ */
+export function agentSignupRateLimitAddress(ip: string): string {
+  return bucketAddress(ip, 3);
+}
+
+export function agentTokenIpRateLimitKey(ip: string): string {
+  return `agent-token:ip:${agentRateLimitAddress(ip)}`;
+}
+
+const CREDENTIAL_BUCKET_DIGEST_HEX = 20;
+
+export function agentTokenCredentialRateLimitKey(credential: string): string {
+  const digest = hashToken(`agent-token-rate-limit:${credential}`).slice(0, CREDENTIAL_BUCKET_DIGEST_HEX);
+  return `agent-token:credential:${digest}`;
+}
+
+/**
+ * The refresh_token grant's tight bucket: the token family once the presented
+ * token resolves to one, else (unknown or junk token) its hash — such a token
+ * fails the grant anyway, and the per-IP bucket bounds how many can be tried.
+ */
+export function agentRefreshRateLimitKey(input: { familyId: string | null; refreshToken: string }): string {
+  return input.familyId !== null
+    ? `agent-token:refresh-family:${input.familyId}`
+    : agentTokenCredentialRateLimitKey(input.refreshToken);
+}
+
+export function agentSecretRotateRateLimitKey(input: { agentUserId: string; actor: 'self' | 'owner' }): string {
+  return `agent-secret-rotate:${input.actor}:${input.agentUserId}`;
+}

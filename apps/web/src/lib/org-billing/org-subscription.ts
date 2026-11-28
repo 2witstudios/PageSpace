@@ -162,7 +162,9 @@ export type OrgBillingErrorCode =
   /** [D-OW-44] the subscription was changed outside PageSpace; support repairs it, never an in-place mutation. */
   | 'billing_requires_support'
   /** The org has no Stripe customer yet: nothing to open a portal on. */
-  | 'no_billing_customer';
+  | 'no_billing_customer'
+  /** ADR 0008 Decision 8: an agent account never becomes a Stripe billing contact (ORG-1 keeps it off the Owner seat). */
+  | 'owner_not_human';
 
 export class OrgBillingError extends Error {
   constructor(
@@ -246,6 +248,16 @@ export async function ensureOrgStripeCustomer(
       .limit(1);
     if (!org) throw new OrgBillingError('org_not_found', `Organization ${orgId} not found`);
     if (org.stripeCustomerId) return { customerId: org.stripeCustomerId, created: false };
+    const [owner] = await tx
+      .select({ email: users.email, accountType: users.accountType })
+      .from(users)
+      .where(eq(users.id, org.ownerId))
+      .limit(1);
+    // ADR 0008 Decision 8: the customer is billed to the org's Owner, who is always a person (ORG-1,
+    // loadOrgPrincipalKind). Refused again here, before any customer exists, so an agent never holds one.
+    if (owner?.accountType === 'agent') {
+      throw new OrgBillingError('owner_not_human', `Organization ${orgId} is owned by an agent account`);
+    }
 
     let customerId = await deps.stripe.findCustomerByOrgId(orgId);
     const created = customerId === null;
@@ -256,7 +268,6 @@ export async function ensureOrgStripeCustomer(
     }
     // Name and billing email as they are NOW, set after the create (absolute values, so a
     // replay is harmless and a rename between attempts simply wins).
-    const [owner] = await tx.select({ email: users.email }).from(users).where(eq(users.id, org.ownerId)).limit(1);
     const details = orgCustomerDetails({ name: org.name, billingEmail: owner?.email ?? null });
     await deps.stripe.updateCustomer(customerId, details, orgStripeIdempotencyKey(orgId, 'customer.update', { customerId, details }));
     await tx

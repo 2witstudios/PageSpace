@@ -614,3 +614,51 @@ describe('middleware — handoff-bridge OAuth callbacks skip the middleware CSP'
     );
   });
 });
+
+// Agent Signup Phase 2 (ADR 0008): the API door's two pre-identity endpoints are
+// reached by an agent that has no session and no token yet — that is what they
+// create. They must skip the session gate, and ONLY they: the carve-out is two
+// exact matches, never an /api/agent/ prefix, so every other agent route
+// (rotate, claim-management) still needs a credential before route.ts runs.
+describe('middleware — agent API door exact-match carve-out', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+  });
+
+  it.each([
+    ['GET', '/api/agent/challenge'],
+    ['POST', '/api/agent/identity'],
+    // Phase 3: the browser door's two pre-session endpoints.
+    ['POST', '/api/auth/agent/signup'],
+    ['POST', '/api/auth/agent/signin'],
+  ])('given %s %s with no session or token, should reach the route', async (method, pathname) => {
+    const response = await middleware(buildRequest(pathname, {}, method));
+    expect(response.status).not.toBe(401);
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    // Security review: a claim is started with the agent's OWN Bearer, so a
+    // credential-less request (the old `{claim_token}` body) is gated here.
+    '/api/agent/claim',
+    '/api/agent/secret/rotate',
+    '/api/agent/challenge/extra',
+    '/api/agent/identity/x',
+    '/api/agent/identities',
+    '/api/agent',
+    '/api/agent/claim/verify',
+    '/api/agent/claim/session',
+    '/api/agent/claim/decision',
+    '/api/agent/claims',
+    '/api/auth/agent',
+    '/api/auth/agent/signup/x',
+    '/api/auth/agent/signin/x',
+  ])('given %s with no credential, should still hit the session gate (no /api/agent/ prefix carve-out)', async (pathname) => {
+    const response = await middleware(buildRequest(pathname, {}, 'POST'));
+    expect(mockGetSessionFromCookies).toHaveBeenCalled();
+    expect(response.status).toBe(401);
+  });
+});

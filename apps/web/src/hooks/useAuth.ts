@@ -20,6 +20,8 @@ interface User {
   image?: string | null;
   role?: 'user' | 'admin';
   subscriptionTier?: SubscriptionTier;
+  /** ADR 0008 — from `/api/auth/me` (the store's user); marks the viewer's own agent messages. */
+  accountType?: 'human' | 'agent';
 }
 
 interface AuthActions {

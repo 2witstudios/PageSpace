@@ -45,6 +45,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
   ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
   ['drives/[driveId]/avatar/[filename]', 'Drive avatar image bytes for whoever can reach the drive: the route audits every refusal as authz.access.denied; a data.read row per rendered drive tile would swamp the log, as for org and user avatars above'],
+  ['agent/claim', 'Agent claim start (bearer door): audited in handleOwnClaimStart (lib/agent-auth/claim-start-handler.ts), the one handler both claim doors share — every refusal (closed door, rate limit, not the agent itself, unexpected body) and every start writes its own row'],
+  ['agent/claim/session', 'Agent claim start (session door): audited in handleOwnClaimStart (lib/agent-auth/claim-start-handler.ts), shared with agent/claim — same rows, tagged door: session'],
   ['orgs/invitations/accept', 'ORG-3: audited in acceptOrgInviteForUser (lib/orgs/accept-org-invite.ts), the one shell this route and the sign-in/sign-up invite door share, so both write the same authz.role.assigned / authz.access.denied rows'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
   ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],
@@ -113,6 +115,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['ai/lmstudio/models', 'Local LMStudio model discovery, no user data'],
 
   // --- OAuth discovery (RFC 8414, public by spec) ---
+  ['well-known/auth-md', 'The /auth.md agent-registration recipe (ADR 0008 Decision 12) — public by design, the first document an agent reads before it has any identity; unauthenticated, reads no user data, writes nothing, takes no request input (built from the configured issuer only), and its only variants are the static document or a 404 when the agent door is closed. The endpoints it describes (challenge, identity, token, rotate) each audit every outcome themselves; destination of the /auth.md rewrite'],
+  ['well-known/llms-txt', 'The /llms.txt discovery document (llmstxt.org) — public by design, what an AI agent reads first on a site; unauthenticated, reads no user data, writes nothing, takes no request input (built from the configured issuer and the agent-door flag only). Destination of the /llms.txt rewrite'],
   ['well-known/oauth-authorization-server', 'RFC 8414 authorization server metadata — public by spec, unauthenticated, no user data or resource access; destination of the /.well-known/oauth-authorization-server rewrite'],
 
   // --- Share link management routes ---

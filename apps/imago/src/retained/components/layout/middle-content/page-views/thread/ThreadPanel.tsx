@@ -46,6 +46,7 @@ import { useMobileKeyboard } from '@/retained/hooks/useMobileKeyboard';
 import { cn } from '@/retained/lib/utils';
 import { useDraft } from '@/retained/hooks/useDraft';
 import { buildDraftKey } from '@/retained/lib/draft/draft';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 
 export type ThreadSource = 'channel' | 'dm';
 
@@ -68,6 +69,8 @@ export interface ThreadReply {
   authorId: string | null;
   authorName?: string | null;
   authorImage?: string | null;
+  /** `agent` renders the AgentBadge beside a self-named AI agent account (Phase 2b). */
+  authorAccountType?: 'human' | 'agent' | null;
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
   attachments?: MessageAttachmentLike[] | null;
@@ -133,7 +136,7 @@ interface RawReply {
   createdAt: string | Date;
   // channel shape
   userId?: string | null;
-  user?: { id: string; name: string | null; image: string | null } | null;
+  user?: { id: string; name: string | null; image: string | null; accountType?: 'human' | 'agent' } | null;
   // Rows persisted before multi-command support shipped still carry a
   // single object here (no data migration for the jsonb column) — always
   // read this through normalizeCommandExecutionList, never assume the array
@@ -146,7 +149,7 @@ interface RawReply {
   editedAt?: string | Date | null;
   // dm shape
   senderId?: string | null;
-  sender?: { id: string; name: string | null; image: string | null } | null;
+  sender?: { id: string; name: string | null; image: string | null; accountType?: 'human' | 'agent' } | null;
   // common
   fileId?: string | null;
   attachmentMeta?: AttachmentMeta | null;
@@ -185,6 +188,7 @@ const normalizeReply = (raw: RawReply): ThreadReply => ({
   authorId: raw.userId ?? raw.senderId ?? null,
   authorName: raw.user?.name ?? raw.sender?.name ?? raw.aiMeta?.senderName ?? null,
   authorImage: raw.user?.image ?? raw.sender?.image ?? null,
+  authorAccountType: raw.user?.accountType ?? raw.sender?.accountType ?? null,
   fileId: raw.fileId ?? null,
   attachmentMeta: raw.attachmentMeta ?? null,
   file: raw.file ?? null,
@@ -808,6 +812,7 @@ export function ThreadPanel({
                 <div className={cn("min-w-0 flex-1", "[@media(hover:none)]:pr-28 touch:pr-28")}>
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-semibold">{author.name}</span>
+                    {!isAi && <AgentBadge accountType={reply.authorAccountType} />}
                     {isAi && (
                       <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
                         {reply.aiSenderType === 'global_assistant'

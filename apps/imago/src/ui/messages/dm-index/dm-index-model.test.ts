@@ -22,12 +22,12 @@ describe('personNameOf() and messageablePeopleFrom()', () => {
       given: 'two messageable users, one with only an image',
       should: 'draw each with its name, username and avatar (the profile avatar, else the account image)',
       actual: messageablePeopleFrom([
-        { id: 'u1', name: 'Priya', username: 'priya', displayName: null, image: null, avatarUrl: 'https://img/p.png' },
-        { id: 'u2', name: null, username: 'sam', displayName: null, image: 'https://img/s.png', avatarUrl: null },
+        { id: 'u1', name: 'Priya', username: 'priya', displayName: null, image: null, avatarUrl: 'https://img/p.png', accountType: 'human' },
+        { id: 'u2', name: null, username: 'sam', displayName: null, image: 'https://img/s.png', avatarUrl: null, accountType: 'agent' },
       ]),
       expected: [
-        { id: 'u1', name: 'Priya', username: 'priya', avatarUrl: 'https://img/p.png' },
-        { id: 'u2', name: 'sam', username: 'sam', avatarUrl: 'https://img/s.png' },
+        { id: 'u1', name: 'Priya', username: 'priya', avatarUrl: 'https://img/p.png', accountType: 'human' },
+        { id: 'u2', name: 'sam', username: 'sam', avatarUrl: 'https://img/s.png', accountType: 'agent' },
       ],
     });
   });

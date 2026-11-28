@@ -43,6 +43,7 @@ export async function resolveOAuthAccount(params: {
     providerSubMatch: !!subMatch,
     emailMatch: !!emailMatch,
     emailVerified,
+    email,
   });
 
   const user =

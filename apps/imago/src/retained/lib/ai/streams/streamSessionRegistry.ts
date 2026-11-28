@@ -103,7 +103,8 @@ export interface StreamSessionDescriptor {
   conversationId: string;
   /** The socket room / store partition key (`pageId` in the store's vocabulary). */
   channelId: string;
-  triggeredBy: { userId: string; displayName: string };
+  /** `accountType` is set only for an agent account (Agent Signup Phase 2c). */
+  triggeredBy: { userId: string; displayName: string; accountType?: 'agent' };
   /** True when this generation belongs to the signed-in USER — see `isOwnStream`. */
   isOwn: boolean;
   /** ISO start time. Drives the synthesized bubble's `createdAt` and the expiry sweep. */

@@ -4,6 +4,7 @@ import { AuthLayout } from '@/components/auth/AuthLayout';
 import { Button } from '@/components/ui/button';
 import { cookies } from 'next/headers';
 import { resolveInviteContext } from '@/lib/auth/invite-resolver';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { loadOrgInvitePage } from '@/lib/orgs/org-invite-page';
 import { OrgInviteCard } from '@/components/orgs/OrgInviteCard';
 import { isV3AuthEnabled } from '@/lib/imago/v3-auth-enabled';
@@ -78,6 +79,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
               <span className="text-blue-600 dark:text-blue-400">{data.inviterName}</span>
+              <AgentBadge accountType={data.inviterAccountType} className="ml-2 align-middle" />
               {' '}has shared a page with you
             </h1>
             <p className="mt-3 text-sm text-muted-foreground">
@@ -122,6 +124,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
           <div className="text-center">
             <h1 className="text-2xl font-bold tracking-tight text-gray-900 dark:text-white">
               <span className="text-blue-600 dark:text-blue-400">{data.inviterName}</span>
+              <AgentBadge accountType={data.inviterAccountType} className="ml-2 align-middle" />
               {' '}wants to connect with you
             </h1>
             <p className="mt-3 text-sm text-muted-foreground">
@@ -172,6 +175,7 @@ export default async function InvitePage({ params }: InvitePageProps) {
           </h1>
           <p className="mt-3 text-sm text-muted-foreground">
             <span className="font-medium text-gray-900 dark:text-gray-100">{data.inviterName}</span>
+            <AgentBadge accountType={data.inviterAccountType} className="ml-1 align-middle" />
             {' '}invited{' '}
             <span className="font-medium text-gray-900 dark:text-gray-100">{data.email}</span>
             {' '}to join as a{' '}

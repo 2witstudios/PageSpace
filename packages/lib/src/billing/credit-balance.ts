@@ -35,8 +35,10 @@ import { wallets, personalRootWalletOf } from '@pagespace/db/schema/wallets';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
+import { allowanceRefills, isOneTimeAllowanceTier, starterGrantCents } from './credit-pricing';
 import { tierAllowanceCents } from './money-model';
+import { readGateAccount } from './gate-account';
+import { GateAccountNotFoundError } from './gate-account-not-found';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -83,7 +85,10 @@ export interface CreditBalanceSummary {
   reserved: number;
 }
 
-/** Display allowance for an account never granted: derived from the list price (MON-2). */
+/**
+ * A human's display allowance for an account never granted: derived from the list price
+ * (MON-2). The account-aware figure (0 for an agent) is upcomingStarterGrantCents.
+ */
 function allowanceFor(tier: SubscriptionTier): number {
   return tierAllowanceCents(tier);
 }
@@ -131,11 +136,40 @@ function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boo
   return isOneTimeAllowanceTier(tier) && row.monthlyPeriodEnd === null;
 }
 
-export function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
-  // No row yet: the gate lazy-inits from the tier allowance on the first call.
-  if (!row) return Math.max(0, allowanceFor(tier));
+/**
+ * The grant the gate WILL apply to a no-row or pending bare row — the tier
+ * allowance for a human, 0 for an agent (ADR 0008 Decision 9). Read only for
+ * those two row states, so a funded row stays a single indexed read.
+ */
+async function upcomingStarterGrantCents(userId: string, tier: SubscriptionTier): Promise<number> {
+  try {
+    const { accountType } = await readGateAccount(userId);
+    return starterGrantCents({ tier, accountType });
+  } catch (error) {
+    // No users row: pre-credit nothing (fail closed) — the gate refuses such a
+    // principal, so neither the display nor the routing read may promise a grant.
+    if (error instanceof GateAccountNotFoundError) return 0;
+    throw error;
+  }
+}
 
-  const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
+function needsStarterGrant(row: FundedBalanceRow | null, tier: SubscriptionTier): boolean {
+  return row === null || pendingStarterGrant(row, tier);
+}
+
+/**
+ * `starterGrant` is the grant the gate will apply to a no-row or pending bare row. The two
+ * reads here pass the account-aware figure (upcomingStarterGrantCents: 0 for an agent); a
+ * caller that omits it (spend-resolution's leg read) pre-credits the human tier allowance,
+ * and the gate still grants an agent nothing (ADR 0008 Decision 9).
+ */
+export function spendableCentsFor(
+  row: FundedBalanceRow | null,
+  tier: SubscriptionTier,
+  starterGrant: number = allowanceFor(tier),
+): number {
+  // No row yet: the gate lazy-inits with the starter grant on the first call.
+  if (!row) return Math.max(0, starterGrant);
 
   // A non-refilling tier (free) never gets an upcoming allowance pre-credited — the
   // stored remaining is the whole story — with ONE exception that mirrors the gate:
@@ -143,7 +177,7 @@ export function spendableCentsFor(row: FundedBalanceRow | null, tier: Subscripti
   // starter grant has not landed yet (the gate grants it on the next call, keyed on
   // the ledger), so the pending grant is shown rather than reading the user as 0/5.
   const monthlyRemaining = pendingStarterGrant(row, tier)
-    ? row.monthlyRemainingCents + allowance
+    ? row.monthlyRemainingCents + starterGrant
     : row.monthlyRemainingCents;
   const topupRemaining = row.topupRemainingCents;
   const debt = row.debtCents ?? 0;
@@ -180,7 +214,9 @@ export async function readSpendableCents(
     .where(personalRootWalletOf(userId))
     .limit(1);
 
-  return spendableCentsFor(row ?? null, tier);
+  const balance = row ?? null;
+  const starterGrant = needsStarterGrant(balance, tier) ? await upcomingStarterGrantCents(userId, tier) : 0;
+  return spendableCentsFor(balance, tier, starterGrant);
 }
 
 /**
@@ -216,15 +252,19 @@ export async function getCreditBalance(
 
   const reserved = Number(holdAgg[0]?.reserved ?? 0);
   const row = rows[0] ?? null;
+  // A stored 0 allowance also falls back to what the account WOULD be granted —
+  // the tier allowance for a human, 0 for an agent.
+  const starterGrant = needsStarterGrant(row, tier) || row?.monthlyAllowanceCents === 0
+    ? await upcomingStarterGrantCents(userId, tier)
+    : 0;
 
-  // No row yet: the gate will lazy-init from the tier allowance on the first call,
+  // No row yet: the gate will lazy-init with the starter grant on the first call,
   // so present that as the spendable monthly balance.
   if (!row) {
-    const allowance = allowanceFor(tier);
-    const spendable = spendableCentsFor(null, tier);
+    const spendable = spendableCentsFor(null, tier, starterGrant);
     return {
       billingEnabled: true,
-      monthly: { remaining: allowance, allowance, periodEnd: null },
+      monthly: { remaining: starterGrant, allowance: starterGrant, periodEnd: null },
       topup: { remaining: 0 },
       debt: 0,
       spendable,
@@ -232,7 +272,7 @@ export async function getCreditBalance(
     };
   }
 
-  const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
+  const allowance = row.monthlyAllowanceCents || starterGrant;
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
   // For display: never show a past renewal date. Project addOneMonth from the last known
@@ -257,7 +297,7 @@ export async function getCreditBalance(
   // upcoming to pre-credit — except a bare top-up row whose starter grant is still
   // pending (see pendingStarterGrant). Debt is shown as-is.
   const monthlyRemaining = pendingStarterGrant(row, tier)
-    ? row.monthlyRemainingCents + allowance
+    ? row.monthlyRemainingCents + starterGrant
     : row.monthlyRemainingCents;
 
   const topupRemaining = row.topupRemainingCents;
@@ -268,7 +308,7 @@ export async function getCreditBalance(
   // shows the red. Debt accrues only after both buckets are exhausted, so the negative
   // branch is effectively −debt.
   // Shared with the routing gate's lean read, so the two can never disagree.
-  const spendable = spendableCentsFor(row, tier);
+  const spendable = spendableCentsFor(row, tier, starterGrant);
 
   return {
     billingEnabled: true,

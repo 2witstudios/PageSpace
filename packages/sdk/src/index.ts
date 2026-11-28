@@ -48,6 +48,22 @@ export type { AuthProvider } from './auth/provider.js';
 export { StaticTokenProvider } from './auth/static.js';
 export { OAuthTokenProvider } from './auth/oauth.js';
 export type { OAuthTokenProviderOptions, OAuthTokens, RefreshAccessToken } from './auth/oauth.js';
+export { AnonymousAuthProvider } from './auth/anonymous.js';
+
+// Agent identities (ADR 0008): an AI agent's own account. The exchange step of
+// /auth.md, the grant/client constants, and the refresh-failure predicate.
+export {
+  AGENT_ASSERTION_GRANT_TYPE,
+  AGENT_CLAIM_GRANT_TYPE,
+  exchangeAgentAssertion,
+  isInvalidGrantError,
+  PAGESPACE_AGENT_CLIENT_ID,
+  parseBearerTokenResponse,
+} from './auth/agent-assertion.js';
+export type { ExchangeAgentAssertionOptions } from './auth/agent-assertion.js';
+// The auth.md "Fund" poll: the agent's own access token reads its claim; no token is minted.
+export { pollAgentClaim } from './auth/agent-claim.js';
+export type { AgentClaimOwner, AgentClaimPollResult, PollAgentClaimOptions } from './auth/agent-claim.js';
 
 // PKCE (RFC 7636) — client-side math for the authorization-code + PKCE flow.
 // Consumed by `pagespace login` (packages/cli/src/auth/loopback-flow.ts) so
@@ -65,6 +81,9 @@ export type { OperationRegistry } from './registry/registry.js';
 
 // Activity (Phase 3 task 9).
 export { getActivity } from './operations/activity.js';
+
+// Agent identities (ADR 0008) — the agent's own account: challenge, signup, claim, rotate.
+export { claimAgent, getAgentChallenge, rotateAgentSecret, signUpAgent } from './operations/agent-identity.js';
 
 // Agents (Phase 3 task 5).
 export {

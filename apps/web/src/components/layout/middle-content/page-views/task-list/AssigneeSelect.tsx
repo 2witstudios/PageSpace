@@ -21,12 +21,15 @@ import {
 import { Button } from '@/components/ui/button';
 import { User, Check, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 interface Assignee {
   id: string;
   type: 'user' | 'agent';
   name: string;
   image: string | null;
+  /** `users.accountType` of a user assignee (absent for AI agent pages). */
+  accountType?: string | null;
   agentTitle?: string;
 }
 
@@ -36,6 +39,7 @@ interface AssigneeSelectProps {
     id: string;
     name: string | null;
     image: string | null;
+    accountType?: string | null;
   } | null;
   currentAssigneeAgent?: {
     id: string;
@@ -147,6 +151,7 @@ export function AssigneeSelect({
               <span className="text-sm truncate max-w-20">
                 {displayName}
               </span>
+              {!isAgent && <AgentBadge accountType={currentAssignee?.accountType} />}
             </div>
           ) : (
             <span className="text-muted-foreground text-sm flex items-center gap-1">
@@ -192,6 +197,7 @@ export function AssigneeSelect({
                           </AvatarFallback>
                         </Avatar>
                         <span className="truncate">{member.name}</span>
+                        <AgentBadge accountType={member.accountType} className="ml-1" />
                         {isSelected && <Check className="ml-auto h-4 w-4" />}
                       </CommandItem>
                     );

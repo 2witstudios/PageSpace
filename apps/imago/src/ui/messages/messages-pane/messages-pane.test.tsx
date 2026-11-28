@@ -386,3 +386,20 @@ describe('MessagesPane with an object open', () => {
     });
   });
 });
+
+describe('MessagesPane agent marker (Agent Signup Phase 2c)', () => {
+  test('a DM with an agent account is marked', async () => {
+    const agent = conversation('m1', {
+      otherUser: { ...conversation('m1').otherUser, displayName: 'PageSpace Support', accountType: 'agent' },
+    });
+    const { container } = show({ [CHANNELS]: channels(() => []), [CONVERSATIONS]: dms(() => [agent, conversation('m2')]) });
+    await rowsLoaded(container, 2);
+
+    assert({
+      given: 'the DM list with one agent and one person',
+      should: 'mark only the agent’s row',
+      actual: [...container.querySelectorAll('a')].map((link) => link.querySelector('[aria-label="AI agent account"]') !== null),
+      expected: [true, false],
+    });
+  });
+});

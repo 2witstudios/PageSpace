@@ -14,6 +14,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveWebhookMetadataTierForControlPlane } from './control-plane-tier';
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { userEmailMatch } from '@pagespace/lib/auth/user-repository';
+import { isAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { applyStripeFunding } from '@pagespace/lib/billing/credit-funding';
 import { getCreditPack } from '@pagespace/lib/billing/credit-pricing';
 import { GIFT_SUBSCRIPTION_METADATA_TYPE } from '@pagespace/lib/billing/wallet-funding';
@@ -658,17 +659,19 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
     // An org's customer is never linked to a person (SEAT-1, SEAT-7): the payer's email
     // would otherwise make the ORG's customer that person's, and the personal handlers
     // would then read the org's subscription as the person's plan.
+    // An agent never holds a Stripe customer either (ADR 0008 Decision 8): never link
+    // one by a reserved agent address, and only ever to a human row.
     const customerOrgId = await orgForStripeCustomer(customerId);
     if (customerOrgId) {
       loggers.api.info('Checkout completed for an org customer; not linking it to a person', { customerId, orgId: customerOrgId });
-    } else if (customerEmail) {
+    } else if (customerEmail && !isAgentReservedEmail(customerEmail)) {
       // Update user with stripe customer ID
       await db.update(users)
         .set({
           stripeCustomerId: customerId,
           updatedAt: new Date(),
         })
-        .where(userEmailMatch(customerEmail));
+        .where(and(userEmailMatch(customerEmail), eq(users.accountType, 'human')));
 
       loggers.api.info('Linked Stripe customer to user', { customerId, email: maskEmail(customerEmail) });
     }

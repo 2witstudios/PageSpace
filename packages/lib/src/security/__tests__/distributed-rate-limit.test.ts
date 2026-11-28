@@ -1,3 +1,4 @@
+import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
 const { insertMock, deleteMock, selectMock, executeMock, updateMock } = vi.hoisted(() => ({
@@ -913,6 +914,51 @@ describe('distributed-rate-limit', () => {
       expect(DISTRIBUTED_RATE_LIMITS.TRACKING.progressiveDelay).toBe(false);
     });
 
+    // Agent signup doors (ADR 0008 Decision 10, threat model T1/T3). PoW shapes
+    // rate; these per-IP ceilings are the real bound on bulk account creation.
+    it('AGENT_CHALLENGE allows 30 challenges per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_CHALLENGE).toEqual({ maxAttempts: 30, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNUP allows 5 registrations per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP).toEqual({ maxAttempts: 5, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNUP_DAILY caps registrations at 10 per 24 hours', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNUP_DAILY).toEqual({ maxAttempts: 10, windowMs: 24 * 60 * 60 * 1000, blockDurationMs: 24 * 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SIGNIN has the LOGIN shape (secret guessing is credential stuffing)', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SIGNIN).toEqual(DISTRIBUTED_RATE_LIMITS.LOGIN);
+    });
+
+    // pagespace-agent token grants (jwt-bearer + refresh): per IP (generous — a
+    // fleet behind one NAT/CI runner shares it) and per presented credential
+    // (tight — a hot loop on one secret), never one platform-wide client bucket.
+    it('AGENT_TOKEN_IP allows 60 token requests per IP per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_IP).toEqual({ maxAttempts: 60, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_TOKEN_CREDENTIAL allows 10 token requests per credential per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_SECRET_ROTATE allows an agent (or its owner, in a separate bucket) 5 rotations per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_SECRET_ROTATE).toEqual({ maxAttempts: 5, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_KEY_MINT allows an agent 10 mcp_ key mints per hour', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_KEY_MINT).toEqual({ maxAttempts: 10, windowMs: 60 * 60 * 1000, blockDurationMs: 60 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_CLAIM_INIT allows 10 claim starts per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_CLAIM_INIT).toEqual({ maxAttempts: 10, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
+    it('AGENT_OWNER_MANAGE allows an owner 30 agent-management requests per 5 minutes', () => {
+      expect(DISTRIBUTED_RATE_LIMITS.AGENT_OWNER_MANAGE).toEqual({ maxAttempts: 30, windowMs: 5 * 60 * 1000, blockDurationMs: 5 * 60 * 1000, progressiveDelay: false });
+    });
+
     it('EMAIL_RESEND has 3 attempts per hour', () => {
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.maxAttempts).toBe(3);
       expect(DISTRIBUTED_RATE_LIMITS.EMAIL_RESEND.windowMs).toBe(60 * 60 * 1000);
@@ -1291,5 +1337,69 @@ describe('distributed-rate-limit', () => {
         expect.any(Object)
       );
     });
+  });
+});
+
+// Agent Signup Phase 2b: a failed bucket query is swallowed and falls back, so
+// a route's own error handling never sees it. drizzle's DrizzleQueryError
+// message is `Failed query: ...\nparams: ...` — and the bucket key is a bound
+// param. Whatever the key holds must never reach a log through this path.
+describe('a failed bucket query logs no bound value (Phase 2b)', () => {
+  const HEX64 = 'a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1c9e2b7d4a3f1';
+  const key = `agent-token:credential:${HEX64}`;
+  const ORIGINAL_ENV = process.env.NODE_ENV;
+
+  function realDrizzleFailure(): Error {
+    return new DrizzleQueryError(
+      'insert into "rate_limit_buckets" ("key", "count") values ($1, $2) on conflict ("key") do update set ...',
+      [key, 1],
+      Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }),
+    );
+  }
+
+  afterEach(() => {
+    process.env.NODE_ENV = ORIGINAL_ENV;
+  });
+
+  it.each(['production', 'development'])('given a %s check whose query fails, should log only the redacted error', async (env) => {
+    process.env.NODE_ENV = env;
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.warn).mockClear();
+    mockInsertThrows(realDrizzleFailure());
+
+    await checkDistributedRateLimit(key, { maxAttempts: 5, windowMs: 60_000 });
+
+    const logged = JSON.stringify([
+      vi.mocked(loggers.api.warn).mock.calls,
+      vi.mocked(loggers.api.debug).mock.calls,
+      vi.mocked(loggers.api.error).mock.calls,
+    ]);
+    expect(logged).not.toMatch(/[0-9a-f]{64}/);
+    expect(logged).not.toContain('Failed query');
+    expect(loggers.api.warn).toHaveBeenCalledWith('Postgres rate limit check failed, falling back', expect.objectContaining({ errorName: 'DrizzleQueryError', code: '57014' }));
+  });
+
+  it('given a reset or refund whose query fails, should log only the redacted error', async () => {
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.debug).mockClear();
+    deleteMock.mockImplementation(() => { throw realDrizzleFailure(); });
+    updateMock.mockImplementation(() => { throw realDrizzleFailure(); });
+
+    await resetDistributedRateLimit(key);
+    await refundDistributedRateLimitAttempt(key, 60_000);
+
+    expect(loggers.api.debug).toHaveBeenCalledWith('Postgres rate limit reset failed', expect.objectContaining({ code: '57014' }));
+    expect(loggers.api.debug).toHaveBeenCalledWith('Postgres rate limit refund failed', expect.objectContaining({ code: '57014' }));
+    expect(JSON.stringify(vi.mocked(loggers.api.debug).mock.calls)).not.toMatch(/[0-9a-f]{64}/);
+  });
+
+  it('given countAuthFailure whose query fails, should log only the redacted error', async () => {
+    const { loggers } = await import('../../logging/logger-config');
+    vi.mocked(loggers.api.warn).mockClear();
+    mockInsertThrows(realDrizzleFailure());
+
+    await countAuthFailure(key, 60_000);
+
+    expect(JSON.stringify(vi.mocked(loggers.api.warn).mock.calls)).not.toMatch(/[0-9a-f]{64}/);
   });
 });

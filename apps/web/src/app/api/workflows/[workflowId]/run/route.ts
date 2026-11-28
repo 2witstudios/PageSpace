@@ -8,7 +8,6 @@ import { workflows } from '@pagespace/db/schema/workflows';
 import { executeWorkflow, type WorkflowExecutionInput } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
 import { creditAdmission } from '@/lib/workflows/workflow-credit-gate';
-import type { GateReason } from '@pagespace/lib/billing/credit-core';
 import { creditGatePayload } from '@/lib/subscription/credit-gate-response';
 import { automationRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { actorFromAuth, deniedResponse } from '@/lib/auth/request-actor';
@@ -75,21 +74,24 @@ export async function POST(
   // pays, as for a channel @mention): the gate admits it as them, so their per-consumer caps
   // on the drive wallet bind (WAL-7). It still spends only the drive wallet. Usage is recorded
   // under the workflow's creator, as for every run.
-  let deniedReason: GateReason | undefined;
   const result = await executeWorkflow(executionInput, {
-    admit: creditAdmission(executionInput, 'interactive', (reason) => { deniedReason = reason; }, auth.userId),
+    admit: creditAdmission(executionInput, 'interactive', undefined, auth.userId),
   });
 
   if (result.claimConflict) {
     return NextResponse.json({ error: 'Workflow is already running' }, { status: 409 });
   }
 
-  // Refused by the gate: out_of_credits -> 402, a cap -> 429. The Run button
+  // Refused by the gate: out_of_credits -> 402, a cap -> 429, an unclaimed
+  // agent -> 402 requires_funding with the claim_url it needs. The Run button
   // toasts `error`, so it carries the readable message; `code` the reason. The
   // schedule is not advanced — nothing ran.
-  if (result.skipped && deniedReason) {
-    const denied = creditGatePayload(deniedReason);
-    return NextResponse.json({ error: denied.message, code: denied.error }, { status: denied.status });
+  if (result.refusal) {
+    const denied = creditGatePayload(result.refusal.reason);
+    return NextResponse.json(
+      { error: denied.message, code: denied.error, ...(denied.claim_url ? { claim_url: denied.claim_url } : {}) },
+      { status: denied.status },
+    );
   }
 
   // Advance the schedule so the next cron tick doesn't re-fire immediately.

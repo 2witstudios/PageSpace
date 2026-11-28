@@ -41,6 +41,7 @@ const person = (over: Partial<MessageablePerson> & Pick<MessageablePerson, 'id' 
 const PEOPLE = [
   person({ id: 'priya', displayName: 'Priya Shah', username: 'priya', source: 'drive', sharedDriveCount: 2 }),
   person({ id: 'dana', displayName: 'Dana Whitfield', username: 'dana', source: 'connection' }),
+  person({ id: 'support', displayName: 'PageSpace Support', username: 'support', source: 'drive', accountType: 'agent' }),
 ];
 
 const settle = (check: () => void) => act(() => vi.waitFor(check, { timeout: 1000, interval: 5 }));
@@ -149,6 +150,23 @@ describe('NewConversationPage (C-DM-New)', () => {
       should: 'refresh the list before opening it, or the conversation page would not find it',
       actual: refresh.mock.invocationCallOrder[0] < push.mock.invocationCallOrder[0],
       expected: true,
+    });
+  });
+
+  test('an AI agent account in the picker (Agent Signup)', async () => {
+    const container = await show();
+    const agentRow = optionFor(container, 'PageSpace Support');
+    const humanRow = optionFor(container, 'Priya Shah');
+
+    assert({
+      given: 'an agent account named like a person beside humans',
+      should: 'mark only the agent row, from accountType',
+      actual: {
+        agent: agentRow.querySelector('[aria-label="AI agent account"]') !== null,
+        human: humanRow.querySelector('[aria-label="AI agent account"]') !== null,
+        total: container.querySelectorAll('[aria-label="AI agent account"]').length,
+      },
+      expected: { agent: true, human: false, total: 1 },
     });
   });
 });

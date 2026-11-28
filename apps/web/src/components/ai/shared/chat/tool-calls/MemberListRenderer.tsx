@@ -4,11 +4,14 @@ import React, { memo } from 'react';
 import { Users, Crown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 export interface MemberInfo {
   userId?: string;
   name?: string | null;
   displayName?: string | null;
+  /** From list_drive_members / list_collaborators: `agent` = self-named AI agent account (Phase 2b). */
+  accountType?: 'human' | 'agent';
   email?: string | null;
   role?: string | null;
   avatarUrl?: string | null;
@@ -78,13 +81,15 @@ export const MemberListRenderer: React.FC<MemberListRendererProps> = memo(functi
                 <Avatar className="h-8 w-8 shrink-0">
                   <AvatarImage src={m.avatarUrl || undefined} alt={label} />
                   <AvatarFallback className="text-xs">
-                    {initials(m.name ?? m.displayName, m.email)}
+                    {/* An agent's name arrives labelled for the model; its initials would read "[A". */}
+                    {m.accountType === 'agent' ? 'AI' : initials(m.name ?? m.displayName, m.email)}
                   </AvatarFallback>
                 </Avatar>
 
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm font-medium truncate">{label}</span>
+                    <AgentBadge accountType={m.accountType} />
                     {role === 'OWNER' && <Crown className="h-3 w-3 text-amber-500 shrink-0" />}
                   </div>
                   {m.email && <div className="text-xs text-muted-foreground truncate">{m.email}</div>}

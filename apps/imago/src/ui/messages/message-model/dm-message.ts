@@ -7,6 +7,7 @@
 // has two people, so the thread names them from what it knows (namedPosts).
 
 import type { ChannelReactionResponse, Post } from './post';
+import { withAccountType } from './account-type';
 import { reactionsOf, UNKNOWN_USER } from './posts-from-api';
 import type { ReceivedPost } from './received';
 
@@ -20,7 +21,13 @@ export type DmMessageResponse = {
   readonly isEdited: boolean;
   readonly editedAt: string | null;
   readonly parentId: string | null;
-  readonly sender?: { readonly id: string; readonly name: string | null; readonly image: string | null } | null;
+  readonly sender?: {
+    readonly id: string;
+    readonly name: string | null;
+    readonly image: string | null;
+    /** `agent` marks a self-named AI agent account (Agent Signup Phase 2c). */
+    readonly accountType?: string | null;
+  } | null;
   /** The same rows as a channel post's (dm_message_reactions with its `user`). */
   readonly reactions?: readonly ChannelReactionResponse[];
   /** What the sender's POST carried, echoed so the sender can retire its sending post. Never stored. */
@@ -43,6 +50,7 @@ export const dmPostsFrom = (messages: readonly DmMessageResponse[], viewerId: st
     authorKey: message.senderId,
     authorName: message.sender?.name ?? '',
     authorImage: message.sender?.image ?? null,
+    ...withAccountType('authorAccountType', message.sender?.accountType),
     agent: false,
     countsAsUnread: message.senderId !== viewerId,
     at: message.createdAt,
@@ -81,6 +89,7 @@ const asDmMessage = (payload: unknown): DmMessageResponse | null => {
           id: senderId,
           name: isString(sender.name) ? sender.name : null,
           image: isString(sender.image) ? sender.image : null,
+          ...withAccountType('accountType', isString(sender.accountType) ? sender.accountType : null),
         }
       : null,
     reactions: Array.isArray(reactions) ? (reactions as DmMessageResponse['reactions']) : [],
@@ -103,7 +112,7 @@ export const liveDmPost = (
 };
 
 /** Who a DM's posts may be by, as far as imago knows them. */
-export type DmPerson = { readonly name: string; readonly image: string | null };
+export type DmPerson = { readonly name: string; readonly image: string | null; readonly accountType?: string };
 
 /**
  * Names every post: the name a stored post of the same author carried, else the
@@ -117,11 +126,22 @@ export const namedPosts = (
   const known = new Map<string, DmPerson>(Object.entries(people));
   // A sending post's name is only a guess at the viewer's.
   for (const post of posts)
-    if (post.authorName !== '' && post.pending !== true) known.set(post.authorKey, { name: post.authorName, image: post.authorImage });
+    if (post.authorName !== '' && post.pending !== true)
+      known.set(post.authorKey, {
+        name: post.authorName,
+        image: post.authorImage,
+        ...withAccountType('accountType', post.authorAccountType),
+      });
   return posts.map((post) => {
     if (post.authorName !== '') return post;
     const person = known.get(post.authorKey);
-    if (person) return { ...post, authorName: person.name, authorImage: person.image };
+    if (person)
+      return {
+        ...post,
+        authorName: person.name,
+        authorImage: person.image,
+        ...withAccountType('authorAccountType', person.accountType),
+      };
     return { ...post, authorName: post.authorKey === viewerId ? 'You' : UNKNOWN_USER };
   });
 };

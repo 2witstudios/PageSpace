@@ -29,6 +29,8 @@ interface ChannelInboxFanoutInput {
   lastMessageAt: string;
   lastMessagePreview: string;
   lastMessageSender: string | undefined;
+  /** users.accountType of a user sender; null for an AI page sender (Agent Signup Phase 2c). */
+  lastMessageSenderAccountType: string | null;
 }
 
 /**
@@ -73,6 +75,7 @@ async function fanOutChannelInboxUpdate(
           lastMessageAt: input.lastMessageAt,
           lastMessagePreview: input.lastMessagePreview,
           lastMessageSender: input.lastMessageSender,
+          lastMessageSenderAccountType: input.lastMessageSenderAccountType,
         })
       )
   );
@@ -411,6 +414,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
           replyWithRelations?.user?.name ||
           'Member',
       };
+      // The inbox marks an agent sender (Phase 2c); an AI page persona is not a user account.
+      const replySenderAccountType = replyWithRelations?.aiMeta?.senderName
+        ? null
+        : replyWithRelations?.user?.accountType ?? null;
       const replyCreatedAt = result.lastReplyAt.toISOString();
 
       const followers = await channelMessageRepository.listChannelThreadFollowers(result.rootId);
@@ -489,6 +496,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
               lastMessageAt: replyCreatedAt,
               lastMessagePreview: replyPreview,
               lastMessageSender: replySender.name,
+              lastMessageSenderAccountType: replySenderAccountType,
             })
           )
         );
@@ -515,6 +523,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
             : replyCreatedAt,
           lastMessagePreview: mirrorPreview,
           lastMessageSender: replySender.name,
+          lastMessageSenderAccountType: replySenderAccountType,
         });
       }
 
@@ -667,6 +676,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
         lastMessageAt: newMessage?.createdAt?.toISOString() || new Date().toISOString(),
         lastMessagePreview: messagePreview,
         lastMessageSender: newMessage?.aiMeta?.senderName || newMessage?.user?.name || undefined,
+        lastMessageSenderAccountType: newMessage?.aiMeta?.senderName ? null : newMessage?.user?.accountType ?? null,
       });
 
       await notifyMentionedUsers({

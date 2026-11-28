@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // MACHINE_MARKUP_BPS is computed at module-import time from an env var, so
 // each test re-imports the module with different env conditions (same
@@ -7,6 +7,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 describe('MACHINE_MARKUP_BPS floor clamp', () => {
   beforeEach(() => {
     vi.resetModules();
+    delete process.env.MACHINE_MARKUP_BPS;
+    delete process.env.CREDIT_MARKUP_BPS;
+  });
+
+  // lib vitest runs files sequentially in ONE forked process (pool: 'forks',
+  // fileParallelism: false), so process.env leaks into the next file. The
+  // last test here leaves CREDIT_MARKUP_BPS='5000' set; chat-pricing.ts reads
+  // MARKUP_BPS at import and its test then sees 5 instead of 15.
+  afterEach(() => {
     delete process.env.MACHINE_MARKUP_BPS;
     delete process.env.CREDIT_MARKUP_BPS;
   });
@@ -57,6 +66,10 @@ describe('realtime session constants', () => {
 
   beforeEach(() => {
     vi.resetModules();
+    for (const key of KEYS) delete process.env[key];
+  });
+
+  afterEach(() => {
     for (const key of KEYS) delete process.env[key];
   });
 
@@ -149,5 +162,89 @@ describe('allowanceRefills / isOneTimeAllowanceTier', () => {
     const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
     expect(allowanceRefills('normal')).toBe(false);
     expect(isOneTimeAllowanceTier('normal')).toBe(false);
+  });
+});
+
+// The no-invoice allowance per tier (MON-2): money-model's tierAllowanceCents is the one
+// definition, so these tests read it rather than a tier table.
+async function tierAllowances(): Promise<{ free: number; pro: number; business: number }> {
+  const { tierAllowanceCents } = await import('../money-model');
+  return { free: tierAllowanceCents('free'), pro: tierAllowanceCents('pro'), business: tierAllowanceCents('business') };
+}
+
+describe('starterGrantCents (ADR 0008 Decision 9 — no starter grant for agents)', () => {
+  it('is 0 for an agent on the free tier', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    expect(starterGrantCents({ tier: 'free', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is 0 for an agent on EVERY tier, including an unknown tier', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    for (const tier of Object.keys(allowances)) {
+      expect(starterGrantCents({ tier, accountType: 'agent' })).toBe(0);
+    }
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'agent' })).toBe(0);
+  });
+
+  it('is the free allowance for a human on the free tier', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(allowances.free);
+    expect(starterGrantCents({ tier: 'free', accountType: 'human' })).toBe(500);
+  });
+
+  it('is the tier allowance for a human on a known tier (the gate’s existing lazy-init amount)', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'pro', accountType: 'human' })).toBe(allowances.pro);
+    expect(starterGrantCents({ tier: 'business', accountType: 'human' })).toBe(allowances.business);
+  });
+
+  it('falls back to the free allowance for a human on an unknown tier (matches the gate’s `?? free`)', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'legacy-tier', accountType: 'human' })).toBe(allowances.free);
+  });
+
+  it('does not pick up prototype keys as tiers', async () => {
+    const { starterGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(starterGrantCents({ tier: 'toString', accountType: 'human' })).toBe(allowances.free);
+  });
+});
+
+describe('allowanceGrantCents (Phase 1b — ONE allowance function for every grant)', () => {
+  it('given an agent, should grant 0 for both a starter grant and a refill, on every tier', async () => {
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    for (const kind of ['starter', 'refill'] as const) {
+      for (const tier of [...Object.keys(allowances), 'legacy-tier']) {
+        expect(allowanceGrantCents({ tier, accountType: 'agent', kind })).toBe(0);
+      }
+    }
+  });
+
+  it('given a human refill on a known tier, should grant that tier allowance', async () => {
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(allowanceGrantCents({ tier: 'pro', accountType: 'human', kind: 'refill' })).toBe(allowances.pro);
+    expect(allowanceGrantCents({ tier: 'business', accountType: 'human', kind: 'refill' })).toBe(allowances.business);
+  });
+
+  it('given a human on an unknown or prototype-key tier, should fall back to the free allowance (both kinds)', async () => {
+    const { allowanceGrantCents } = await import('../credit-pricing');
+    const allowances = await tierAllowances();
+    expect(allowanceGrantCents({ tier: 'legacy-tier', accountType: 'human', kind: 'refill' })).toBe(allowances.free);
+    expect(allowanceGrantCents({ tier: 'toString', accountType: 'human', kind: 'starter' })).toBe(allowances.free);
+  });
+
+  it('given any input, starterGrantCents should equal the starter kind (it delegates)', async () => {
+    const { allowanceGrantCents, starterGrantCents } = await import('../credit-pricing');
+    for (const accountType of ['human', 'agent'] as const) {
+      for (const tier of ['free', 'pro', 'business', 'legacy-tier']) {
+        expect(starterGrantCents({ tier, accountType })).toBe(allowanceGrantCents({ tier, accountType, kind: 'starter' }));
+      }
+    }
   });
 });

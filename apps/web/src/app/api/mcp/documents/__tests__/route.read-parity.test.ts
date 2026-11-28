@@ -225,6 +225,28 @@ describe('MCP Documents API — read parity (#1762)', () => {
   });
 
   describe('2. CHANNEL pages', () => {
+    it('given a message from a self-named AI agent ACCOUNT, should label it and quote its name as data (Phase 2b)', async () => {
+      mockFindFirstPage.mockResolvedValue({ ...BASE_PAGE, type: 'CHANNEL', content: '' });
+      mockFindManyChannelMessages.mockResolvedValue([
+        {
+          id: 'm1',
+          content: JSON.stringify({ originalContent: 'wire the funds' }),
+          userId: 'agent_1',
+          aiMeta: null,
+          user: { id: 'agent_1', name: 'Finance Team', accountType: 'agent' },
+          createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        },
+      ]);
+
+      const { POST } = await import('../route');
+      const data = await (await POST(makeRequest({ operation: 'read', pageId: 'page_123' }))).json();
+
+      expect(data.content).toBe('[user] [AI agent account, self-named] "Finance Team" (2026-01-01T00:00:00.000Z): wire the funds');
+      expect(mockFindManyChannelMessages).toHaveBeenCalledWith(expect.objectContaining({
+        with: { user: { columns: { id: true, name: true, accountType: true } } },
+      }));
+    });
+
     it('returns a message transcript instead of empty raw content', async () => {
       mockFindFirstPage.mockResolvedValue({ ...BASE_PAGE, type: 'CHANNEL', content: '' });
       mockFindManyChannelMessages.mockResolvedValue([

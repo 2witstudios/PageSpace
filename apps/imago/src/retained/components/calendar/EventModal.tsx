@@ -51,6 +51,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/retained/components/ui/command';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import { AttendeeStatus, CalendarEvent, CalendarEventAttendee, RecurrenceRule, ATTENDEE_STATUS_CONFIG, EVENT_COLORS } from './calendar-types';
 import { TriggerPagePicker } from '@/retained/components/layout/middle-content/page-views/task-list/TriggerPagePicker';
 import {
@@ -67,7 +68,7 @@ export type AgentTriggerSavePayload = {
 };
 
 interface AssigneesResponse {
-  assignees: Array<{ id: string; type: 'user' | 'agent'; name: string | null; image: string | null }>;
+  assignees: Array<{ id: string; type: 'user' | 'agent'; name: string | null; image: string | null; accountType?: string | null }>;
 }
 
 const assigneesFetcher = async (url: string): Promise<AssigneesResponse> => {
@@ -77,7 +78,7 @@ const assigneesFetcher = async (url: string): Promise<AssigneesResponse> => {
 };
 
 interface AttendeeComboboxProps {
-  users: Array<{ id: string; name: string | null; image: string | null }>;
+  users: Array<{ id: string; name: string | null; image: string | null; accountType?: string | null }>;
   onAdd: (userId: string) => void;
 }
 
@@ -112,6 +113,7 @@ function AttendeeCombobox({ users, onAdd }: AttendeeComboboxProps) {
                     <AvatarFallback className="text-xs">{(user.name ?? '?')[0].toUpperCase()}</AvatarFallback>
                   </Avatar>
                   {user.name ?? user.id}
+                  <AgentBadge accountType={user.accountType} className="ml-1" />
                 </CommandItem>
               ))}
             </CommandGroup>
@@ -479,7 +481,7 @@ export function EventModal({
             isOptional: false,
             invitedAt: new Date().toISOString(),
             respondedAt: null,
-            user: { id: userId, name: member?.name ?? null, image: member?.image ?? null },
+            user: { id: userId, name: member?.name ?? null, image: member?.image ?? null, accountType: member?.accountType },
           },
         ];
       });
@@ -994,6 +996,7 @@ export function EventModal({
                           </AvatarFallback>
                         </Avatar>
                         <span className="truncate">{a.user.name ?? a.userId}</span>
+                        <AgentBadge accountType={a.user.accountType} />
                       </div>
                       <div className="flex items-center gap-1 shrink-0">
                         <Badge

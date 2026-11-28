@@ -7,6 +7,8 @@ import { Icon } from '../../components/icon/icon';
 import { Popover } from '../../components/popover/popover';
 import { menuCheckClass, menuItemClass, menuLabelClass } from '../../components/popover/popover-class';
 import type { Assignee } from '../task-model/task';
+import { assigneeLabel } from '../task-model/assignee-label';
+import { AgentMark } from '../../components/agent-mark/agent-mark';
 import {
   taskAssigneeEmptyClass,
   taskAssigneeFilterClass,
@@ -61,7 +63,7 @@ function AssigneeOptions({ assigned, offered, toggle }: AssigneePickerProps): Re
                     type="button"
                     role="checkbox"
                     aria-checked={on}
-                    aria-label={`Assign ${entry.name}`}
+                    aria-label={`Assign ${assigneeLabel(entry)}`}
                     className={menuItemClass}
                     onClick={() => toggle(entry)}
                   >
@@ -69,6 +71,7 @@ function AssigneeOptions({ assigned, offered, toggle }: AssigneePickerProps): Re
                       <Avatar name={entry.name} size="xs" agent={entry.type === 'agent'} />
                     </span>
                     <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+                    {entry.type === 'user' ? <AgentMark accountType={entry.accountType} /> : null}
                     {on ? <Icon name="check" size={14} className={menuCheckClass} /> : null}
                   </button>
                 );
@@ -93,7 +96,7 @@ export function AssigneePicker(props: AssigneePickerProps): ReactNode {
           {assigned.length === 0 ? (
             <span className={taskUnassignedClass}>Unassigned</span>
           ) : (
-            <AvatarGroup names={assigned.map((entry) => entry.name)} agents={agents} label="Assigned to" />
+            <AvatarGroup names={assigned.map(assigneeLabel)} agents={agents} label="Assigned to" />
           )}
           <Icon name="chevronDown" size={12} />
         </button>

@@ -273,3 +273,68 @@ describe('attachQuotedMessages — snapshot shape', () => {
     });
   });
 });
+
+describe('attachQuotedMessages — agent marker (Agent Signup Phase 2c)', () => {
+  it('selects the author accountType on both scopes', async () => {
+    mockChannelFindMany.mockResolvedValue([]);
+    await attachQuotedMessages([{ id: 'r1', quotedMessageId: 'q1' }], 'channel');
+    await attachQuotedMessages([{ id: 'r2', quotedMessageId: 'q2' }], 'dm');
+
+    assert({
+      given: 'a quote lookup on each scope',
+      should: 'ask for the author accountType next to the name',
+      actual: {
+        channel: mockChannelFindMany.mock.calls[0][0].with.user.columns.accountType,
+        dm: mockDmFindMany.mock.calls[0][0].with.sender.columns.accountType,
+      },
+      expected: { channel: true, dm: true },
+    });
+  });
+
+  it('carries an agent author\'s accountType on the snapshot, name unchanged', async () => {
+    mockDmFindMany.mockResolvedValue([
+      { ...dmRow('q1'), sender: { id: 'user-2', name: 'PageSpace Support', image: null, accountType: 'agent' } },
+    ]);
+
+    const result = await attachQuotedMessages([{ id: 'r1', quotedMessageId: 'q1' }], 'dm');
+
+    assert({
+      given: 'a quote of a message written by an agent account',
+      should: 'expose authorAccountType so the quote block can mark it',
+      actual: { name: result[0].quotedMessage?.authorName, type: result[0].quotedMessage?.authorAccountType },
+      expected: { name: 'PageSpace Support', type: 'agent' },
+    });
+  });
+
+  it('gives an AI-page-authored quote no account type (the persona is not a user account)', async () => {
+    mockChannelFindMany.mockResolvedValue([
+      {
+        ...channelRow('q1'),
+        user: { id: 'human-1', name: 'Alice', image: null, accountType: 'agent' },
+        aiMeta: { senderType: 'agent', senderName: 'Triage Agent', agentPageId: 'agent-page-7' },
+      },
+    ]);
+
+    const result = await attachQuotedMessages([{ id: 'r1', quotedMessageId: 'q1' }], 'channel');
+
+    assert({
+      given: 'an AI-authored channel quote',
+      should: 'leave authorAccountType null',
+      actual: result[0].quotedMessage?.authorAccountType,
+      expected: null,
+    });
+  });
+
+  it('gives a human (or erased) author a null-or-human account type', async () => {
+    mockChannelFindMany.mockResolvedValue([channelRow('q1')]);
+
+    const result = await attachQuotedMessages([{ id: 'r1', quotedMessageId: 'q1' }], 'channel');
+
+    assert({
+      given: 'a quote whose author row carries no account type',
+      should: 'leave authorAccountType null and the name unchanged',
+      actual: { name: result[0].quotedMessage?.authorName, type: result[0].quotedMessage?.authorAccountType },
+      expected: { name: 'Alice', type: null },
+    });
+  });
+});

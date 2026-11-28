@@ -241,6 +241,17 @@ describe('POST /api/auth/magic-link/send', () => {
       expect(body.errors.email).toEqual(['Please enter a valid email address']);
     });
 
+    it('given an address under the agent reserved domain, should return the ordinary invalid-email 400 and never reach the pipe', async () => {
+      // ADR 0008 §4 site 1: no distinct oracle — byte-identical to a malformed address.
+      const malformed = await (await POST(createMagicLinkRequest({ email: 'not-an-email' }))).json();
+      const response = await POST(createMagicLinkRequest({ email: 'Agent-abc@AGENTS.pagespace.invalid' }));
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body).toEqual(malformed);
+      expect(pipeInner).not.toHaveBeenCalled();
+    });
+
     it('returns 400 for missing email', async () => {
       const request = createMagicLinkRequest({});
       const response = await POST(request);
@@ -578,6 +589,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'invitee@example.com',
           isExistingUser: false,
@@ -601,6 +613,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'Joe@Example.com',
           isExistingUser: false,
@@ -623,6 +636,7 @@ describe('POST /api/auth/magic-link/send', () => {
         data: {
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           role: 'MEMBER',
           email: 'someone-else@example.com',
           isExistingUser: false,

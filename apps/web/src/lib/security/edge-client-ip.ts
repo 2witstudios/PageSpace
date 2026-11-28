@@ -9,8 +9,9 @@
  *
  * Prefers Fly's own `Fly-Client-IP` header — set by Fly's edge from the
  * actual TCP peer it accepted the connection from, so it cannot be spoofed
- * by a client-supplied header (GitHub issue #1908). Falls back to
- * `x-forwarded-for`/`x-real-ip` for local dev/CI, where there's no Fly edge.
+ * by a client-supplied header (GitHub issue #1908). Off Fly it is a LOGGING
+ * address only (see `getClientIP` below): the gating copy in packages/lib is
+ * default-deny, this one reports the observed address.
  *
  * EXCEPT: `Fly-Client-IP` is set fresh per Fly Proxy hop, not chained.
  * `pagespace.ai` traffic reaches this app via `pagespace-proxy` (Caddy) over
@@ -33,14 +34,57 @@
  * Machine automatically (never client-settable); use its presence to gate
  * trust, not `DEPLOYMENT_MODE` — see the `packages/lib` copy's doc for why.
  */
-export function getClientIP(request: Request): string {
-  const flyClientIP = process.env.FLY_APP_NAME ? request.headers.get('fly-client-ip')?.trim() : undefined;
-  if (flyClientIP && !flyClientIP.toLowerCase().startsWith('fdaa:')) return flyClientIP;
+const IPV4 = /^(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?:\.(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
-  return (
-    request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    request.headers.get('x-real-ip')?.trim() ||
-    flyClientIP ||
-    'unknown'
-  );
+/** A duplicate of packages/lib `isIpAddress`: only an IP literal is ever reported. */
+function isIpAddress(value: string): boolean {
+  if (IPV4.test(value)) return true;
+  const address = value.split('%')[0] ?? '';
+  if (!/^[0-9a-f:.]+$/i.test(address) || !address.includes(':')) return false;
+  let groups = address;
+  let tailGroups = 0;
+  const lastColon = address.lastIndexOf(':');
+  const tail = address.slice(lastColon + 1);
+  if (tail.includes('.')) {
+    if (!IPV4.test(tail)) return false;
+    groups = `${address.slice(0, lastColon + 1)}0`;
+    tailGroups = 1;
+  }
+  const halves = groups.split('::');
+  if (halves.length > 2) return false;
+  const parts = halves.flatMap((half) => (half ? half.split(':') : []));
+  if (!parts.every((part) => /^[0-9a-f]{1,4}$/i.test(part))) return false;
+  const total = parts.length + tailGroups;
+  return halves.length === 2 ? total <= 7 : total === 8;
+}
+
+function ipOrUnknown(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  return trimmed && isIpAddress(trimmed) ? trimmed : 'unknown';
+}
+
+/**
+ * The address the middleware graph LOGS (security events, monitoring ingest).
+ * It never gates anything, so unlike the packages/lib copy it does not fail
+ * closed: when no trusted proxy is declared it reports the observed address
+ * (x-forwarded-for's first entry, else x-real-ip) rather than `unknown` — a
+ * forged value there can only mislabel a log line, while `unknown` would strip
+ * the address from every origin/authorization event. Under a declared
+ * TRUSTED_PROXY_HOPS it reports the same entry the gating copy trusts. Every
+ * reported value must parse as an IP literal.
+ */
+export function getClientIP(request: Request): string {
+  const headers = request.headers;
+  const forwardedFor = (headers.get('x-forwarded-for') ?? '').split(',').map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+
+  if (process.env.FLY_APP_NAME) {
+    const flyClientIP = headers.get('fly-client-ip')?.trim();
+    if (flyClientIP && !flyClientIP.toLowerCase().startsWith('fdaa:') && isIpAddress(flyClientIP)) return flyClientIP;
+    return ipOrUnknown(forwardedFor[0] || headers.get('x-real-ip') || flyClientIP);
+  }
+
+  const rawHops = process.env.TRUSTED_PROXY_HOPS?.trim() ?? '';
+  const hops = /^\d{1,2}$/.test(rawHops) ? Number.parseInt(rawHops, 10) : 0;
+  if (hops >= 1 && forwardedFor.length >= hops) return ipOrUnknown(forwardedFor[forwardedFor.length - hops]);
+  return ipOrUnknown(forwardedFor[0] || headers.get('x-real-ip'));
 }

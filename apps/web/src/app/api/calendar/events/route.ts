@@ -340,12 +340,12 @@ export async function GET(request: Request) {
         ),
         with: {
           createdBy: {
-            columns: { id: true, name: true, image: true },
+            columns: { id: true, name: true, image: true, accountType: true },
           },
           attendees: {
             with: {
               user: {
-                columns: { id: true, name: true, image: true },
+                columns: { id: true, name: true, image: true, accountType: true },
               },
             },
           },
@@ -453,12 +453,12 @@ export async function GET(request: Request) {
       ),
       with: {
         createdBy: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         attendees: {
           with: {
             user: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
           },
         },
@@ -720,12 +720,12 @@ export async function POST(request: Request) {
       where: eq(calendarEvents.id, event.id),
       with: {
         createdBy: {
-          columns: { id: true, name: true, image: true },
+          columns: { id: true, name: true, image: true, accountType: true },
         },
         attendees: {
           with: {
             user: {
-              columns: { id: true, name: true, image: true },
+              columns: { id: true, name: true, image: true, accountType: true },
             },
           },
         },

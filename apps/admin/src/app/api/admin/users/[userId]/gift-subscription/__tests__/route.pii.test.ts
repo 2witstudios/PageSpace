@@ -147,6 +147,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { stripe } from '@/lib/stripe';
 import { getOrCreateStripeCustomer } from '@/lib/stripe-customer';
+import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 
 function postRequest(body: unknown) {
   return new NextRequest('http://localhost/api/admin/users/user-target/gift-subscription', {
@@ -197,6 +198,20 @@ describe('Gift subscription PII handling', () => {
       expect(body.message).toBe(`Gifted pro subscription to ${PLAINTEXT_NAME}`);
       expect(JSON.stringify(body)).not.toContain(CIPHERTEXT_EMAIL);
       expect(JSON.stringify(body)).not.toContain(CIPHERTEXT_NAME);
+    });
+
+    it('given an agent target, should refuse 403 when getOrCreateStripeCustomer refuses and never create a coupon or subscription', async () => {
+      dbSelectMock
+        .mockReturnValueOnce(userSelectThenable)
+        .mockReturnValueOnce(noActiveSubsSelect);
+      vi.mocked(getOrCreateStripeCustomer).mockRejectedValueOnce(new AgentStripeCustomerRefusedError('user-target'));
+
+      const res = await POST(postRequest({ tier: 'pro', reason: 'thanks' }), ctx);
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ error: 'Agent accounts are billed through their owner' });
+      expect(stripe.coupons.create).not.toHaveBeenCalled();
+      expect(stripe.subscriptions.create).not.toHaveBeenCalled();
     });
 
     it('masks the DECRYPTED email (not ciphertext) and omits targetUserName in the log', async () => {

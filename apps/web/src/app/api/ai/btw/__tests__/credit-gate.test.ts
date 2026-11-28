@@ -191,6 +191,19 @@ describe('POST /api/ai/btw credit gate', () => {
     expect(mocks.trackUsage).not.toHaveBeenCalled();
   });
 
+  // Agent Signup (ADR 0008 Decision 9): an unclaimed agent has no credits and no
+  // way to buy any, so the refusal points at the claim flow, never "add credits".
+  it('refuses an unclaimed agent with 402 requires_funding + claim_url and never builds or calls the model', async () => {
+    mocks.gate.mockResolvedValue({ allowed: false, reason: 'requires_funding' });
+    const response = await post();
+    expect(response.status).toBe(402);
+    expect(await response.json()).toMatchObject({ error: 'requires_funding', claim_url: expect.any(String) });
+    expect(mocks.provider).not.toHaveBeenCalled();
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(mocks.trackUsage).not.toHaveBeenCalled();
+    expect(mocks.releaseHold).not.toHaveBeenCalled();
+  });
+
   it('applies the chat in-flight cap and refuses with 429 when it is hit', async () => {
     mocks.gate.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
     const response = await post();

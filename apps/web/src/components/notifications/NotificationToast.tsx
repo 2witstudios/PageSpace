@@ -5,6 +5,7 @@ import { X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { StoredNotification } from '@/lib/notifications/resolve-destination';
 import { getNotificationIcon } from './notificationIcons';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 export interface NotificationToastProps {
   notification: StoredNotification;
@@ -59,6 +60,7 @@ export function NotificationToast({ notification, onSelect, onDismiss }: Notific
             <>
               <span aria-hidden>·</span>
               <span>by {triggeredByName}</span>
+              <AgentBadge accountType={notification.triggeredByUser?.accountType} />
             </>
           ) : null}
         </div>

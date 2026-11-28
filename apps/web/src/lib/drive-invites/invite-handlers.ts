@@ -464,12 +464,17 @@ export async function handleEmailPath(args: {
   // (the partial unique index covers consumedAt IS NULL regardless of
   // expiresAt).
   try {
-    await sendPendingDriveInvitationEmail({
+    const outcome = await sendPendingDriveInvitationEmail({
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       driveName: drive.name,
       inviteUrl,
     });
+    // A suppressed send (reserved agent recipient) delivered nothing: treat it
+    // exactly like a failed send so the pending row is undone.
+    if (outcome.status === 'suppressed') {
+      throw new Error('Invitation email suppressed: recipient cannot receive mail');
+    }
   } catch (emailError) {
     loggers.api.error(
       'Failed to send pending drive invitation email; rolling back pending invite row',

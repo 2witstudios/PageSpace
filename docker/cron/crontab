@@ -53,6 +53,13 @@
 # Anonymizes prompt/completion text >30 days, purges rows >90 days
 0 3 * * * cron-curl POST __WEB_URL__/api/cron/purge-ai-usage-logs >> /var/log/cron/purge-ai-usage.log 2>&1
 
+# Agent lifecycle - Hourly at :45 (ADR 0008 Decision 13, [D-30]; security review addendum)
+# Deletes expired agent signup challenges and agent claims, and erases unclaimed AI agent
+# accounts that never signed in within 30 days of signing up, through the GDPR account-erasure
+# path. Each run drains the backlog in batches of 50, up to 500 erasures or 5 minutes, so it
+# outruns the 100-an-hour signup budget. An agent that ever signed in, or has an owner, is never touched.
+45 * * * * flock -n /run/agent-lifecycle.lock cron-curl GET __WEB_URL__/api/cron/agent-lifecycle >> /var/log/cron/agent-lifecycle.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/agent-lifecycle.log
+
 # Deleted message purge - Daily at 4am UTC
 # Hard-deletes soft-deleted messages and conversations older than 30 days
 0 4 * * * cron-curl POST __WEB_URL__/api/cron/purge-deleted-messages >> /var/log/cron/purge-messages.log 2>&1

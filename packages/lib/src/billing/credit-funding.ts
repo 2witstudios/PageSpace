@@ -48,6 +48,7 @@ import { debtClearedRow, DEBT_FORGIVEN_ENTRY } from './wallet-ledger-core';
 import { grantForInvoice } from './invoice-grant';
 import { GIFT_SUBSCRIPTION_METADATA_TYPE } from './wallet-funding';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import type { AccountType } from '../auth/agent/account-type';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { loggers } from '../logging/logger-config';
 
@@ -148,14 +149,14 @@ function invoicePeriod(obj: FundingEventObject): { start: Date | null; end: Date
 
 async function resolveUser(
   customerId: string,
-): Promise<{ id: string } | null> {
+): Promise<{ id: string; accountType: AccountType } | null> {
   const rows = await db
-    .select({ id: users.id })
+    .select({ id: users.id, accountType: users.accountType })
     .from(users)
     .where(eq(users.stripeCustomerId, customerId))
     .limit(1);
   if (!rows.length) return null;
-  return { id: rows[0].id };
+  return { id: rows[0].id, accountType: rows[0].accountType };
 }
 
 /**
@@ -362,6 +363,14 @@ async function applyMonthlyRefill(event: FundingEvent, tierOverride?: Subscripti
   const user = await resolveUser(customerId);
   if (!user) {
     loggers.api.warn('credit funding skipped: user not found for customer', { eventId: event.id });
+    return;
+  }
+
+  // No allowance for an agent, ever (ADR 0008 Decision 9, Phase 1b). An agent cannot
+  // hold a Stripe customer (stripe-customer-eligibility), so this is defence in depth:
+  // an agent's invoice writes nothing rather than a monthly_grant row.
+  if (user.accountType === 'agent') {
+    loggers.api.warn('credit funding skipped: agent accounts receive no allowance', { eventId: event.id, userId: user.id });
     return;
   }
 

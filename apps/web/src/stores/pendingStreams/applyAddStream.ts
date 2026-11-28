@@ -6,7 +6,8 @@ export interface PendingStream {
   messageId: string;
   pageId: string;
   conversationId: string;
-  triggeredBy: { userId: string; displayName: string };
+  /** `accountType` is set only for an agent account (Agent Signup Phase 2c). */
+  triggeredBy: { userId: string; displayName: string; accountType?: 'agent' };
   parts: UIMessagePart[];
   isOwn: boolean;
   /** ISO timestamp of the stream's start, used to stamp synthesized bubbles with a `createdAt`. */

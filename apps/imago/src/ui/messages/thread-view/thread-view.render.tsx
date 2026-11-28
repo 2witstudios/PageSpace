@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { renderAgentMark } from '../../components/agent-mark/agent-mark.render';
 import { renderAvatar } from '../../components/avatar/avatar.render';
 import { AuthorAvatar } from '../../metal/author-avatar';
 import { renderButton } from '../../components/button/button.render';
@@ -38,6 +39,8 @@ export type ThreadViewRenderProps = {
   readonly name: string;
   /** The other person's picture in a DM. */
   readonly image?: string | null;
+  /** The other person's `users.accountType` in a DM: `agent` marks the title (Agent Signup Phase 2c). */
+  readonly accountType?: string;
   readonly viewerId: string;
   readonly status: 'loading' | 'error' | 'ready';
   readonly items: readonly PostItem[];
@@ -145,6 +148,7 @@ const renderPost = (post: Post, lead: boolean, viewerId: string): ReactNode => (
       {lead ? (
         <p className="flex items-baseline gap-2">
           <b className={postAuthorClass}>{post.authorName}</b>
+          {renderAgentMark({ accountType: post.authorAccountType })}
           <time dateTime={post.at} className={postTimeClass}>
             {formatTime(post.at)}
           </time>
@@ -244,12 +248,13 @@ const composerOrNotice = ({ kind, name, canPost, composer }: ThreadViewRenderPro
  * marked busy until apps/web answers.
  */
 export function renderThreadView(props: ThreadViewRenderProps): ReactNode {
-  const { kind, name, image, viewerId, status, items, older, loadOlder } = props;
+  const { kind, name, image, accountType, viewerId, status, items, older, loadOlder } = props;
   return (
     <section className={threadClass} aria-label={words[kind].label(name)}>
       <h1 className={threadTitleClass}>
         {glyph(kind, name, image)}
         <span>{name}</span>
+        {renderAgentMark({ accountType })}
       </h1>
       {status === 'ready' && items.length > 0 ? (
         <>

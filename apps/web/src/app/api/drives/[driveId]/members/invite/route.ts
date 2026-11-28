@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
@@ -31,7 +32,7 @@ const inviteBodySchema = z.union([
     permissions: z.array(permissionEntrySchema).default([]),
   }),
   z.object({
-    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254).refine(notAgentReservedEmail, { message: 'Invalid email address' })),
     role: z.enum(['MEMBER', 'ADMIN']).default('MEMBER'),
     customRoleId: z.string().nullable().optional(),
     permissions: z.array(permissionEntrySchema).default([]),

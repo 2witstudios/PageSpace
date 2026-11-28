@@ -78,6 +78,7 @@ import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
 import { executeWorkflow } from '@/lib/workflows/workflow-executor';
 import { getNextRunDate } from '@/lib/workflows/cron-utils';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 // ============================================================================
 // Fixtures
@@ -330,16 +331,15 @@ describe('POST /api/workflows/[workflowId]/run', () => {
     const executorThatAdmits = () => vi.mocked(executeWorkflow).mockImplementation(async (_input, options) => {
       const admission = await options?.admit?.();
       if (admission && !admission.admitted) {
-        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error };
+        const reason = admission.reason as 'out_of_credits' | 'too_many_in_flight' | 'requires_funding';
+        const kind = reason === 'too_many_in_flight' ? 'transient' as const : 'terminal' as const;
+        return { success: false, skipped: true, durationMs: 0, runId: 'run_1', error: admission.error, refusal: { reason, kind } };
       }
       return { success: true, durationMs: 1 };
     });
 
     const denyWith = (reason: string) => mockCreditAdmission.mockImplementation(
-      (_input: unknown, _mode: unknown, onDenied?: (r: string) => void) => async () => {
-        onDenied?.(reason);
-        return { admitted: false, error: `AI credit gate denied: ${reason}` };
-      },
+      () => async () => ({ admitted: false, error: `AI credit gate denied: ${reason}`, reason }),
     );
 
     test('SPEND-6 (partial) WAL-7 (partial) hands the executor the credit gate as its admit hook: the drive the workflow runs in pays, and the person who pressed Run is gated, so their caps bind', async () => {
@@ -351,7 +351,7 @@ describe('POST /api/workflows/[workflowId]/run', () => {
 
       const [input, options] = vi.mocked(executeWorkflow).mock.calls[0];
       expect(options?.admit).toBe(admit);
-      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', expect.any(Function), 'admin_clicker');
+      expect(mockCreditAdmission).toHaveBeenCalledWith(input, 'interactive', undefined, 'admin_clicker');
       expect(input.createdBy).toBe('user_123');
       // SPEND-6: the gate is told the drive the run spends; the creator is only who it is recorded against.
       expect(input.driveId).toBe(mockWorkflow.driveId);
@@ -369,6 +369,29 @@ describe('POST /api/workflows/[workflowId]/run', () => {
       expect(body.code).toBe('out_of_credits');
       expect(body.error).toMatch(/credit balance is too low/);
       expect(getNextRunDate).not.toHaveBeenCalled();
+    });
+
+    test('an unclaimed agent: 402 requires_funding with the claim_url it needs, a readable error, no schedule advance and no run audit', async () => {
+      executorThatAdmits();
+      denyWith('requires_funding');
+
+      const response = await run();
+      const body = await response.json();
+
+      expect(response.status).toBe(402);
+      expect(body.code).toBe('requires_funding');
+      expect(body.error).toMatch(/claim/);
+      expect(body.claim_url).toEqual(expect.any(String));
+      expect(getNextRunDate).not.toHaveBeenCalled();
+      expect(mockUpdateSet).not.toHaveBeenCalled();
+      expect(auditRequest).not.toHaveBeenCalled();
+    });
+
+    test('out of credits carries no claim_url', async () => {
+      executorThatAdmits();
+      denyWith('out_of_credits');
+
+      expect((await (await run()).json()).claim_url).toBeUndefined();
     });
 
     test('in-flight cap: 429', async () => {

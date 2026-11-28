@@ -18,6 +18,7 @@ const driveOk = (isExistingUser: boolean): InviteResolution => ({
     kind: 'drive',
     driveName: 'Studio',
     inviterName: 'Jono',
+    inviterAccountType: 'human',
     role: 'MEMBER',
     email: EMAIL,
     isExistingUser,
@@ -64,6 +65,7 @@ describe('InviteCardV3', () => {
         pageTitle: 'Q4 Launch Plan',
         driveName: 'Studio',
         inviterName: 'Jono',
+    inviterAccountType: 'human',
         permissions: [],
         email: 'marcus@kimdesign.example',
         isExistingUser,
@@ -83,7 +85,7 @@ describe('InviteCardV3', () => {
   it('Given a connection invite, should show the connect heading and switch the CTA on isExistingUser', () => {
     const conn = (isExistingUser: boolean): InviteResolution => ({
       ok: true,
-      data: { kind: 'connection', inviterName: 'Dana', email: 'marcus@kimdesign.example', isExistingUser, message: null },
+      data: { kind: 'connection', inviterName: 'Dana', inviterAccountType: 'human', email: 'marcus@kimdesign.example', isExistingUser, message: null },
     });
 
     const { unmount } = render(<InviteCardV3 resolution={conn(true)} token="tok" />);
@@ -100,5 +102,29 @@ describe('InviteCardV3', () => {
 
     expect(screen.getByRole('heading', { level: 1, name: 'This invite is no longer valid' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Go to sign in' })).toHaveAttribute('href', '/auth/signin');
+  });
+  describe('an AI agent inviter (ADR 0008: the marker comes from accountType, never the name)', () => {
+    const asAgent = (resolution: InviteResolution): InviteResolution =>
+      resolution.ok ? { ok: true, data: { ...resolution.data, inviterAccountType: 'agent' } } : resolution;
+    const pageOk: InviteResolution = {
+      ok: true,
+      data: { kind: 'page', pageTitle: 'Brief', driveName: 'Studio', inviterName: 'Jono', inviterAccountType: 'human', permissions: [], email: EMAIL, isExistingUser: false },
+    };
+    const connectionOk: InviteResolution = {
+      ok: true,
+      data: { kind: 'connection', inviterName: 'Dana', inviterAccountType: 'human', email: EMAIL, isExistingUser: false, message: null },
+    };
+
+    it.each([
+      ['drive', driveOk(false)],
+      ['page', pageOk],
+      ['connection', connectionOk],
+    ])('Given a %s invite from an agent, should badge the inviter; from a human, should not', (_kind, human) => {
+      const { unmount } = render(<InviteCardV3 resolution={human} token="tok" />);
+      expect(screen.queryByLabelText('AI agent account')).not.toBeInTheDocument();
+      unmount();
+      render(<InviteCardV3 resolution={asAgent(human)} token="tok" />);
+      expect(screen.getByLabelText('AI agent account')).toBeInTheDocument();
+    });
   });
 });

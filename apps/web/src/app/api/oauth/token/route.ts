@@ -28,15 +28,28 @@
  * device_code falls back to the shared invalid_grant.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getClientIP } from '@/lib/auth';
-import { getRegisteredClient, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
+import { authenticateRequestWithOptions, getClientIP, isAuthError } from '@/lib/auth';
+import { resolveClaimCaller } from '@/lib/agent-auth/claim-caller';
+import { getRegisteredClient, clientAllowsGrant, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
   ensureOAuthClientRow,
   exchangeAuthorizationCode,
   refreshTokenGrant,
   pollDeviceToken,
+  exchangeAgentAssertion,
+  findRefreshTokenFamilyId,
 } from '@/lib/repositories/oauth-repository';
+import { AGENT_ASSERTION_GRANT_TYPE, AGENT_CLAIM_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
+import { pollAgentClaim, type PollAgentClaimResult } from '@/lib/repositories/agent-claim-repository';
+import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
+import { isAgentDoorOpen } from '@/lib/agent-auth/door';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
+import { loggers } from '@pagespace/lib/logging/logger-config';
+import { isDatabaseError, redactDbError } from '@pagespace/lib/logging/db-error-redaction';
+import { AgentIdentityStoreError } from '@pagespace/lib/services/agent-identities';
+import { PAGESPACE_AGENT_CLIENT_ID } from '@pagespace/lib/auth/oauth/clients';
+import { agentTokenIpRateLimitKey, agentTokenCredentialRateLimitKey, agentRefreshRateLimitKey, agentRateLimitAddress } from '@pagespace/lib/auth/agent/token-rate-limit-keys';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { getActorInfo, logTokenActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { checkDistributedRateLimit, DISTRIBUTED_RATE_LIMITS } from '@pagespace/lib/security/distributed-rate-limit';
@@ -142,6 +155,34 @@ async function checkTokenExchangeRateLimit(req: NextRequest, clientId: string): 
 }
 
 /**
+ * The `pagespace-agent` client's grants (jwt-bearer and its refresh_token)
+ * are NOT limited per client: every agent on the platform shares that
+ * client_id, so a per-client bucket is one global bucket a single IP could
+ * exhaust to lock every agent out. Instead: per IP (AGENT_TOKEN_IP, generous —
+ * a fleet behind one NAT or CI runner shares an IP) and per credential
+ * (AGENT_TOKEN_CREDENTIAL, tight): on jwt-bearer the presented secret's hash;
+ * on refresh the token FAMILY, because a refresh token rotates on every use
+ * and a bucket keyed on it would be a fresh bucket per refresh
+ * (`agentRefreshRateLimitKey`). The IP bucket runs first, so the one family
+ * lookup is itself throttled; both answer the same 429 shape as
+ * `checkTokenExchangeRateLimit`, so the buckets are indistinguishable on the wire.
+ */
+async function checkAgentTokenRateLimit(req: NextRequest, credentialBucket: () => Promise<string>): Promise<NextResponse | null> {
+  const ip = getClientIP(req);
+  const ipLimit = await checkDistributedRateLimit(agentTokenIpRateLimitKey(ip), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_IP);
+  const credentialLimit = ipLimit.allowed
+    ? await checkDistributedRateLimit(await credentialBucket(), DISTRIBUTED_RATE_LIMITS.AGENT_TOKEN_CREDENTIAL)
+    : null;
+  if (ipLimit.allowed && credentialLimit?.allowed) return null;
+
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_token_rate_limited', bucket: !ipLimit.allowed ? 'ip' : 'credential' },
+  });
+  return noStoreJson({ error: 'rate_limited', retryAfter: Math.max(ipLimit.retryAfter ?? 0, credentialLimit?.retryAfter ?? 0) }, 429);
+}
+
+/**
  * device_code polling is a distinct risk profile: RFC 8628 legitimate
  * traffic is ~1 poll per pollIntervalSeconds from a single flow, already
  * throttled per-device-code by decideDevicePoll's own slow_down. This is an
@@ -182,7 +223,7 @@ async function resolveClient(form: URLSearchParams, clientId: string, grantType:
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
-  if (!client.allowedGrantTypes.includes(grantType)) {
+  if (!clientAllowsGrant(client, grantType)) {
     return { rejection: noStoreJson(INVALID_GRANT, 400) };
   }
 
@@ -338,7 +379,11 @@ async function handleRefreshTokenGrant(req: NextRequest, form: URLSearchParams):
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
-  const rateLimited = await checkTokenExchangeRateLimit(req, clientId);
+  // pagespace-agent is limited per IP + per token family (see checkAgentTokenRateLimit);
+  // every other client keeps its per-client bucket unchanged.
+  const rateLimited = clientId === PAGESPACE_AGENT_CLIENT_ID
+    ? await checkAgentTokenRateLimit(req, async () => agentRefreshRateLimitKey({ familyId: await findRefreshTokenFamilyId(refreshToken), refreshToken }))
+    : await checkTokenExchangeRateLimit(req, clientId);
   if (rateLimited) return rateLimited;
 
   const resolved = await resolveClient(form, clientId, 'refresh_token');
@@ -454,7 +499,223 @@ async function handleDeviceCodeGrant(req: NextRequest, form: URLSearchParams): P
   return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
 }
 
+/**
+ * The jwt-bearer grant (RFC 7523 URN; ADR 0008 Decisions 5-6, threat model
+ * T3/T4): an AI agent exchanges its opaque `ps_agent_*` secret (the auth.md
+ * `identity_assertion` — not a JWT) for a `ps_at_`/`ps_rt_` pair minted for
+ * ITSELF, scoped `account` (+ `offline_access`).
+ *
+ * The client check runs before the secret is ever looked up. A REGISTERED
+ * client whose grant list excludes this grant (`pagespace-cli`) is told
+ * `unauthorized_client` (RFC 6749 §5.2): client ids are public, so naming the
+ * refusal leaks nothing about the credential, and it keeps an agent secret
+ * from ever being redeemed through the CLI's client. Every credential or
+ * scope failure — unknown, revoked, suspended or locked agent, a content or
+ * key-shaped scope, an unknown client — is the one `invalid_grant` body.
+ */
+async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
+  // ADR 0008 Decision 11: a deployment with the agent door closed has no agent
+  // grant at all — the same answer as any grant this endpoint does not speak.
+  if (!isAgentDoorOpen()) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_door_closed' } });
+    return noStoreJson({ error: 'unsupported_grant_type' }, 400);
+  }
+
+  const assertion = form.get('assertion');
+  const clientId = form.get('client_id');
+  if (!assertion || !clientId) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_invalid_request' } });
+    return noStoreJson(INVALID_REQUEST, 400);
+  }
+
+  const rateLimited = await checkAgentTokenRateLimit(req, async () => agentTokenCredentialRateLimitKey(assertion));
+  if (rateLimited) return rateLimited;
+
+  const registered = getRegisteredClient(clientId);
+  if (registered && !clientAllowsGrant(registered, AGENT_ASSERTION_GRANT_TYPE)) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: registered.clientId, oauthEvent: 'agent_assertion_unauthorized_client' } });
+    return noStoreJson({ error: 'unauthorized_client' }, 400);
+  }
+
+  const resolved = await resolveClient(form, clientId, AGENT_ASSERTION_GRANT_TYPE);
+  if ('rejection' in resolved) {
+    // Unknown client, or a client_secret on the public agent client.
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_assertion_client_rejected' } });
+    return resolved.rejection;
+  }
+  const { client, clientDbId } = resolved;
+
+  const scope = resolveAgentAssertionScopes(form.get('scope'));
+  if (!scope.ok) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: client.clientId, oauthEvent: 'agent_assertion_scope_refused' } });
+    return noStoreJson(INVALID_GRANT, 400);
+  }
+
+  const result = await exchangeAgentAssertion({ assertion, clientDbId, scopes: scope.scopes, now: new Date() });
+
+  if (result.outcome !== 'ok') {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: result.userId ?? undefined,
+      details: { clientId: client.clientId, oauthEvent: 'agent_assertion_rejected', outcome: result.outcome },
+    });
+    return noStoreJson(INVALID_GRANT, 400);
+  }
+
+  auditRequest(req, {
+    eventType: 'auth.token.created',
+    userId: result.userId,
+    details: { clientId: client.clientId, oauthEvent: 'agent_assertion_exchanged' },
+  });
+
+  // The API door's sign-in. createAgentAccount returns the one-time secret even
+  // if Home-drive provisioning failed after its commit, relying on a later
+  // sign-in to retry — this is that retry (idempotent; a no-op once the drive
+  // exists), exactly as the magic-link sign-in does. Never blocks the tokens.
+  try {
+    await provisionHomeDriveIfNeeded(result.userId);
+  } catch (error) {
+    loggers.auth.error('Failed to provision Home drive on agent sign-in', error as Error, { userId: result.userId });
+  }
+
+  return noStoreJson(tokenSuccessBody(result.tokens, result.scopes), 200);
+}
+
+/**
+ * The agent claim grant (auth.md "Fund"; ADR 0008 Decisions 3, 5, 7 and the
+ * security review addendum): the AGENT polls its own claim while a human
+ * approves at `/claim`, authenticated by its own `pagespace-agent` access token
+ * as `Authorization: Bearer` — the only credential that can name the claim, so
+ * nobody but the agent (not a claim approver, not a former owner, not a client
+ * the agent granted access) can poll it. A `claim_token` parameter is refused:
+ * there is no claim token.
+ *
+ * The device-flow vocabulary is answered by name (the poller must know whether
+ * to keep waiting, back off, or restart); a missing, invalid or foreign bearer
+ * is one 401 `invalid_token` (RFC 6750); no claim, a second poll after the
+ * approval was reported, and an agent that became unusable are the one
+ * `invalid_grant`. On approval the answer is `{claimed:true, owner}` — and
+ * NOTHING else: no token is minted on this grant (Decision 7 — the agent keeps
+ * the tokens it already holds).
+ *
+ * Polling uses the device-poll limit (OAUTH_DEVICE_POLL), keyed per IP (before
+ * anything is authenticated) and per agent — never per client: every agent
+ * shares `pagespace-agent`, and a per-client bucket would be one platform-wide
+ * bucket an IP could exhaust.
+ */
+const CLAIM_POLL_ERROR_BODY: Record<Exclude<PollAgentClaimResult['outcome'], 'ok'>, Record<string, unknown>> = {
+  not_found: INVALID_GRANT,
+  authorization_pending: { error: 'authorization_pending' },
+  slow_down: { error: 'slow_down' },
+  expired_token: { error: 'expired_token' },
+  access_denied: { error: 'access_denied' },
+  already_redeemed: INVALID_GRANT,
+  agent_unavailable: INVALID_GRANT,
+};
+
+const CLAIM_POLL_AUTH_OPTIONS = { allow: ['oauth'] as const, requireCSRF: false };
+
+function claimPollRateLimited(req: NextRequest, bucket: 'ip' | 'agent'): NextResponse {
+  auditRequest(req, {
+    eventType: 'security.rate.limited',
+    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_claim_poll_rate_limited', bucket },
+  });
+  return noStoreJson({ error: 'slow_down' }, 400);
+}
+
+function invalidClaimPollToken(req: NextRequest, reason: string): NextResponse {
+  auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_claim_poll_refused', reason } });
+  return NextResponse.json({ error: 'invalid_token' }, {
+    status: 401,
+    headers: { 'Cache-Control': 'no-store', 'WWW-Authenticate': 'Bearer error="invalid_token"' },
+  });
+}
+
+async function handleAgentClaimGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
+  if (!isAgentDoorOpen()) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_claim_door_closed' } });
+    return noStoreJson({ error: 'unsupported_grant_type' }, 400);
+  }
+
+  const clientId = form.get('client_id');
+  // The retired claim token is refused by name, before anything else, so a
+  // stale client stops instead of presenting a second secret anywhere.
+  if (!clientId || form.has('claim_token')) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_claim_invalid_request' } });
+    return noStoreJson(INVALID_REQUEST, 400);
+  }
+
+  const ipLimit = await checkDistributedRateLimit(`oauth-token:agent_claim_poll:ip:${agentRateLimitAddress(getClientIP(req))}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL);
+  if (!ipLimit.allowed) return claimPollRateLimited(req, 'ip');
+
+  const registered = getRegisteredClient(clientId);
+  if (registered && !clientAllowsGrant(registered, AGENT_CLAIM_GRANT_TYPE)) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: registered.clientId, oauthEvent: 'agent_claim_unauthorized_client' } });
+    return noStoreJson({ error: 'unauthorized_client' }, 400);
+  }
+
+  const resolved = await resolveClient(form, clientId, AGENT_CLAIM_GRANT_TYPE);
+  if ('rejection' in resolved) {
+    auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_claim_client_rejected' } });
+    return resolved.rejection;
+  }
+  const { client } = resolved;
+
+  if (!req.headers.get('authorization')) return invalidClaimPollToken(req, 'no_bearer');
+  const auth = await authenticateRequestWithOptions(req, CLAIM_POLL_AUTH_OPTIONS);
+  if (isAuthError(auth)) return invalidClaimPollToken(req, 'bearer_invalid');
+  const caller = await resolveClaimCaller(auth, 'bearer');
+  if (!caller.ok) return invalidClaimPollToken(req, 'not_the_agent_itself');
+
+  const agentLimit = await checkDistributedRateLimit(`oauth-token:agent_claim_poll:agent:${caller.agentUserId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL);
+  if (!agentLimit.allowed) return claimPollRateLimited(req, 'agent');
+
+  const result = await pollAgentClaim({ agentUserId: caller.agentUserId, now: new Date() });
+
+  if (result.outcome !== 'ok') {
+    auditRequest(req, {
+      eventType: 'authz.access.denied',
+      userId: caller.agentUserId,
+      details: { clientId: client.clientId, oauthEvent: 'agent_claim_poll_rejected', outcome: result.outcome },
+    });
+    return noStoreJson(CLAIM_POLL_ERROR_BODY[result.outcome], 400);
+  }
+
+  auditRequest(req, {
+    eventType: 'authz.permission.granted',
+    userId: result.agentUserId,
+    resourceType: 'agent_identity',
+    resourceId: result.agentUserId,
+    details: { clientId: client.clientId, oauthEvent: 'agent_claim_reported', ownerUserId: result.owner.id },
+  });
+
+  return noStoreJson({ claimed: true, owner: result.owner }, 200);
+}
+
+/**
+ * Every grant binds a credential hash into its queries (a code, a refresh
+ * token, an agent secret, the new token pair), and drizzle's DrizzleQueryError
+ * message is the query plus its bound params. Such an error must not reach
+ * Next's request-error log or Sentry (`instrumentation.ts` onRequestError)
+ * verbatim, so a DATABASE error (a DrizzleQueryError, or a Postgres SQLSTATE in
+ * the cause chain — `isDatabaseError`) is caught here, logged as its redacted
+ * class/code/constraint, and answered with a constant 503. Anything else is a
+ * code bug with no bound values in it — including Node builtin errors, which all
+ * carry a `code` — and is rethrown so Sentry still sees it.
+ */
 export async function POST(req: NextRequest) {
+  try {
+    return await handleTokenRequest(req);
+  } catch (error) {
+    // An AgentIdentityStoreError is the lib service's already-redacted database
+    // failure: answer it exactly as /api/agent/identity does (503).
+    if (!(error instanceof AgentIdentityStoreError) && !isDatabaseError(error)) throw error;
+    loggers.auth.error('OAuth token request failed', redactDbError(error));
+    return noStoreJson({ error: 'temporarily_unavailable' }, 503);
+  }
+}
+
+async function handleTokenRequest(req: NextRequest): Promise<NextResponse> {
   const contentType = req.headers.get('content-type') ?? '';
   if (!contentType.toLowerCase().includes('application/x-www-form-urlencoded')) {
     return noStoreJson(INVALID_REQUEST, 400);
@@ -471,6 +732,12 @@ export async function POST(req: NextRequest) {
   }
   if (grantType === 'urn:ietf:params:oauth:grant-type:device_code') {
     return handleDeviceCodeGrant(req, form);
+  }
+  if (grantType === AGENT_ASSERTION_GRANT_TYPE) {
+    return handleAgentAssertionGrant(req, form);
+  }
+  if (grantType === AGENT_CLAIM_GRANT_TYPE) {
+    return handleAgentClaimGrant(req, form);
   }
 
   return noStoreJson({ error: 'unsupported_grant_type' }, 400);

@@ -29,7 +29,8 @@ export type LogoutHostOutcome =
   | { readonly host: string; readonly kind: 'not_logged_in' }
   | { readonly host: string; readonly kind: 'revoked' }
   | { readonly host: string; readonly kind: 'forced'; readonly reason: string }
-  | { readonly host: string; readonly kind: 'revoke_failed'; readonly reason: string };
+  | { readonly host: string; readonly kind: 'revoke_failed'; readonly reason: string }
+  | { readonly host: string; readonly kind: 'agent_secret_kept' };
 
 export interface LogoutHandlerDeps {
   readonly createCredentialStore: () => CredentialStore;
@@ -50,6 +51,12 @@ export function formatLogoutLine(outcome: LogoutHostOutcome): string {
         `Could not log out of ${outcome.host}: server-side revocation failed (${outcome.reason}). ` +
         'The local credential was NOT removed. Re-run with --force to remove it anyway, or try again.'
       );
+    case 'agent_secret_kept':
+      return (
+        `Not logged out of ${outcome.host}: the stored login is an AI agent's own account, and logging out deletes its ` +
+        'secret from this machine — without the secret the agent can never sign in again. Re-run with --yes if you ' +
+        'have a copy of the secret, or no longer need this agent.'
+      );
     default: {
       const unreachable: never = outcome;
       throw new Error(`Unhandled logout outcome: ${JSON.stringify(unreachable)}`);
@@ -59,7 +66,7 @@ export function formatLogoutLine(outcome: LogoutHostOutcome): string {
 
 /** Pure: no I/O. Fails iff at least one host's revocation failed without --force. */
 export function summarizeLogout(outcomes: readonly LogoutHostOutcome[]): ExitCode {
-  return outcomes.some((outcome) => outcome.kind === 'revoke_failed') ? EXIT_RUNTIME_ERROR : EXIT_SUCCESS;
+  return outcomes.some((outcome) => outcome.kind === 'revoke_failed' || outcome.kind === 'agent_secret_kept') ? EXIT_RUNTIME_ERROR : EXIT_SUCCESS;
 }
 
 async function logoutHost(
@@ -68,6 +75,7 @@ async function logoutHost(
   revokeToken: RevokeToken,
   force: boolean,
   profile: string,
+  yes = false,
 ): Promise<LogoutHostOutcome> {
   const credential = await store.get(host, profile);
   // A machine credential (`pagespace env enroll`) is not a login; forgetting it
@@ -87,7 +95,18 @@ async function logoutHost(
     return { host, kind: 'revoked' };
   }
 
-  const result = await revokeToken({ host, refreshToken: credential.refreshToken, clientId: credential.clientId });
+  // An agent's secret is the only way back into its account: never delete it
+  // unasked. With --yes, revoke the live refresh token (if any) and forget it.
+  if (credential.kind === 'agent') {
+    if (!yes) return { host, kind: 'agent_secret_kept' };
+    if (credential.refreshToken === null) {
+      await store.delete(host, profile);
+      return { host, kind: 'revoked' };
+    }
+  }
+
+  const refreshToken = credential.refreshToken ?? '';
+  const result = await revokeToken({ host, refreshToken, clientId: credential.clientId });
 
   if (result.outcome === 'revoked') {
     await store.delete(host, profile);
@@ -126,12 +145,12 @@ export function createLogoutHandler(deps: LogoutHandlerDeps): CommandHandler {
 
     const outcomes: LogoutHostOutcome[] = [];
     for (const target of hosts) {
-      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force, keyName));
+      outcomes.push(await logoutHost(target, store, deps.revokeToken, intent.flags.force, keyName, intent.flags.yes));
     }
 
     for (const outcome of outcomes) {
       const line = `${formatLogoutLine(outcome)}\n`;
-      if (outcome.kind === 'revoke_failed') ctx.stderr.write(line);
+      if (outcome.kind === 'revoke_failed' || outcome.kind === 'agent_secret_kept') ctx.stderr.write(line);
       else ctx.stdout.write(line);
     }
 

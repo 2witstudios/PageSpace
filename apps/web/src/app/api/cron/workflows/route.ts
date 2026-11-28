@@ -90,6 +90,7 @@ export async function POST(req: Request) {
     };
 
     let executed = 0;
+    let deferred = 0;
     let totalAttempted = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -115,12 +116,17 @@ export async function POST(req: Request) {
           // next schedule advance.
           //
           // The credit gate runs inside that claim, on the owner the run bills,
-          // before any model is built. A refused fire comes back `skipped` (the
-          // executor records it as a cancelled run with the reason) and still
-          // advances the schedule, so an out-of-credits owner's workflow is not
-          // re-fired and re-reported on every tick.
+          // before any model is built. A settled refusal comes back `skipped`
+          // (the executor records it as a cancelled run with the reason) and
+          // still advances the schedule, so an out-of-credits owner's workflow
+          // is not re-fired and re-reported on every tick. A retryable one (a
+          // transient refusal, or the gate itself threw) gave its claim back
+          // and wrote no run: keep the past-due slot so the next tick fires it
+          // again (bounded to 24h by the executor). 'scheduled': a server-
+          // scheduled fire is not interactive fan-out, so the per-user daily
+          // backstop is skipped.
           const result = await executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') });
-          if (!result.claimConflict) {
+          if (!result.claimConflict && !result.retryable) {
             await advanceNextRunAt(workflow);
           }
           return { workflow, result };
@@ -140,6 +146,8 @@ export async function POST(req: Request) {
           totalAttempted++;
           if (outcome.result.success) {
             executed++;
+          } else if (outcome.result.retryable) {
+            deferred++;
           } else {
             errors.push(`${outcome.workflow.name}: ${outcome.result.error}`);
           }
@@ -167,11 +175,12 @@ export async function POST(req: Request) {
 
     loggers.api.info(`Workflow cron: Complete. Executed ${executed}/${totalAttempted}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, failed: errors.length, skipped } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'workflows', details: { executed, deferred, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Workflow cron complete',
       executed,
+      deferred,
       total: totalAttempted,
       skipped,
       errors: errors.length > 0 ? errors : undefined,

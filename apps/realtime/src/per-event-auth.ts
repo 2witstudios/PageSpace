@@ -165,6 +165,8 @@ export interface AuthSocket extends Socket {
       id: string;
       name: string;
       avatarUrl: string | null;
+      /** `agent` marks a self-named AI agent account in presence (Agent Signup Phase 2b). */
+      accountType?: 'human' | 'agent';
     };
     /**
      * The connecting credential as the permission layer's actor (D-OW-45): its user and the ceremony evidence the

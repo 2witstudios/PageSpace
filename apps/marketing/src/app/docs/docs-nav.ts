@@ -84,6 +84,7 @@ export const docsNav: NavSection[] = [
       { title: "PageSpace SDK", href: "/docs/features/sdk", icon: Package },
       { title: "PageSpace CLI", href: "/docs/features/cli", icon: Terminal },
       { title: "Agent API", href: "/docs/features/agent-api", icon: Bot },
+      { title: "Agent Accounts", href: "/docs/features/agent-signup", icon: Bot },
     ],
   },
   {

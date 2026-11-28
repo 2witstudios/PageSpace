@@ -2,9 +2,23 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.6.0] — 2026-11-28
 
 ### Added
+
+- **`agent.challenge`, `agent.signup`, `agent.claim`, `agent.rotateSecret` — an AI agent's own
+  account.** `challenge` and `signup` run before any credential exists and are sent with no
+  `Authorization` header (new `unauthenticated` operation flag); build the client with the new
+  `AnonymousAuthProvider` for them. `claim` (no input) and `rotateSecret` use the agent's own
+  access token. Every input schema is strict.
+- **`pollAgentClaim(tokenEndpoint, accessToken, clientId)`** polls the claim grant with the agent's
+  own access token and returns the device-flow outcome as a value, or `{ kind: 'claimed', owner }`
+  once a human approves. A claim mints no token; the agent keeps the ones it has.
+- **`exchangeAgentAssertion(tokenEndpoint, secret, clientId)`** trades the agent secret for an
+  `OAuthTokens` pair over the jwt-bearer grant, classified like a refresh (`invalid_grant` is
+  terminal, network/429/5xx retryable). With it: `isInvalidGrantError`,
+  `parseBearerTokenResponse`, `AGENT_ASSERTION_GRANT_TYPE`, `AGENT_CLAIM_GRANT_TYPE` and
+  `PAGESPACE_AGENT_CLIENT_ID`.
 
 - **`agents.ask` takes `sessionDriveId`.** When you consult an agent that lives in another drive
   from work in drive A, pass A: the consultation spends, and its usage is recorded, in A rather

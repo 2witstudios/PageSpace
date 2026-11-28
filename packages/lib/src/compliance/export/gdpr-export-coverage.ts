@@ -154,6 +154,36 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   wallets: 'wallet',
   wallet_funding_legs: 'wallet',
   drive_spend_overrides: 'wallet',
+  // An agent's own login (ADR 0008). Its owner link, claim time, source, last
+  // sign-in and revocation are facts about the subject; the secret and claim
+  // token are not exported (see AGENT_IDENTITY_WITHHELD_COLUMNS).
+  agent_identities: 'agentIdentity',
+};
+
+/**
+ * The `agent_identities` columns `collectUserAgentIdentity` selects. Together
+ * with {@link AGENT_IDENTITY_WITHHELD_COLUMNS} this is a per-column decision for
+ * the table, checked against the schema by the coverage test.
+ */
+export const AGENT_IDENTITY_EXPORTED_COLUMNS = [
+  'userId',
+  'ownerUserId',
+  'claimedAt',
+  'source',
+  'lastAuthAt',
+  'createdAt',
+  'revokedAt',
+  'secretVersion',
+  'createdByIp',
+] as const;
+
+const AGENT_CREDENTIAL_COLUMN =
+  'Credential material for the agent account (a SHA3-256 hash or the identifying prefix of its live secret) — disclosing it in a downloadable bundle would help an attacker who obtains the bundle, and it describes a credential, not the subject.';
+
+/** `agent_identities` columns deliberately NOT exported, each with its reason. */
+export const AGENT_IDENTITY_WITHHELD_COLUMNS: Readonly<Record<string, string>> = {
+  secretHash: AGENT_CREDENTIAL_COLUMN,
+  secretPrefix: AGENT_CREDENTIAL_COLUMN,
 };
 
 /**
@@ -237,6 +267,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // token value is stored, and nothing in the row is authored by or about the
     // subject.
     'app_deploy_token_mints',
+    // The claim ceremony row (ADR 0008): a hashed user code with its approval
+    // state — same shape and reasoning as `oauth_device_codes`. The agent's own
+    // identity row is exported under `agentIdentity` (below), secrets withheld.
+    'agent_claims',
   ),
 
   ...withReason(
@@ -253,6 +287,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // grant they bound could no longer verify. The credentialed action itself
     // IS disclosed, from the hash-chained security audit, not from here.
     'agent_account_grant_nonces',
+    // Proof-of-work challenges for the agent signup door (ADR 0008 Decision
+    // 10): a hashed random challenge, a difficulty and an expiry, issued
+    // before any account exists and bound to no user.
+    'agent_signup_challenges',
     // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
     // same reasoning as `app_hosting_reclaims` immediately above, just pointed
     // at a Stripe subscription id instead of a Fly app name. Nothing here is

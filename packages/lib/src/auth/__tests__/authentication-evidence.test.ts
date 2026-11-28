@@ -10,6 +10,8 @@ describe('the evidence each sign-in ceremony records (D-OW-45)', () => {
     [{ method: 'apple' }, 'single_factor'],
     [{ method: 'passkey', userVerified: false }, 'single_factor'],
     [{ method: 'passkey', userVerified: true }, 'user_verified_passkey'],
+    // Agent Signup Phase 3: an AI agent's browser sign-in presents its one opaque secret — one factor.
+    [{ method: 'agent_secret' }, 'single_factor'],
   ])('SEC-2 (partial) %o records %s at the ceremony time', (ceremony, assurance) => {
     expect(ceremonyAuthentication(ceremony, nowMs)).toEqual({ authenticatedAtMs: nowMs, assurance });
   });

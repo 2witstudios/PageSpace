@@ -48,6 +48,12 @@ export type SecurityEventType =
   | 'auth.session.revoked'
   | 'auth.device.registered'
   | 'auth.device.revoked'
+  // Agent identities (ADR 0008, Agent Signup Phase 4). `claimed`: a human approved
+  // a claim and now owns (and pays for) the agent; resourceId is the agent's user
+  // id. `revoked`: the owner revoked the agent — its secret stops signing in and
+  // every live token and mcp_ key dies in the same transaction.
+  | 'auth.agent.claimed'
+  | 'auth.agent.revoked'
   | 'authz.access.granted'
   | 'authz.access.denied'
   | 'authz.permission.granted'

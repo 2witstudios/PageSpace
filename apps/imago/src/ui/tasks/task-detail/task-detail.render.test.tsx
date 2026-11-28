@@ -171,3 +171,43 @@ describe('renderTaskDetail()', () => {
     });
   });
 });
+
+describe('renderTaskDetail() — AI agent accounts (Agent Signup 2c)', () => {
+  const withAgent = parent('a', [], {
+    title: 'Plan launch',
+    assignees: [
+      { type: 'user', id: 'u1', name: 'Ada', accountType: 'human' },
+      { type: 'user', id: 'u2', name: 'Helper', accountType: 'agent' },
+    ],
+  });
+  const facesLabel = (container: HTMLElement) =>
+    container.querySelector('[role="group"][aria-label="Fields"] [aria-label^="Assigned to"]')?.getAttribute('aria-label');
+
+  test('read-only and editable faces', () => {
+    assert({
+      given: 'a task with a person and an AI agent account on it, for a viewer and an editor',
+      should: 'mark only the agent account in the faces\' accessible name',
+      actual: [facesLabel(setup(false, withAgent).container), facesLabel(setup(true, withAgent).container)],
+      expected: ['Assigned to Ada, Helper (AI agent)', 'Assigned to Ada, Helper (AI agent)'],
+    });
+  });
+
+  test('picker options', () => {
+    const { container } = setup(true, withAgent);
+    const chip = container.querySelector<HTMLElement>('[role="group"][aria-label="Fields"] [aria-label^="Assigned to"]')?.closest('button');
+    if (!chip) throw new Error('no assignee chip');
+    click(chip);
+    const option = (name: string) => document.querySelector(`[role="checkbox"][aria-label^="Assign ${name}"]`);
+    assert({
+      given: 'the assignee picker opened on that task',
+      should: 'name and mark the agent account, and leave the person unmarked',
+      actual: [
+        option('Helper')?.getAttribute('aria-label'),
+        option('Helper')?.querySelector('[aria-label="AI agent account"]') !== null,
+        option('Ada')?.getAttribute('aria-label'),
+        option('Ada')?.querySelector('[aria-label="AI agent account"]') ?? null,
+      ],
+      expected: ['Assign Helper (AI agent)', true, 'Assign Ada', null],
+    });
+  });
+});

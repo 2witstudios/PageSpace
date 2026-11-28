@@ -21,9 +21,16 @@ const RESTRICTED_CLIENT = {
   firstParty: false,
 };
 
-vi.mock('@pagespace/lib/auth/oauth/clients', () => ({
-  getRegisteredClient: (clientId: string) => (clientId === RESTRICTED_CLIENT_ID ? RESTRICTED_CLIENT : null),
-}));
+vi.mock('@pagespace/lib/auth/oauth/clients', async (importOriginal) => {
+  // Only the registry lookup is faked; the grant guard stays REAL so this
+  // suite exercises the shared clientAllowsGrant the route now enforces with.
+  const actual = await importOriginal<typeof import('@pagespace/lib/auth/oauth/clients')>();
+  return {
+    clientAllowsGrant: actual.clientAllowsGrant,
+    PAGESPACE_AGENT_CLIENT_ID: actual.PAGESPACE_AGENT_CLIENT_ID,
+    getRegisteredClient: (clientId: string) => (clientId === RESTRICTED_CLIENT_ID ? RESTRICTED_CLIENT : null),
+  };
+});
 
 const ensureOAuthClientRow = vi.fn();
 const exchangeAuthorizationCode = vi.fn();

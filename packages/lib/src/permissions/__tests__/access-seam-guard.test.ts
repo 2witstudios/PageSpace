@@ -88,6 +88,7 @@ describe('SEC-2 (partial) SEC-3 (partial) the org sign-in seam is structural (D-
     // run as the request's credential instead, never as an automation.
     const CONFINED_TO_THEIR_DRIVE: Record<string, string> = {
       'apps/web/src/app/api/cron/scheduled-backups/route.ts': 'a backup schedule, confined to the drive it backs up',
+      'apps/web/src/lib/agent-auth/lifecycle-erasure.ts': 'abandoned-agent erasure (ADR 0008 D13): mints the erasure token for the agent\'s own account, reaches no drive',
       'apps/web/src/lib/agent-workspaces/agent-workspaces-runtime.ts': 'session-end teardown binds nothing: reaches no drive',
       'apps/web/src/lib/auth/google-avatar.ts': 'avatar import during sign-in: the user\'s own avatar, reaches no drive',
       'apps/web/src/lib/canvas/publish-page.ts': 'published-site regeneration, confined to the published drive',

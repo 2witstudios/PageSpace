@@ -91,6 +91,9 @@ beforeAll(async () => {
   resetAuditDbBindingForTests();
   resetDefaultSecurityAuditForTests();
   vi.stubEnv('WEB_APP_URL', 'http://localhost');
+  // Each sign-up comes from its own x-forwarded-for address, through one declared proxy: off Fly that header is
+  // ignored unless TRUSTED_PROXY_HOPS is set (client-ip.ts), and every sign-up would share one magic-link IP bucket.
+  vi.stubEnv('TRUSTED_PROXY_HOPS', '1');
   vi.stubEnv('OAUTH_STATE_SECRET', 'sec-1-oauth-state-secret-for-integration-tests');
 });
 

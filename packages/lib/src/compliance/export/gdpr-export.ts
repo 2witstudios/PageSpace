@@ -4,6 +4,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
+import { agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages, tags } from '@pagespace/db/schema/core';
@@ -61,6 +62,8 @@ export interface UserProfileExport {
   email: string;
   image: string | null;
   timezone: string | null;
+  /** `human` or `agent` (ADR 0008 Decision 1) — which kind of account this export describes. */
+  accountType: 'human' | 'agent';
   createdAt: Date;
   updatedAt: Date;
 }
@@ -566,6 +569,8 @@ export interface AllUserData {
   contentTags: UserContentTagExport[];
   /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
+  /** The subject's own agent-account row (ADR 0008), secrets withheld; empty for a human. */
+  agentIdentity: UserAgentIdentityExport[];
   /** Orgs the subject OWNS (X-2). */
   organizations: UserOrganizationExport[];
   /** The subject's org life: memberships, departures, join requests, guest holds (X-2). */
@@ -647,6 +652,7 @@ export async function collectUserProfile(database: DB, userId: string): Promise<
       email: users.email,
       image: users.image,
       timezone: users.timezone,
+      accountType: users.accountType,
       createdAt: users.createdAt,
       updatedAt: users.updatedAt,
     })
@@ -1850,6 +1856,40 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
 }
 
 /**
+ * An agent account's own identity facts (ADR 0008). The column set is
+ * `AGENT_IDENTITY_EXPORTED_COLUMNS` in gdpr-export-coverage.ts; the secret
+ * hash and prefix are never selected.
+ */
+export interface UserAgentIdentityExport {
+  userId: string;
+  ownerUserId: string | null;
+  claimedAt: Date | null;
+  source: string | null;
+  lastAuthAt: Date | null;
+  createdAt: Date;
+  revokedAt: Date | null;
+  secretVersion: number;
+  createdByIp: string | null;
+}
+
+export async function collectUserAgentIdentity(database: DB, userId: string): Promise<UserAgentIdentityExport[]> {
+  return database
+    .select({
+      userId: agentIdentities.userId,
+      ownerUserId: agentIdentities.ownerUserId,
+      claimedAt: agentIdentities.claimedAt,
+      source: agentIdentities.source,
+      lastAuthAt: agentIdentities.lastAuthAt,
+      createdAt: agentIdentities.createdAt,
+      revokedAt: agentIdentities.revokedAt,
+      secretVersion: agentIdentities.secretVersion,
+      createdByIp: agentIdentities.createdByIp,
+    })
+    .from(agentIdentities)
+    .where(eq(agentIdentities.userId, userId));
+}
+
+/**
  * An ORG the subject OWNS (Spec X-2). The org row is the founder's record —
  * they named it, they own it — so its identity travels. Everything else about
  * it (policies, subscription, domains) is the organisation's own record and
@@ -2248,7 +2288,7 @@ export async function collectAllUserData(database: DB, userId: string, gate: Exp
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [collectedPages, userSheets, collectedMessages, collectedFiles, collectedActivity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, collectedTasks, userSessions, userNotifications, userDisplayPreferences, userSettings, collectedPersonalization, collectedCandidates, collectedPulse, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet] = await Promise.all([
+  const [collectedPages, userSheets, collectedMessages, collectedFiles, collectedActivity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, collectedTasks, userSessions, userNotifications, userDisplayPreferences, userSettings, collectedPersonalization, collectedCandidates, collectedPulse, userAgentWorkspaces, userAgentAccounts, userStreamState, userContentTags, userLocalEnvironments, userOrganizations, userOrgMembership, userWallet, userAgentIdentity] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -2274,6 +2314,7 @@ export async function collectAllUserData(database: DB, userId: string, gate: Exp
     collectUserOrganizations(database, userId),
     collectUserOrgMembership(database, userId),
     collectUserWallet(database, userId),
+    collectUserAgentIdentity(database, userId),
   ]);
 
   const withheld = new WithheldLedger();
@@ -2371,6 +2412,7 @@ export async function collectAllUserData(database: DB, userId: string, gate: Exp
     organizations: userOrganizations,
     orgMembership: userOrgMembership,
     wallet: userWallet,
+    agentIdentity: userAgentIdentity,
   };
 }
 

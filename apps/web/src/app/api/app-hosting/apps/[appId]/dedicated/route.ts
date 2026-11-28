@@ -44,6 +44,7 @@ import { decideDedicatedPurchaser } from '@pagespace/lib/services/app-hosting/de
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { lookupDriveBillingFacts, payerForDrive } from '@pagespace/lib/billing/sandbox-payer';
+import { AgentStripeCustomerRefusedError } from '@pagespace/lib/billing/stripe-customer-eligibility';
 import { getPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { isDedicatedTierPurchasable } from '@pagespace/lib/services/app-hosting/dedicated-tier-service';
 import {
@@ -180,6 +181,11 @@ export async function POST(request: NextRequest, context: { params: Promise<{ ap
       error instanceof Error ? error : undefined,
       { publishedAppId: app.id },
     );
+    // An agent drive owner never holds its own Stripe customer (ADR 0008
+    // Decision 8); getOrCreateStripeCustomer refuses it before any Stripe call.
+    if (error instanceof AgentStripeCustomerRefusedError) {
+      return NextResponse.json({ error: error.message }, { status: 403 });
+    }
     return NextResponse.json({ error: 'Failed to start dedicated hosting' }, { status: 500 });
   }
 }

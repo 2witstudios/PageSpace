@@ -5,7 +5,8 @@ import { click, mount, unmountAll } from '../../test-support/dom';
 import type { CalendarEvent } from '@/retained/components/calendar/calendar-types';
 import { attendeeRoleLabel, eventTimeLabel, minutesBefore } from './event-popover';
 
-vi.mock('swr', () => ({ default: () => ({ data: undefined, error: undefined }) }));
+const swrData = vi.hoisted(() => new Map<string, unknown>());
+vi.mock('swr', () => ({ default: (key: string) => ({ data: swrData.get(key), error: undefined }) }));
 
 afterEach(unmountAll);
 
@@ -77,6 +78,34 @@ describe('EventPopover (IMC-6.2)', () => {
       should: 'be a dialog named by the title and close through Close event',
       actual: [dialog?.getAttribute('aria-label'), onClose.mock.calls.length],
       expected: ['Pricing review', 1],
+    });
+  });
+});
+
+describe('EventPopover — AI agent account attendees (Agent Signup 2c)', () => {
+  test('marks only the agent account', async () => {
+    const { EventPopover } = await import('./event-popover');
+    const attendee = (id: string, name: string, accountType: string) => ({
+      id, eventId: 'evt_1', userId: id, status: 'ACCEPTED', responseNote: null, isOrganizer: false, isOptional: false,
+      invitedAt: '2026-10-01T00:00:00.000Z', respondedAt: null, user: { id, name, image: null, accountType },
+    });
+    swrData.set('/api/calendar/events/evt_1/attendees', {
+      attendees: [attendee('u-ada', 'Ada', 'human'), attendee('u-bot', 'Helper', 'agent')],
+    });
+    const root = mount(
+      <EventPopover event={event} onClose={vi.fn()} onEdit={vi.fn()} onGoing={vi.fn(async () => undefined)} />,
+    );
+    swrData.clear();
+    const rowOf = (name: string) => [...root.querySelectorAll('li')].find((li) => li.textContent?.includes(name));
+    assert({
+      given: 'an event with a human and an AI agent account attending',
+      should: 'show the agent marker beside the agent account only',
+      actual: [
+        rowOf('Helper')?.querySelector('[aria-label="AI agent account"]')?.textContent,
+        rowOf('Ada') === undefined,
+        rowOf('Ada')?.querySelector('[aria-label="AI agent account"]') ?? null,
+      ],
+      expected: ['Agent', false, null],
     });
   });
 });

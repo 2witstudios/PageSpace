@@ -41,6 +41,7 @@ const baseDriveInvite = {
   consumedAt: null as Date | null,
   driveName: 'Alpha',
   inviterName: 'Jane',
+  inviterAccountType: 'human' as const,
 };
 
 const baseConnectionInvite = {
@@ -48,6 +49,7 @@ const baseConnectionInvite = {
   email: 'invitee@example.com',
   invitedBy: 'inviter_1',
   inviterName: 'Bob',
+  inviterAccountType: 'human' as const,
   requestMessage: null as string | null,
   expiresAt: new Date('2026-05-08T12:00:00.000Z'),
   consumedAt: null as Date | null,
@@ -63,6 +65,7 @@ const basePageInvite = {
   permissions: ['VIEW' as const],
   invitedBy: 'inviter_1',
   inviterName: 'Jane',
+  inviterAccountType: 'human' as const,
   expiresAt: new Date('2026-05-08T12:00:00.000Z'),
   consumedAt: null as Date | null,
 };
@@ -119,11 +122,27 @@ describe('resolveInviteContext', () => {
         kind: 'drive',
         driveName: 'Alpha',
         inviterName: 'Jane',
+        inviterAccountType: 'human' as const,
         role: 'MEMBER',
         email: 'invitee@example.com',
         isExistingUser: true,
       },
     });
+  });
+
+  // Agent Signup Phase 2b: a human decides whether to accept access based on
+  // who they believe invited them; an agent chose its own name.
+  it.each([
+    ['drive', () => vi.mocked(driveInviteRepository.findPendingInviteByTokenHash).mockResolvedValue({ ...baseDriveInvite, inviterName: 'Your IT Team', inviterAccountType: 'agent' })],
+    ['page', () => vi.mocked(pageInviteRepository.findPendingInviteByTokenHash).mockResolvedValue({ ...basePageInvite, inviterName: 'Your IT Team', inviterAccountType: 'agent' })],
+    ['connection', () => vi.mocked(connectionInviteRepository.findPendingInviteByTokenHash).mockResolvedValue({ ...baseConnectionInvite, inviterName: 'Your IT Team', inviterAccountType: 'agent' })],
+  ] as const)('given a %s invite from an AI agent account, should carry inviterAccountType agent to the consent screen', async (_kind, arrange) => {
+    arrange();
+    vi.mocked(driveInviteRepository.loadUserAccountByEmail).mockResolvedValue(null);
+
+    const result = await resolveInviteContext({ token: 'tok', now });
+
+    expect(result).toMatchObject({ ok: true, data: { inviterName: 'Your IT Team', inviterAccountType: 'agent' } });
   });
 
   it('given an active drive row + a user record exists with tosAcceptedAt null (OAuth / magic-link user), returns ok with isExistingUser=true', async () => {
@@ -185,6 +204,7 @@ describe('resolveInviteContext', () => {
           pageTitle: 'Q3 Plan',
           driveName: 'Acme',
           inviterName: 'Jane',
+          inviterAccountType: 'human' as const,
           permissions: ['VIEW'],
           email: 'invitee@example.com',
           isExistingUser: false,
@@ -244,6 +264,7 @@ describe('resolveInviteContext', () => {
         data: {
           kind: 'connection',
           inviterName: 'Bob',
+          inviterAccountType: 'human' as const,
           email: 'invitee@example.com',
           isExistingUser: false,
           message: null,

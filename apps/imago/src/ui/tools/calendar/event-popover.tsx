@@ -5,6 +5,7 @@ import useSWR from 'swr';
 import { format } from 'date-fns';
 import type { AttendeeStatus, CalendarEvent, CalendarEventAttendee } from '@/retained/components/calendar/calendar-types';
 import { renderIcon } from '../../components/icon/icon.render';
+import { AgentMark } from '../../components/agent-mark/agent-mark';
 import { fetchCalendarJson } from './calendar-fetch';
 
 type AttendeesResponse = { readonly attendees: readonly CalendarEventAttendee[] };
@@ -113,6 +114,7 @@ export function EventPopover({ event, onClose, onEdit, onGoing }: EventPopoverPr
               {list.map((attendee) => (
                 <li key={attendee.id} className={rowClass}>
                   <span className="min-w-0 flex-1 truncate text-ink">{attendee.user.name ?? 'Unnamed'}</span>
+                  <AgentMark accountType={attendee.user.accountType} />
                   <span className="flex-none text-2xs text-ink-muted">{attendeeRoleLabel(attendee)}</span>
                 </li>
               ))}

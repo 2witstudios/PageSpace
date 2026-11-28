@@ -27,7 +27,7 @@ import { orgLegStatus } from '../organizations/status-core';
 import { automationCreatorRemains, loadDriveSpendStanding, sharedSpendLegsFor } from '../permissions/spend-standing';
 import { loggers } from '../logging/logger-config';
 import { notifyLeadOfAutomationSkip } from './automation-skip-notifier';
-import { spendableCentsFor } from './credit-balance';
+import { readSpendableCents, spendableCentsFor } from './credit-balance';
 import { effectiveSpendPolicy, walletChainStatus, type FallbackRule, type SpendLeg, type SpendSourceKind, type WalletStatus } from './wallet-core';
 import {
   orgEntitlementTier,
@@ -54,6 +54,8 @@ import {
 } from './spend-target';
 import { toPersonalSubscriptionTier, type SubscriptionTier } from './subscription-tiers';
 import { ensurePersonalRootWalletId } from './personal-wallet';
+import { resolveOwnCreditsPayer } from './agent-billing-owner';
+import { readUserDisplayName } from './own-credits-balance';
 import { loadSeatCapFacts, loadSeatCapFactsForUsers } from './seat-allowance';
 import { readOrgSpendPolicy } from '../organizations/policy-reader';
 import { findOrganizationNames } from '../organizations/repository';
@@ -322,6 +324,11 @@ async function resolveAutomationSpend(input: {
 /**
  * Decide the wallet for a call by `userId` (a person) against `target`, reserving
  * `reservationCents`. `consumerTier` is the caller's own tier (their own credits' tier).
+ *
+ * `ownCredits` names whose personal root "own credits" are (ADR 0008 Decision 8): absent, the
+ * caller's own; for a claimed agent, its owner's at the owner's tier (the credit gate resolves
+ * it with resolveOwnCreditsPayer). Only the own-credits leg moves — the drive wallet, the seat,
+ * the caps and the stored choices stay the caller's.
  */
 export async function resolveCallSpend(input: {
   userId: string;
@@ -331,8 +338,11 @@ export async function resolveCallSpend(input: {
   now?: Date;
   /** Log a refusal (SPEND-4). Off for a read-only question that is not the gate itself. */
   recordRefusal?: boolean;
+  ownCredits?: { payerId: string; tier: SubscriptionTier };
 }): Promise<CallSpendDecision & { preselectedWalletId?: string }> {
-  const { userId, consumerTier, target } = input;
+  const { userId, target } = input;
+  const ownCreditsUserId = input.ownCredits?.payerId ?? userId;
+  const consumerTier = input.ownCredits?.tier ?? input.consumerTier;
   if (target.kind === 'personal') {
     return personalRootDecision(consumerTier);
   }
@@ -363,7 +373,7 @@ export async function resolveCallSpend(input: {
   const driveWallet = standing && shared.driveWallet ? await driveWalletOf(standing.driveId) : null;
   // A seat is the per-consumer leg on the org pool (WAL-2): only an org member of the drive holds one (DRV-8).
   const pool = standing?.orgId && shared.seat ? await orgPoolOf(standing.orgId) : null;
-  const personal = await personalRootOf(userId);
+  const personal = await personalRootOf(ownCreditsUserId);
   // SEAT-9: while the org is lapsed its legs (drive wallet, seat) read as paused; own credits stay.
   const orgLapsed = await orgLapsedFor(standing?.orgId);
   const stored: StoredSpendChoice = {
@@ -427,7 +437,9 @@ export async function resolveCallSpend(input: {
     ? orgEntitlementTier(orgLapsed)
     : standing && !standing.isLead
       ? await tierOf(standing.ownerId)
-      : consumerTier;
+      // The caller leads this personal drive: its wallet is funded by the caller, never by an
+      // agent's owner, so the caller's OWN tier governs it (not the own-credits payer's).
+      : input.consumerTier;
 
   const callInput: CallSpendInput = {
     actor,
@@ -488,11 +500,17 @@ function preselectedWalletOf(callInput: CallSpendInput): string | null {
  * conversation row after the gate can pin it then.
  */
 /** @public Used by credit-gate through a lazy `await import()` that knip cannot follow. */
-export async function persistPreselectedSource(input: { userId: string; target: SpendTarget; preselectedWalletId: string | undefined }): Promise<string | undefined> {
+export async function persistPreselectedSource(input: {
+  userId: string;
+  target: SpendTarget;
+  preselectedWalletId: string | undefined;
+  /** Whose personal root "own credits" are (ADR 0008 Decision 8); defaults to `userId`. */
+  ownCreditsUserId?: string;
+}): Promise<string | undefined> {
   const { target } = input;
   if (target.kind !== 'drive' || typeof target.conversationId !== 'string' || target.conversationId.length === 0) return undefined;
   if (!input.preselectedWalletId) return undefined;
-  const walletId = input.preselectedWalletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, input.userId) : input.preselectedWalletId;
+  const walletId = input.preselectedWalletId === PERSONAL_ROOT_NOT_YET_CREATED ? await ensurePersonalRootWalletId(db, input.ownCreditsUserId ?? input.userId) : input.preselectedWalletId;
   await pinConversationSource({ userId: input.userId, conversationId: target.conversationId, driveId: target.driveId, walletId });
   return walletId;
 }
@@ -525,13 +543,18 @@ export interface SpendChoice {
  * gate grants into a bare row exactly as it always has).
  */
 export async function listSpendChoices(userId: string, driveId: string | null): Promise<SpendChoice[]> {
-  const personalId = await ensurePersonalRootWalletId(db, userId);
-  const personal = await personalRootOf(userId);
-  const ownRemaining = Math.max(0, spendableCentsFor(personal, await tierOf(userId)));
+  // Own credits are the PAYER's (ADR 0008 Decision 8): a claimed agent's are its owner's, at the
+  // owner's tier — the wallet the gate charges, so the choice never shows an agent's empty wallet.
+  const payer = await resolveOwnCreditsPayer({ userId, tier: await tierOf(userId) });
+  const personalId = await ensurePersonalRootWalletId(db, payer.payerId);
+  // The account-aware read (the same one the credit balance shows): a starter grant the gate
+  // will never write — an agent's (ADR 0008 Decision 9) — is never displayed as spendable.
+  const ownRemaining = Math.max(0, await readSpendableCents(payer.payerId, payer.tier));
+  const billedToName = payer.viaAgentOwner ? await readUserDisplayName(payer.payerId) : null;
   const choice = (source: SpendSourceKind, walletId: string, names: { driveName: string | null; orgName: string | null }, remainingCents: number | null): SpendChoice => ({
     source,
     walletId,
-    label: spendChoiceLabel({ source, ...names }),
+    label: spendChoiceLabel({ source, ...names, ...(source === 'own_credits' && { billedToName }) }),
     ...names,
     remainingCents,
     remainingCredits: remainingCents === null ? null : formatCreditCount(remainingCents),

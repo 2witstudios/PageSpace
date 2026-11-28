@@ -17,6 +17,8 @@ const {
   mockUpdate,
   mockUpdateSet,
   mockUpdateWhere,
+  mockDelete,
+  mockDeleteWhere,
   mockToolExecute,
   mockResolveSandboxToolEligibility,
 } = vi.hoisted(() => ({
@@ -31,6 +33,8 @@ const {
   mockUpdate: vi.fn(),
   mockUpdateSet: vi.fn(),
   mockUpdateWhere: vi.fn(),
+  mockDelete: vi.fn(),
+  mockDeleteWhere: vi.fn(),
   mockToolExecute: vi.fn(),
   mockResolveSandboxToolEligibility: vi.fn(),
 }));
@@ -62,6 +66,7 @@ vi.mock('@pagespace/db/db', () => ({
     select: mockSelect,
     insert: mockInsert,
     update: mockUpdate,
+    delete: mockDelete,
     query: { taskItems: { findFirst: vi.fn() }, taskLists: { findFirst: vi.fn() } },
   },
 }));
@@ -1422,5 +1427,163 @@ describe('executeWorkflow — explicit step chains', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('no steps and no agentPageId');
     expect(generateText).not.toHaveBeenCalled();
+  });
+});
+
+describe('executeWorkflow — credit refusal inside the run claim (retry semantics)', () => {
+  type Refusal = 'too_many_in_flight' | 'daily_cap_exceeded' | 'out_of_credits' | 'requires_funding' | 'source_refused';
+  const refuse = (reason: Refusal) =>
+    vi.fn().mockResolvedValue({ admitted: false, error: `AI credit gate denied: ${reason}`, reason });
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    walletFlags.billingEnabled = false;
+    modelEntitlement.mockResolvedValue({ allowed: true });
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'spawn_failed' });
+    mockCreateConversationInSession.mockResolvedValue(undefined);
+    mockCreateConversation.mockResolvedValue('created');
+    mockEndSession.mockResolvedValue({ ok: true });
+    getDrivePolicies.mockResolvedValue(null);
+    vi.mocked(isProviderError).mockReturnValue(false);
+    vi.mocked(createAIProvider).mockResolvedValue(mockProviderResult as never);
+    mockResolvePageAgentIntegrationTools.mockResolvedValue({});
+    mockResolveSandboxToolEligibility.mockResolvedValue(true);
+    vi.mocked(generateText).mockResolvedValue({
+      text: 'Report complete',
+      steps: [{ text: 'Report complete', toolCalls: [] }],
+      usage: { inputTokens: 1, outputTokens: 1 },
+      totalUsage: { inputTokens: 1, outputTokens: 1 },
+    } as never);
+    mockInsert.mockReturnValue({ values: mockInsertValues });
+    mockInsertValues.mockReturnValue({ onConflictDoNothing: mockOnConflictDoNothing });
+    mockOnConflictDoNothing.mockReturnValue({ returning: mockInsertReturning });
+    mockInsertReturning.mockResolvedValue([{ id: 'run_1' }]);
+    mockUpdate.mockReturnValue({ set: mockUpdateSet });
+    mockUpdateSet.mockReturnValue({ where: mockUpdateWhere });
+    mockUpdateWhere.mockResolvedValue(undefined);
+    mockDelete.mockReturnValue({ where: mockDeleteWhere });
+    mockDeleteWhere.mockResolvedValue(undefined);
+  });
+
+  const at = (table: 'cron' | 'calendarTriggers' | 'taskTriggers' | 'webhookTriggers', ageMs: number) =>
+    createInputFixture({
+      source: { table, id: table === 'cron' ? null : `${table}_1`, triggerAt: new Date(Date.now() - ageMs) } as WorkflowExecutionInput['source'],
+    });
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test('given a terminal refusal (an unclaimed agent), should finalize the claimed run as cancelled with the reason and never resolve a model', async () => {
+    const result = await executeWorkflow(at('cron', 60_000), { admit: refuse('requires_funding') });
+
+    expect(result).toMatchObject({
+      success: false,
+      skipped: true,
+      error: 'AI credit gate denied: requires_funding',
+      runId: 'run_1',
+      refusal: { reason: 'requires_funding', kind: 'terminal' },
+    });
+    expect(result.retryable).toBeFalsy();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: requires_funding' }));
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(createAIProvider).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  // The lost-run bug Phase 1b fixed: the calendar cron only re-discovers an
+  // occurrence with NO workflow_runs row, the workflows cron advances its slot
+  // and a task trigger is retired unless the result is retryable. A transient
+  // refusal must therefore give the claim row back.
+  test.each([
+    ['calendarTriggers'],
+    ['taskTriggers'],
+    ['cron'],
+  ] as const)('given a transient refusal for a fresh %s occurrence, should give the claim back (delete the row, no finalize) and report it RETRYABLE', async (table) => {
+    const release = vi.fn();
+    const result = await executeWorkflow(at(table, 60_000), { admit: refuse('too_many_in_flight') });
+
+    expect(result).toMatchObject({
+      success: false,
+      error: 'AI credit gate denied: too_many_in_flight',
+      retryable: true,
+      refusal: { reason: 'too_many_in_flight', kind: 'transient' },
+    });
+    expect(result.skipped).toBeFalsy();
+    expect(result.runId).toBeUndefined();
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal for an occurrence older than 24h, should stop retrying and settle the claimed run as cancelled', async () => {
+    const result = await executeWorkflow(at('taskTriggers', DAY + 60 * 60 * 1000), { admit: refuse('too_many_in_flight') });
+
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { kind: 'transient' } });
+    expect(result.retryable).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: too_many_in_flight' }));
+  });
+
+  test.each([
+    ['daily_cap_exceeded'],
+    ['source_refused'],
+  ] as const)('given %s on a FRESH scheduled occurrence, should settle it (terminal)', async (reason) => {
+    const result = await executeWorkflow(at('taskTriggers', 60_000), { admit: refuse(reason) });
+
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason, kind: 'terminal' } });
+    expect(result.retryable).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  test('given a transient refusal on a webhook fire (nothing re-fires it), should settle the run instead of dropping the event', async () => {
+    const result = await executeWorkflow(at('webhookTriggers', 0), { admit: refuse('too_many_in_flight') });
+
+    expect(result).toMatchObject({ runId: 'run_1', skipped: true, refusal: { reason: 'too_many_in_flight', kind: 'transient' } });
+    expect(result.retryable).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ['calendarTriggers'],
+    ['taskTriggers'],
+    ['cron'],
+  ] as const)('given the gate itself throws for a fresh %s occurrence, should give the claim back and report it RETRYABLE (no refusal)', async (table) => {
+    const result = await executeWorkflow(at(table, 60_000), { admit: vi.fn().mockRejectedValue(new Error('db down')) });
+
+    expect(result).toMatchObject({ success: false, error: 'db down', retryable: true });
+    expect(result.refusal).toBeUndefined();
+    expect(mockDelete).toHaveBeenCalledTimes(1);
+    expect(mockUpdateSet).not.toHaveBeenCalled();
+    expect(generateText).not.toHaveBeenCalled();
+  });
+
+  test('given the gate keeps throwing past the 24h window, should fail the claimed run (finalized, not left running) so the occurrence stops being re-discovered', async () => {
+    const result = await executeWorkflow(at('calendarTriggers', DAY + 60 * 60 * 1000), { admit: vi.fn().mockRejectedValue(new Error('db down')) });
+
+    expect(result).toMatchObject({ success: false, error: 'db down', runId: 'run_1' });
+    expect(result.retryable).toBeFalsy();
+    expect(result.skipped).toBeFalsy();
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ status: 'error', error: 'db down' }));
+  });
+
+  test('given the claim cannot be given back, should settle the run instead of leaving it running, and report it NOT retryable', async () => {
+    mockDeleteWhere.mockRejectedValue(new Error('connection terminated'));
+
+    const result = await executeWorkflow(at('calendarTriggers', 60_000), { admit: refuse('too_many_in_flight') });
+
+    expect(result.retryable).toBeFalsy();
+    expect(result.runId).toBe('run_1');
+    expect(mockUpdateSet).toHaveBeenCalledWith(expect.objectContaining({ error: 'AI credit gate denied: too_many_in_flight' }));
+  });
+
+  test('is never consulted when the claim is lost to an in-flight run (an overlapping fire cannot record a refusal)', async () => {
+    mockInsertReturning.mockResolvedValue([]);
+    const admit = refuse('too_many_in_flight');
+
+    const result = await executeWorkflow(at('cron', 60_000), { admit });
+
+    expect(result.claimConflict).toBe(true);
+    expect(admit).not.toHaveBeenCalled();
+    expect(mockDelete).not.toHaveBeenCalled();
   });
 });

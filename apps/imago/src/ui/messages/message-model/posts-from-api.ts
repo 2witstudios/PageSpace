@@ -1,5 +1,7 @@
 // apps/web's channel messages, mapped into imago's posts.
 
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
+import { withAccountType } from './account-type';
 import type { ChannelMessageResponse, ChannelReactionResponse, Post, PostReaction } from './post';
 
 export const UNKNOWN_USER = 'Unknown user';
@@ -13,7 +15,8 @@ export const reactionsOf = (rows: readonly ChannelReactionResponse[], viewerId: 
     return {
       emoji,
       count: used.length,
-      names: used.map((row) => row.user.name || UNKNOWN_USER),
+      // A plain-text tooltip, so an agent reactor is marked in words (Phase 2c).
+      names: used.map((row) => withAgentMarker(row.user.name || UNKNOWN_USER, row.user.accountType)),
       mine: used.some((row) => row.userId === viewerId),
     };
   });
@@ -35,6 +38,7 @@ export const postsFrom = (messages: readonly ChannelMessageResponse[], viewerId:
           : `${message.userId}:${aiMeta.senderType}:${aiMeta.agentPageId ?? aiMeta.senderName}`,
       authorName: aiMeta?.senderName || message.user.name || UNKNOWN_USER,
       authorImage: aiMeta === null ? message.user.image : null,
+      ...withAccountType('authorAccountType', aiMeta === null ? message.user.accountType : null),
       agent: aiMeta !== null,
       countsAsUnread: message.userId !== viewerId || aiMeta?.senderType === 'agent',
       at: message.createdAt,

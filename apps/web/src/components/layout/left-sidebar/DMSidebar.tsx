@@ -11,6 +11,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { SidebarProps } from './index';
 import SidebarShell from './SidebarShell';
@@ -165,6 +166,7 @@ export default function DMSidebar({ className }: SidebarProps) {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <p className="font-medium text-sm truncate flex-1">{item.name}</p>
+                      <AgentBadge accountType={item.accountType} />
                       {item.unreadCount > 0 && (
                         <span className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded-full bg-primary text-primary-foreground text-xs font-medium">
                           {item.unreadCount}

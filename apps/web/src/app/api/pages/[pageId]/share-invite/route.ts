@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import { z } from 'zod/v4';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { isEmailVerified } from '@pagespace/lib/auth/verification-utils';
@@ -23,7 +24,7 @@ const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const shareInviteBodySchema = z
   .object({
-    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+    email: z.string().trim().toLowerCase().pipe(z.string().email().max(254).refine(notAgentReservedEmail, { message: 'Invalid email address' })),
     permissions: z
       .array(z.enum(['VIEW', 'EDIT', 'SHARE']))
       .min(1, 'At least VIEW permission is required'),

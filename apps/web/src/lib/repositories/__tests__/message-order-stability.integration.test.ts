@@ -127,6 +127,28 @@ describe('message read ordering is total and stable', () => {
     expect(rows.map((r) => r.id)).toEqual(expectedAsc(thread.ids));
   });
 
+  it('getMessagesForPage joins each author\'s accountType so an agent author can be marked', async () => {
+    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
+    const thread = await seedSameTickThread();
+    const agent = await factories.createUser({ accountType: 'agent' });
+    const agentMessageId = createId();
+    await db.insert(messages).values({
+      id: agentMessageId,
+      conversationId: thread.conversationId,
+      userId: agent.id,
+      role: 'user',
+      content: 'from the agent',
+      isActive: true,
+      status: 'complete' as const,
+      createdAt: thread.tick,
+    });
+
+    const rows = await messageRepository.getMessagesForPage(thread.pageId, thread.conversationId);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(agentMessageId)?.userAccountType).toBe('agent');
+    expect(byId.get(thread.ids[0])?.userAccountType).toBe('human');
+  });
+
   // The two `getRecentPageMessagesForUser` cases that stood here — a
   // deterministic DESC+LIMIT window, and the owner predicate that stopped a
   // shared agent page leaking co-members' messages — went with the reader

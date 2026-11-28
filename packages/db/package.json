@@ -67,6 +67,10 @@
       "types": "./dist/schema/agent-account-grant-nonces.d.ts",
       "default": "./dist/schema/agent-account-grant-nonces.js"
     },
+    "./schema/agent-identities": {
+      "types": "./dist/schema/agent-identities.d.ts",
+      "default": "./dist/schema/agent-identities.js"
+    },
     "./schema/organizations": {
       "types": "./dist/schema/organizations.d.ts",
       "default": "./dist/schema/organizations.js"

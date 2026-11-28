@@ -484,7 +484,14 @@ async function rollOneRoot(userId: string, now: Date): Promise<boolean> {
       .where(personalRootWalletOf(userId))
       .for('update');
     if (!locked) return false;
-    const [owner] = await tx.select({ tier: users.subscriptionTier }).from(users).where(eq(users.id, userId));
+    const [owner] = await tx
+      .select({ tier: users.subscriptionTier, accountType: users.accountType })
+      .from(users)
+      .where(eq(users.id, userId));
+    // ADR 0008 Decision 9: an AI agent account is never granted an allowance
+    // (`allowanceGrantCents` is 0 for an agent), so an agent's root is never
+    // rolled here — even one given a paid tier out of band.
+    if (owner?.accountType === 'agent') return false;
     const tier = owner?.tier ?? '';
     const plan = planPersonalRootRoll({
       tier,

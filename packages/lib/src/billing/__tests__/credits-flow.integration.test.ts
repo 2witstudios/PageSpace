@@ -20,7 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ── A column reference the fake operators/select can resolve against a row ────────
 type Col = { __col: true; table: TableKey; name: string };
-type TableKey = 'wallets' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs' | 'subscriptions';
+type TableKey = 'wallets' | 'creditLedger' | 'creditHolds' | 'users' | 'aiUsageLogs' | 'subscriptions' | 'agentIdentities';
 
 interface Row { [k: string]: unknown }
 type Store = Record<TableKey, Row[]>;
@@ -39,7 +39,7 @@ type Pred =
 
 // ── Hoisted shared state: one store + one fake db, shared by all four real shells ─
 const H = vi.hoisted(() => {
-  const store: Store = { wallets: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [], subscriptions: [] };
+  const store: Store = { wallets: [], creditLedger: [], creditHolds: [], users: [], aiUsageLogs: [], subscriptions: [], agentIdentities: [] };
 
   const col = (table: TableKey, name: string): Col => ({ __col: true, table, name });
   const cols = (table: TableKey, names: string[]): Record<string, Col> & { __table: TableKey } => {
@@ -60,7 +60,11 @@ const H = vi.hoisted(() => {
     'reconcileGenerationKey', 'spendKind', 'fallbackFromWalletId', 'automationRef', 'createdAt',
   ]);
   const creditHolds = cols('creditHolds', ['id', 'userId', 'walletId', 'fallbackFromWalletId', 'estCents', 'aiUsageLogId', 'spendKind', 'createdAt', 'expiresAt']);
-  const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier']);
+  // accountType + agent_identities: the gate's account read (readGateAccount) and the
+  // funding path's user resolution both project them, and a missing users row now
+  // fails closed — so the fake must model the real account shape.
+  const users = cols('users', ['id', 'stripeCustomerId', 'subscriptionTier', 'accountType']);
+  const agentIdentities = cols('agentIdentities', ['userId', 'ownerUserId', 'revokedAt']);
   const subscriptions = cols('subscriptions', ['id', 'userId', 'status', 'gifted', 'stripePriceId']);
   const aiUsageLogs = cols('aiUsageLogs', [
     'id', 'userId', 'cost', 'timestamp', 'success', 'provider', 'source', 'walletId', 'automationRef',
@@ -411,7 +415,7 @@ const H = vi.hoisted(() => {
 
   return {
     store, db, isBillingEnabled, logger,
-    schema: { wallets, creditLedger, creditHolds, users, aiUsageLogs, subscriptions },
+    schema: { wallets, creditLedger, creditHolds, users, aiUsageLogs, subscriptions, agentIdentities },
     ops: { eq, lt, gt, gte, inArray, notInArray, isNull, and, or, sql: sqlTag },
   };
 });
@@ -431,6 +435,7 @@ vi.mock('@pagespace/db/schema/wallets', () => {
   };
 });
 vi.mock('@pagespace/db/schema/auth', () => ({ users: H.schema.users }));
+vi.mock('@pagespace/db/schema/agent-identities', () => ({ agentIdentities: H.schema.agentIdentities }));
 vi.mock('@pagespace/db/schema/subscriptions', () => ({ subscriptions: H.schema.subscriptions }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({ aiUsageLogs: H.schema.aiUsageLogs }));
 vi.mock('@pagespace/db/operators', () => H.ops);
@@ -472,10 +477,11 @@ function reset() {
   store.users.length = 0;
   store.aiUsageLogs.length = 0;
   store.subscriptions.length = 0;
+  store.agentIdentities.length = 0;
 }
 
 function seedUser(id: string, customer: string, tier: string) {
-  store.users.push({ id, stripeCustomerId: customer, subscriptionTier: tier });
+  store.users.push({ id, stripeCustomerId: customer, subscriptionTier: tier, accountType: 'human' });
 }
 
 /** A Stripe-backed subscription in a renewal-capable status — makes invoice.paid (not the gate) authoritative for this user's period roll. */

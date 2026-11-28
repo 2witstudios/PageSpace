@@ -9,6 +9,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { decryptField } from '@pagespace/lib/encryption/field-crypto';
 import { createNotification, markConnectionRequestActioned } from '@pagespace/lib/notifications/notifications';
+import { withAgentMarker } from '@pagespace/lib/auth/agent/display-name';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
@@ -106,6 +107,7 @@ export async function PATCH(
           .select({
             name: users.name,
             displayName: userProfiles.displayName,
+            accountType: users.accountType,
           })
           .from(users)
           .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
@@ -114,7 +116,8 @@ export async function PATCH(
 
         // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
         // the notification message/metadata. Profile displayName stays plaintext.
-        const rejectUserName = rejectUser?.displayName || (await decryptField(rejectUser?.name)) || 'Someone';
+        // An agent actor is marked in the stored text (Agent Signup Phase 2c).
+        const rejectUserName = withAgentMarker(rejectUser?.displayName || (await decryptField(rejectUser?.name)) || 'Someone', rejectUser?.accountType);
 
         // Send rejection notification (broadcast via Socket.IO)
         await createNotification({
@@ -182,6 +185,7 @@ export async function PATCH(
         .select({
           name: users.name,
           displayName: userProfiles.displayName,
+          accountType: users.accountType,
         })
         .from(users)
         .leftJoin(userProfiles, eq(users.id, userProfiles.userId))
@@ -190,7 +194,8 @@ export async function PATCH(
 
       // Decrypt PII at the edge (GDPR #965): the actor name is snapshotted into
       // the notification message/metadata. Profile displayName stays plaintext.
-      const actionUserName = actionUser?.displayName || (await decryptField(actionUser?.name)) || 'Someone';
+      // An agent actor is marked in the stored text (Agent Signup Phase 2c).
+      const actionUserName = withAgentMarker(actionUser?.displayName || (await decryptField(actionUser?.name)) || 'Someone', actionUser?.accountType);
 
       await createNotification({
         userId: notifyUserId!,

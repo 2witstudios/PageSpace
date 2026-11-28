@@ -53,6 +53,7 @@ export async function POST(req: Request) {
     logger.info(`Task trigger cron: Found ${dueTriggers.length} due triggers`);
 
     let executed = 0;
+    let deferred = 0;
     let totalClaimed = 0;
     let skipped = 0;
     const errors: string[] = [];
@@ -106,6 +107,22 @@ export async function POST(req: Request) {
             return { trigger, result: skippedResult };
           }
 
+          // A completion trigger reaches the cron only as a retry after a
+          // transient credit refusal; if the task was reopened meanwhile, the
+          // "on completion" workflow no longer applies.
+          if (trigger.triggerType === 'completion') {
+            const task = taskMap.get(trigger.taskItemId);
+            const skipReason = !task ? 'Task not found' : !task.completedAt ? 'Task no longer completed' : null;
+            if (skipReason) {
+              await db.update(taskTriggers).set({
+                isEnabled: false,
+                lastFireError: skipReason,
+              }).where(eq(taskTriggers.id, trigger.id));
+              const skippedResult: WorkflowExecutionResult = { success: false, durationMs: 0, error: skipReason };
+              return { trigger, result: skippedResult };
+            }
+          }
+
           // Pre-execution skip for due_date triggers whose task became ineligible
           if (trigger.triggerType === 'due_date') {
             const task = taskMap.get(trigger.taskItemId);
@@ -154,10 +171,28 @@ export async function POST(req: Request) {
           };
 
           // The credit gate runs inside the executor's run claim, on the owner
-          // the run bills, before any model is built. A refused fire comes back
-          // `skipped` (recorded as a cancelled run with the reason); the one-shot
-          // trigger is retired with that reason just below, like any other fire.
-          const result = await executeWorkflow(input, { admit: creditAdmission(input, 'scheduled') });
+          // the run bills, before any model is built. A settled refusal comes
+          // back `skipped` (recorded as a cancelled run with the reason); the
+          // one-shot trigger is retired with that reason just below, like any
+          // other fire. A retryable one gave its claim back and is re-armed.
+          // A due-date fire is bounded by its schedule, so it skips the daily
+          // cap ('scheduled'); a completion retry keeps it, the same mode as its
+          // first fire ('user-paced').
+          const result = await executeWorkflow(input, {
+            admit: creditAdmission(input, trigger.triggerType === 'due_date' ? 'scheduled' : 'user-paced'),
+          });
+
+          if (result.retryable) {
+            // A retryable unstarted run (transient refusal, or the gate threw)
+            // wrote no run: release this tick's claim
+            // so the next tick fires the trigger again (bounded to 24h by the
+            // executor), and show why it is waiting.
+            await db.update(taskTriggers).set({
+              lastFiredAt: null,
+              lastFireError: result.error ?? null,
+            }).where(eq(taskTriggers.id, trigger.id));
+            return { trigger, result };
+          }
 
           await db.update(taskTriggers).set({
             isEnabled: false,
@@ -179,6 +214,8 @@ export async function POST(req: Request) {
           }
           if (outcome.result.success) {
             executed++;
+          } else if (outcome.result.retryable) {
+            deferred++;
           } else {
             errors.push(`task-trigger-${outcome.trigger.id}: ${outcome.result.error}`);
           }
@@ -201,11 +238,12 @@ export async function POST(req: Request) {
 
     logger.info(`Task trigger cron: Complete. Executed ${executed}/${totalClaimed}, skipped ${skipped}`);
 
-    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, failed: errors.length, skipped } });
+    audit({ eventType: 'data.write', resourceType: 'cron_job', resourceId: 'task_triggers', details: { executed, deferred, failed: errors.length, skipped } });
 
     return NextResponse.json({
       message: 'Task trigger cron complete',
       executed,
+      deferred,
       total: totalClaimed,
       skipped,
       errors: errors.length > 0 ? errors : undefined,

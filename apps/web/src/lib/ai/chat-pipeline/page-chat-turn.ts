@@ -1942,6 +1942,7 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
       messageId: serverAssistantMessageId!,
       userId: userId!,
       displayName,
+      accountType: user?.accountType,
       browserSessionId,
       streamId,
       isShared: isConversationShared,

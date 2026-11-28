@@ -2507,6 +2507,27 @@
       "when": 1795740841515,
       "tag": "0388_drive_env_home",
       "breakpoints": true
+    },
+    {
+      "idx": 358,
+      "version": "7",
+      "when": 1795835828627,
+      "tag": "0389_agent_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 359,
+      "version": "7",
+      "when": 1795836968355,
+      "tag": "0390_agent_claim_token_hash",
+      "breakpoints": true
+    },
+    {
+      "idx": 360,
+      "version": "7",
+      "when": 1795856555308,
+      "tag": "0391_agent_claim_token_retired",
+      "breakpoints": true
     }
   ]
 }

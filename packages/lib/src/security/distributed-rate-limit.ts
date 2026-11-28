@@ -41,6 +41,7 @@ import { db } from '@pagespace/db/db';
 import { sql, eq, lt } from '@pagespace/db/operators';
 import { rateLimitBuckets } from '@pagespace/db/schema/rate-limit-buckets';
 import { loggers } from '../logging/logger-config';
+import { redactDbError } from '../logging/db-error-redaction';
 
 // =============================================================================
 // Types
@@ -653,9 +654,9 @@ export async function checkDistributedRateLimit(
       attemptsRemaining: 0,
     };
   } catch (error) {
-    loggers.api.warn('Postgres rate limit check failed, falling back', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    // Never error.message: drizzle's DrizzleQueryError message carries the
+    // bound params, and the bucket key is one of them (Phase 2b).
+    loggers.api.warn('Postgres rate limit check failed, falling back', redactDbError(error));
 
     // Re-arm the mode log so recovery ("Distributed rate limiting enabled")
     // is visible in logs after an outage.
@@ -687,9 +688,7 @@ export async function resetDistributedRateLimit(identifier: string): Promise<voi
     await db.delete(rateLimitBuckets).where(eq(rateLimitBuckets.key, identifier));
     closePgCircuitIfCurrent(admittedEpoch);
   } catch (error) {
-    loggers.api.debug('Postgres rate limit reset failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.debug('Postgres rate limit reset failed', redactDbError(error));
     recordPgFailure(error, Date.now());
   }
 
@@ -728,9 +727,7 @@ export async function refundDistributedRateLimitAttempt(
       );
     closePgCircuitIfCurrent(admittedEpoch);
   } catch (error) {
-    loggers.api.debug('Postgres rate limit refund failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.debug('Postgres rate limit refund failed', redactDbError(error));
     recordPgFailure(error, Date.now());
   }
 }
@@ -866,9 +863,7 @@ export async function countAuthFailure(identifier: string, windowMs: number): Pr
     closePgCircuitIfCurrent(admittedEpoch);
     return rows[0]?.count ?? 0;
   } catch (error) {
-    loggers.api.warn('countAuthFailure failed', {
-      error: error instanceof Error ? error.message : String(error),
-    });
+    loggers.api.warn('countAuthFailure failed', redactDbError(error));
     recordPgFailure(error, Date.now());
     return 0;
   }
@@ -1101,6 +1096,102 @@ export const DISTRIBUTED_RATE_LIMITS = {
   // outcome), so rate limiting is the only defense against endpoint flooding.
   OAUTH_REVOKE: {
     maxAttempts: 20,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Agent signup doors (ADR 0008 Decision 10, threat model T1/T3). All keyed
+  // per IP: the doors are unauthenticated by design, so IP is the only identity
+  // available. Proof-of-work only makes each attempt cost CPU; these are the
+  // real ceiling on bulk agent creation.
+  //
+  // GET /api/agent/challenge — issuing a challenge writes a row, so the cap
+  // bounds table growth; generous enough for a solver that lets one expire.
+  AGENT_CHALLENGE: {
+    maxAttempts: 30,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/identity — one account per accepted call.
+  AGENT_SIGNUP: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Daily backstop over AGENT_SIGNUP, so an IP that paces itself under the
+  // hourly limit still cannot mint more than this many agents a day.
+  AGENT_SIGNUP_DAILY: {
+    maxAttempts: 10,
+    windowMs: 24 * 60 * 60 * 1000,
+    blockDurationMs: 24 * 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Presenting an agent secret at the BROWSER sign-in door (Phase 3): guessing
+  // a secret is credential stuffing, so it gets LOGIN's shape. The jwt-bearer
+  // exchange does NOT use this — it is AGENT_TOKEN_IP + AGENT_TOKEN_CREDENTIAL.
+  AGENT_SIGNIN: {
+    maxAttempts: 5,
+    windowMs: 15 * 60 * 1000,
+    blockDurationMs: 15 * 60 * 1000,
+    progressiveDelay: true,
+  },
+  // POST /api/oauth/token for client_id=pagespace-agent (jwt-bearer and its
+  // refresh_token grant). NOT the per-client OAUTH_TOKEN_EXCHANGE bucket: every
+  // agent shares that client id, so a per-client bucket is one platform-wide
+  // bucket a single IP could exhaust to lock every agent out. Keys:
+  // auth/agent/token-rate-limit-keys.ts. Per IP, generous — a fleet of agents
+  // behind one CI runner or NAT shares an IP and refreshes every ~15 min.
+  AGENT_TOKEN_IP: {
+    maxAttempts: 60,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Per presented secret (its hash) on jwt-bearer, per token FAMILY on the
+  // refresh grant (a refresh token rotates every use, so keying on it would be a
+  // fresh bucket per refresh). Tight: stops a hot loop without touching any
+  // other agent.
+  AGENT_TOKEN_CREDENTIAL: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/secret/rotate (Agent Signup Phase 2b), keyed per agent AND
+  // per actor (auth/agent/token-rate-limit-keys.ts). Rotation is rare; a loop
+  // is a stolen token that, with revokeExistingTokens, would mass-revoke the
+  // agent's keys on every call. The owner's bucket is separate, so the owner can
+  // always rotate the agent back out of a thief's hands.
+  AGENT_SECRET_ROTATE: {
+    maxAttempts: 5,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/auth/mcp-tokens by an AI agent's own bearer token (ADR 0008 D6),
+  // keyed per agent. The session path is unchanged and unlimited here; a
+  // bearer that can mint content credentials in a loop is not.
+  AGENT_KEY_MINT: {
+    maxAttempts: 10,
+    windowMs: 60 * 60 * 1000,
+    blockDurationMs: 60 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // POST /api/agent/claim (Phase 4) — starting a claim mints a user code,
+  // like OAUTH_DEVICE_INIT.
+  AGENT_CLAIM_INIT: {
+    maxAttempts: 10,
+    windowMs: 5 * 60 * 1000,
+    blockDurationMs: 5 * 60 * 1000,
+    progressiveDelay: false,
+  },
+  // Settings → Agents (Phase 4): an owner listing, revoking or unlinking their
+  // agents, keyed per signed-in user. Generous for a person clicking around;
+  // a loop is a stolen session, and revoke/unlink are irreversible.
+  AGENT_OWNER_MANAGE: {
+    maxAttempts: 30,
     windowMs: 5 * 60 * 1000,
     blockDurationMs: 5 * 60 * 1000,
     progressiveDelay: false,

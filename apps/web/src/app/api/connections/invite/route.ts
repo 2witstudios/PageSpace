@@ -7,6 +7,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { connectionInviteRepository } from '@/lib/repositories/connection-invite-repository';
 import { createInviteToken } from '@pagespace/lib/auth/invite-token';
 import { sendPendingConnectionInvitationEmail } from '@pagespace/lib/services/notification-email-service';
+import { notAgentReservedEmail } from '@pagespace/lib/auth/agent/reserved-email';
 import {
   checkDistributedRateLimit,
   DISTRIBUTED_RATE_LIMITS,
@@ -16,7 +17,7 @@ import { createNotification } from '@pagespace/lib/notifications/notifications';
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 
 const inviteBodySchema = z.object({
-  email: z.string().trim().toLowerCase().pipe(z.string().email().max(254)),
+  email: z.string().trim().toLowerCase().pipe(z.string().email().max(254).refine(notAgentReservedEmail, { message: 'Invalid email address' })),
   message: z.string().max(500).optional(),
 });
 
@@ -248,12 +249,17 @@ export async function POST(request: Request) {
 
     // If email fails, compensating-delete the pending row (R6).
     try {
-      await sendPendingConnectionInvitationEmail({
+      const outcome = await sendPendingConnectionInvitationEmail({
         recipientEmail: email,
         inviterName: inviterDisplay?.name ?? 'A teammate',
         message,
         inviteUrl,
       });
+      // A suppressed send (reserved agent recipient) delivered nothing: undo it
+      // exactly like a failed send.
+      if (outcome.status === 'suppressed') {
+        throw new Error('Invitation email suppressed: recipient cannot receive mail');
+      }
     } catch (emailError) {
       loggers.api.error(
         'Failed to send pending connection invitation email; rolling back pending invite row',

@@ -58,7 +58,7 @@ describe('acquireWorkflowCreditHold', () => {
 
     const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
 
-    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (creator_departed)' });
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (creator_departed)', reason: 'source_refused' });
     expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_1');
   });
 
@@ -71,7 +71,7 @@ describe('acquireWorkflowCreditHold', () => {
 
     const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
 
-    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (source_cap_reached)' });
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (source_cap_reached)', reason: 'source_refused' });
     expect(mockCanConsumeAI.mock.calls[0][0]).toBe('user_1');
   });
 
@@ -151,6 +151,14 @@ describe('acquireWorkflowCreditHold', () => {
     await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'scheduled');
 
     expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: PRODUCT_AUTOMATION, estCostCents: 10, skipDailyCap: true });
+  });
+
+  it('a task-completion (user-paced) run keeps the tier daily cap, and takes no in-flight cap', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: true, reason: 'ok' });
+
+    await acquireWorkflowCreditHold(LEGACY_AI_WORKFLOW, 'user-paced');
+
+    expect(mockCanConsumeAI.mock.calls[0][2]).toEqual({ spend: PRODUCT_AUTOMATION, estCostCents: 10 });
   });
 
   it('manual runs keep the daily cap and pass the interactive in-flight cap', async () => {
@@ -260,10 +268,26 @@ describe('creditAdmission', () => {
 
     const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled', onDenied)();
 
-    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)' });
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: source_refused (drive_wallet_empty)', reason: 'source_refused' });
     expect(onDenied).toHaveBeenCalledWith('source_refused');
     expect(mockCanConsumeAI).toHaveBeenCalledTimes(1);
     expect(mockCanConsumeAI.mock.calls[0][2].spend).toEqual(PRODUCT_AUTOMATION);
+  });
+
+  it('given an unclaimed agent the gate refuses, should refuse with requires_funding as the admission reason', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'requires_funding' });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'interactive')();
+
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: requires_funding', reason: 'requires_funding' });
+  });
+
+  it('a transient refusal names too_many_in_flight, so the executor can give the claim back', async () => {
+    mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+
+    const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'scheduled')();
+
+    expect(admission).toMatchObject({ admitted: false, reason: 'too_many_in_flight' });
   });
 
   it('refuses with the reason as the run error and hands the raw reason to onDenied', async () => {
@@ -272,7 +296,7 @@ describe('creditAdmission', () => {
 
     const admission = await creditAdmission(LEGACY_AI_WORKFLOW, 'interactive', onDenied)();
 
-    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: out_of_credits' });
+    expect(admission).toEqual({ admitted: false, error: 'AI credit gate denied: out_of_credits', reason: 'out_of_credits' });
     expect(onDenied).toHaveBeenCalledWith('out_of_credits');
   });
 });

@@ -114,6 +114,15 @@ describe('POST /api/oauth/device_authorization — client validation', () => {
     expect(createDeviceAuthorization).not.toHaveBeenCalled();
   });
 
+  it('a registered client whose allowedGrantTypes excludes device_code (pagespace-agent) → invalid_client, never persists', async () => {
+    const res = await POST(deviceAuthRequest({ client_id: 'pagespace-agent', scope: 'account' }) as never);
+
+    expect(res.status).toBe(400);
+    await expect(res.json()).resolves.toEqual({ error: 'invalid_client' });
+    expect(ensureOAuthClientRow).not.toHaveBeenCalled();
+    expect(createDeviceAuthorization).not.toHaveBeenCalled();
+  });
+
   it('unknown client_id → invalid_client', async () => {
     const res = await POST(deviceAuthRequest({ client_id: 'evil-client' }) as never);
     expect(res.status).toBe(400);

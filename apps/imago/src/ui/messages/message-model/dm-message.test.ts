@@ -152,3 +152,45 @@ describe('namedPosts()', () => {
     });
   });
 });
+
+describe('agent marker (Agent Signup Phase 2c)', () => {
+  test('an agent account’s DM, loaded and live', () => {
+    const agent = { id: 'u2', name: 'PageSpace Support', image: null, accountType: 'agent' };
+    const [loaded] = dmPostsFrom([dmMessage('m1', { sender: agent })], 'u1');
+    const live = liveDmPost(dmMessage('m2', { sender: agent }), { conversationId: 'dm1', viewerId: 'u1' });
+    const liveBadType = liveDmPost(dmMessage('m3', { sender: { ...agent, accountType: 7 as unknown as string } }), {
+      conversationId: 'dm1',
+      viewerId: 'u1',
+    });
+    assert({
+      given: 'a DM sent by an agent account, from the list and from the broadcast (and a broadcast with a bad type)',
+      should: 'carry the author account type, and ignore a non-string one',
+      actual: [loaded?.authorAccountType, live?.post.authorAccountType, liveBadType !== null && 'authorAccountType' in liveBadType.post],
+      expected: ['agent', 'agent', false],
+    });
+  });
+
+  test('naming carries the marker', () => {
+    const base = {
+      authorImage: null, agent: false, countsAsUnread: true, at: '2026-10-05T09:00:00.000Z', text: 't', edited: false, reactions: [],
+    };
+    const named = namedPosts(
+      [
+        { ...base, id: 'a', authorKey: 'u2', authorName: '' },
+        { ...base, id: 'b', authorKey: 'u3', authorName: 'Helper', authorAccountType: 'agent' },
+        { ...base, id: 'c', authorKey: 'u3', authorName: '' },
+      ],
+      { viewerId: 'u1', people: { u2: { name: 'Support', image: null, accountType: 'agent' } } },
+    );
+    assert({
+      given: 'unnamed posts by an agent known from the DM list and from a stored post',
+      should: 'carry the agent account type with the name it fills in',
+      actual: named.map((each) => [each.authorName, each.authorAccountType]),
+      expected: [
+        ['Support', 'agent'],
+        ['Helper', 'agent'],
+        ['Helper', 'agent'],
+      ],
+    });
+  });
+});

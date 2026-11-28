@@ -46,6 +46,7 @@ import { toPersonalSubscriptionTier } from '@pagespace/lib/billing/subscription-
 
 import { PULSE_SYSTEM_PROMPT } from '../pulse-prompt';
 import { actorFromAuth } from '@/lib/auth/request-actor';
+import { modelContextName } from '@/lib/ai/core/model-context-name';
 
 const AUTH_OPTIONS = { allow: ['session'] as const };
 
@@ -171,6 +172,7 @@ export async function POST(req: Request) {
         driveId: driveMembers.driveId,
         userName: users.name,
         userEmail: users.email,
+        userAccountType: users.accountType,
       })
       .from(driveMembers)
       .leftJoin(users, eq(users.id, driveMembers.userId))
@@ -194,7 +196,8 @@ export async function POST(req: Request) {
 
     const teamByDrive = teamMembers.reduce((acc, m) => {
       if (!acc[m.driveId]) acc[m.driveId] = [];
-      acc[m.driveId].push(m.userName || m.userEmail?.split('@')[0] || 'Unknown');
+      // Names entering the prompt: an agent is labelled (Agent Signup Phase 2c).
+      acc[m.driveId].push(modelContextName(m.userName || m.userEmail?.split('@')[0] || 'Unknown', m.userAccountType));
       return acc;
     }, {} as Record<string, string[]>);
 
@@ -220,8 +223,11 @@ export async function POST(req: Request) {
         isAiGenerated: activityLogs.isAiGenerated,
         contentRef: activityLogs.contentRef,
         contentSnapshot: activityLogs.contentSnapshot,
+        // Live account type of the actor; null once the actor is erased.
+        actorAccountType: users.accountType,
       })
       .from(activityLogs)
+      .leftJoin(users, eq(users.id, activityLogs.userId))
       .where(
         and(
           inArray(activityLogs.driveId, driveIds),
@@ -265,7 +271,7 @@ export async function POST(req: Request) {
         aiConversationId: activity.aiConversationId,
         isAiGenerated: activity.isAiGenerated,
         actorEmail: activity.actorEmail,
-        actorDisplayName: activity.actorName,
+        actorDisplayName: modelContextName(activity.actorName, activity.actorAccountType),
         content: activity.contentSnapshot ?? null,
         driveId: activity.driveId,
       });
@@ -366,7 +372,7 @@ export async function POST(req: Request) {
 
       if (!activityByPersonPage[key]) {
         activityByPersonPage[key] = {
-          person: a.actorName ?? a.actorEmail,
+          person: modelContextName(a.actorName ?? a.actorEmail, a.actorAccountType),
           pageId: a.resourceId,
           pageTitle: a.resourceTitle || 'Untitled',
           driveName,
@@ -405,6 +411,7 @@ export async function POST(req: Request) {
         .select({
           senderName: users.name,
           senderEmail: users.email,
+          senderAccountType: users.accountType,
           content: directMessages.content,
           createdAt: directMessages.createdAt,
         })
@@ -433,7 +440,7 @@ export async function POST(req: Request) {
         unreadMessagesList.flatMap((m) => [m.senderName, m.senderName ? null : m.senderEmail])
       );
       unreadDMs = unreadMessagesList.map((m) => ({
-        from: lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone',
+        from: modelContextName(lookupDmPii(m.senderName) || lookupDmPii(m.senderEmail)?.split('@')[0] || 'Someone', m.senderAccountType),
         content: m.content || '',
         sentAt: m.createdAt,
       }));
@@ -454,6 +461,7 @@ export async function POST(req: Request) {
         pageTitle: pages.title,
         senderName: users.name,
         senderEmail: users.email,
+        senderAccountType: users.accountType,
         content: messages.content,
         createdAt: messages.createdAt,
       })
@@ -495,7 +503,7 @@ export async function POST(req: Request) {
         };
       }
       acc[key].messages.push({
-        from: chat.senderName || chat.senderEmail?.split('@')[0] || 'Someone',
+        from: modelContextName(chat.senderName || chat.senderEmail?.split('@')[0] || 'Someone', chat.senderAccountType),
         content: chat.content?.substring(0, 500) || '',
         sentAt: chat.createdAt,
       });
@@ -508,6 +516,7 @@ export async function POST(req: Request) {
     const recentMentionsRaw = await db
       .select({
         mentionedByName: users.name,
+        mentionedByAccountType: users.accountType,
         pageTitle: pages.title,
         createdAt: userMentions.createdAt,
       })
@@ -536,6 +545,7 @@ export async function POST(req: Request) {
       .select({
         pageTitle: pages.title,
         sharedByName: users.name,
+        sharedByAccountType: users.accountType,
         grantedAt: pagePermissions.grantedAt,
       })
       .from(pagePermissions)
@@ -672,13 +682,13 @@ export async function POST(req: Request) {
       })),
 
       mentions: recentMentions.map(m => ({
-        by: m.mentionedByName || 'Someone',
+        by: modelContextName(m.mentionedByName || 'Someone', m.mentionedByAccountType),
         inPage: m.pageTitle || 'a page',
       })),
 
       sharedWithYou: recentShares.map(s => ({
         page: s.pageTitle || 'a page',
-        by: s.sharedByName || 'Someone',
+        by: modelContextName(s.sharedByName || 'Someone', s.sharedByAccountType),
       })),
 
       tasks: {

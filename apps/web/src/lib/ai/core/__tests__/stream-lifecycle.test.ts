@@ -324,6 +324,26 @@ describe('createStreamLifecycle', () => {
       });
     });
 
+    it('given an agent account generating, should mark it on triggeredBy (Agent Signup Phase 2c)', async () => {
+      await createStreamLifecycle(params({ displayName: 'PageSpace Support', accountType: 'agent' }));
+
+      expect(mockBroadcastStart).toHaveBeenCalledWith(expect.objectContaining({
+        triggeredBy: {
+          userId: 'user-1',
+          displayName: 'PageSpace Support',
+          browserSessionId: 'session-1',
+          accountType: 'agent',
+        },
+      }));
+    });
+
+    it('given a human account generating, should leave triggeredBy byte-identical (no accountType key)', async () => {
+      await createStreamLifecycle(params({ accountType: 'human' }));
+
+      const payload = mockBroadcastStart.mock.calls[0][0] as { triggeredBy: Record<string, unknown> };
+      expect(payload.triggeredBy).toStrictEqual({ userId: 'user-1', displayName: 'Alice', browserSessionId: 'session-1' });
+    });
+
     it('given the insert rejects, should warn and still resolve the lifecycle handle', async () => {
       mockInsertOnConflict.mockRejectedValueOnce(new Error('db down'));
 

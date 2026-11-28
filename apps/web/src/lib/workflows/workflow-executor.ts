@@ -44,6 +44,13 @@ import { agentsAutonomousDecision } from '@pagespace/lib/organizations/org-actio
 import { readWorkflowOwnership } from '@pagespace/lib/organizations/automation-ownership';
 import { claimedRunOwner } from '@pagespace/lib/permissions/automation-ownership';
 import { type AccessActor, automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
+import type { GateReason } from '@pagespace/lib/billing/credit-core';
+import {
+  classifyGateRefusal,
+  type DeniedGateReason,
+  type GateRefusalKind,
+} from '@pagespace/lib/billing/classify-gate-refusal';
+import { shouldRetryRefusal } from './core/refusal-retry';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -66,8 +73,10 @@ export interface WorkflowExecutionResult {
   claimConflict?: boolean;
   /**
    * True iff the claimed run was refused by the caller's `admit` hook (e.g. the
-   * credit gate): no model ran, and the run row was finalized as 'cancelled'
-   * with `error` as the reason. A skip, not a failure.
+   * credit gate) and that refusal is settled (terminal, or past the source's
+   * retry window): no model ran, and the run row was finalized as 'cancelled'
+   * with `error` as the reason. A skip, not a failure. Never set together with
+   * `retryable`.
    */
   skipped?: boolean;
   /**
@@ -77,6 +86,23 @@ export interface WorkflowExecutionResult {
    * should surface this so persisted state divergence is observable.
    */
   finalizeError?: string;
+  /**
+   * The ONE field a scheduled caller branches on. True when the run never
+   * started (a transient credit refusal, or the admission itself threw) inside
+   * the source's 24h retry window: the claim row was given back, so NO
+   * workflow_runs row remains and the source (calendar occurrence, task
+   * trigger, cron slot) must stay eligible for its next tick. Absent/false
+   * means the outcome is settled on the claimed row (`runId`) or recorded by
+   * the caller.
+   */
+  retryable?: boolean;
+  /**
+   * Set when the credit gate refused the run before anything executed; carries
+   * the reason for user-facing mapping (the manual run route's 402/429, an
+   * unclaimed agent's requires_funding + claim_url). A gate that THREW sets no
+   * refusal. Scheduling decisions use `retryable`.
+   */
+  refusal?: { reason: DeniedGateReason; kind: GateRefusalKind };
 }
 
 /**
@@ -146,10 +172,19 @@ export interface WorkflowExecutionInput {
  */
 export type RunCreditSpend = NonNullable<ToolExecutionContext['creditSpend']>;
 
-/** A caller's go/no-go for a claimed run. `release` runs once the run settles. */
+/**
+ * A caller's go/no-go for a claimed run. `release` runs once the run settles.
+ * A credit refusal names its gate `reason`, so the executor can tell a
+ * transient refusal (give the claim back, retry next tick) from a settled one.
+ */
 export type RunAdmission =
   | { admitted: true; release: () => void; creditSpend?: RunCreditSpend }
-  | { admitted: false; error: string };
+  | { admitted: false; error: string; reason?: GateReason };
+
+/** A gate reason that denied a run (the gate's allow reasons excluded). */
+function isDeniedReason(reason: GateReason): reason is DeniedGateReason {
+  return reason !== 'ok' && reason !== 'unlimited';
+}
 
 /** A claimed, admitted run's input plus the wallet it spends. Internal to this module. */
 type ClaimedRunInput = WorkflowExecutionInput & { creditSpend: RunCreditSpend };
@@ -227,11 +262,46 @@ export async function executeWorkflow(
     const autonomy = owner && !owner.runs
       ? { ok: false as const, message: owner.error }
       : input.source.table === 'manual' ? { ok: true as const } : agentsAutonomousDecision((await getDrivePolicies(input.driveId))?.policies ?? null);
-    const admission = autonomy.ok && options.admit ? await options.admit() : undefined;
+    let admission: RunAdmission | undefined;
+    if (autonomy.ok && options.admit) {
+      try {
+        admission = await options.admit();
+      } catch (error) {
+        // The gate itself failed (e.g. its database read). Treated like a
+        // transient refusal: a rescheduled source inside the 24h window keeps
+        // no row and retries next tick; anything else fails the run.
+        const failed: WorkflowExecutionResult = {
+          success: false,
+          durationMs: Date.now() - startTime,
+          error: error instanceof Error ? error.message : String(error),
+        };
+        if (shouldRetryRefusal({ kind: 'transient', source: input.source, now: new Date() })) {
+          return await abandonClaim(runId, failed);
+        }
+        return await settleRun(runId, failed);
+      }
+    }
     if (!autonomy.ok) {
       result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: autonomy.message };
     } else if (admission && !admission.admitted) {
-      result = { success: false, skipped: true, durationMs: Date.now() - startTime, error: admission.error };
+      const refusal = admission.reason && isDeniedReason(admission.reason)
+        ? { reason: admission.reason, kind: classifyGateRefusal(admission.reason) }
+        : undefined;
+      const refused: WorkflowExecutionResult = {
+        success: false,
+        durationMs: Date.now() - startTime,
+        error: admission.error,
+        ...(refusal ? { refusal } : {}),
+      };
+      // A transient refusal inside the retry window gives the claim back: the
+      // calendar cron only re-discovers occurrences with NO workflow_runs row,
+      // and a cron/task source must not settle, so keeping the claimed row
+      // would turn a busy minute into a lost run. Every other refusal is
+      // finalized as a cancelled run carrying the reason (a skip, not a failure).
+      if (refusal && shouldRetryRefusal({ kind: refusal.kind, source: input.source, now: new Date() })) {
+        return await abandonClaim(runId, refused);
+      }
+      result = { ...refused, skipped: true };
     } else {
       release = admission?.release;
       const creditSpend = admission?.creditSpend ?? options.creditSpend ?? { spend: automationSpend(input.driveId) };
@@ -261,11 +331,35 @@ export async function executeWorkflow(
     release?.();
   }
 
-  const finalizeError = await finalizeRun(runId, result);
+  return settleRun(runId, result);
+}
 
+/** Finalize the claimed row with the run's outcome and attach its id. */
+async function settleRun(runId: string, result: WorkflowExecutionResult): Promise<WorkflowExecutionResult> {
+  const finalizeError = await finalizeRun(runId, result);
   return finalizeError
     ? { ...result, runId, finalizeError }
     : { ...result, runId };
+}
+
+/**
+ * Give a claimed-but-unstarted run back (a transient refusal, or an admission
+ * that threw, inside the source's retry window): delete the claim row so NO
+ * workflow_runs row remains and the scheduled source fires again next tick
+ * (`retryable`). Nothing ran on it — no model, no conversation — so the row
+ * carries no history. If the delete fails the row is finalized instead, so the
+ * claim never sits 'running' until the stuck-run sweep; the run then settles
+ * as not retryable.
+ */
+async function abandonClaim(runId: string, result: WorkflowExecutionResult): Promise<WorkflowExecutionResult> {
+  try {
+    await db.delete(workflowRuns).where(eq(workflowRuns.id, runId));
+    return { ...result, retryable: true };
+  } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    loggers.api.error('Failed to release workflow_run claim for retry', { runId, error: errorMessage });
+    return settleRun(runId, result);
+  }
 }
 
 /** The body of a claimed, admitted run. Throws propagate to executeWorkflow. */

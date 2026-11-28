@@ -20,6 +20,8 @@ interface Assignee {
   type: 'user' | 'agent';
   name: string;
   image: string | null;
+  /** `users.accountType` for a user assignee, so an agent account is marked (Agent Signup 2c). Absent for AI agent pages. */
+  accountType?: 'human' | 'agent';
   // For agents only
   agentTitle?: string;
 }
@@ -70,6 +72,7 @@ export async function GET(
           email: users.email,
           name: users.name,
           image: users.image,
+          accountType: users.accountType,
         },
         profile: {
           displayName: userProfiles.displayName,
@@ -126,6 +129,7 @@ export async function GET(
         type: 'user',
         name: member.profile?.displayName || member.user!.name || member.user!.email,
         image: member.profile?.avatarUrl || member.user!.image || null,
+        accountType: member.user!.accountType,
       });
     }
 
@@ -138,6 +142,7 @@ export async function GET(
             email: users.email,
             name: users.name,
             image: users.image,
+            accountType: users.accountType,
           },
           profile: {
             displayName: userProfiles.displayName,
@@ -158,6 +163,7 @@ export async function GET(
           type: 'user',
           name: owner.profile?.displayName || ownerUser.name || ownerUser.email,
           image: owner.profile?.avatarUrl || ownerUser.image || null,
+          accountType: ownerUser.accountType,
         });
       }
     }

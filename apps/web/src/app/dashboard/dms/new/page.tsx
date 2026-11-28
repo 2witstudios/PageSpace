@@ -12,6 +12,7 @@ import { Search, ArrowLeft, UserPlus } from 'lucide-react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { post, fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 const fetcher = async (url: string) => {
   const response = await fetchWithAuth(url);
@@ -26,6 +27,8 @@ interface MessageableUser {
   name: string | null;
   email: string;
   image: string | null;
+  /** `agent` renders the AgentBadge — the name is self-chosen (Phase 2b). */
+  accountType?: 'human' | 'agent';
   username: string | null;
   displayName: string | null;
   bio: string | null;
@@ -164,6 +167,7 @@ export default function NewConversationPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="font-medium truncate">{displayName}</p>
+                        <AgentBadge accountType={u.accountType} />
                         <span className="text-xs text-muted-foreground shrink-0">
                           · {sourceLabel}
                         </span>

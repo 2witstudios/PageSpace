@@ -219,6 +219,7 @@ const createMemberDetailsFixture = (overrides: {
     id: overrides.userId,
     email: overrides.email ?? `${overrides.userId}@example.com`,
     name: `User ${overrides.userId}`,
+    accountType: 'human',
   },
   profile: {
     username: overrides.userId,

@@ -33,8 +33,9 @@
  * without it (candidates stay pending, pages stay as they are) and the refusal
  * is reported in `creditSkipped`. One user's refusal never touches another's.
  *
- * Paying personal users only — gated on the canonical personal tiers the
- * settings UI uses, so the two cannot disagree about who gets Memory.
+ * Paying personal HUMAN users only — gated on the canonical personal tiers the
+ * settings UI uses, so the two cannot disagree about who gets Memory. Agent
+ * accounts are excluded outright, whatever their tier.
  *
  * Security: HMAC-signed cron requests via cron-curl (X-Cron-Timestamp/Nonce/Signature)
  * Trigger via: cron-curl POST http://web:3000/api/memory/cron
@@ -105,7 +106,10 @@ export async function POST(request: Request) {
           eq(sessions.type, 'user'),
           isNull(sessions.revokedAt),
           gte(sessions.lastUsedAt, sevenDaysAgo),
-          inArray(users.subscriptionTier, memoryEligiblePersonalTiers())
+          inArray(users.subscriptionTier, memoryEligiblePersonalTiers()),
+          // Memory is a paying-human feature: an agent row given a paying tier
+          // out-of-band must still never reach it (ADR 0008).
+          eq(users.accountType, 'human')
         )
       )
       .groupBy(sessions.userId, users.subscriptionTier);

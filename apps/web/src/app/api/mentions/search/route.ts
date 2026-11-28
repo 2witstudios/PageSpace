@@ -499,6 +499,7 @@ export async function GET(request: Request) {
           id: users.id,
           name: users.name,
           image: users.image,
+          accountType: users.accountType,
         })
         .from(users)
         .where(inArray(users.id, Array.from(authorizedUserIds)));
@@ -527,6 +528,7 @@ export async function GET(request: Request) {
             type: 'user',
             data: {},
             description: crossDrive ? 'User (cross-drive)' : 'User',
+            accountType: user.accountType,
           });
         }
       }

@@ -43,6 +43,8 @@ export interface MemberWithDetails {
     id: string;
     email: string;
     name: string | null;
+    /** `agent` marks a self-named AI agent account wherever the name is shown (Phase 2b). */
+    accountType: 'human' | 'agent';
   } | null;
   profile: {
     username: string | null;
@@ -188,6 +190,7 @@ export async function listDriveMembers(driveId: string): Promise<MemberWithDetai
         id: users.id,
         email: users.email,
         name: users.name,
+        accountType: users.accountType,
       },
       profile: {
         username: userProfiles.username,
@@ -269,6 +272,7 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
       id: users.id,
       email: users.email,
       name: users.name,
+      accountType: users.accountType,
       username: userProfiles.username,
       displayName: userProfiles.displayName,
       avatarUrl: userProfiles.avatarUrl,
@@ -291,7 +295,7 @@ export async function getDriveOwnerAsMember(driveId: string): Promise<MemberWith
     invitedAt: null,
     acceptedAt: null,
     lastAccessedAt: null,
-    user: await decryptUserRow({ id: row.id, email: row.email, name: row.name }),
+    user: await decryptUserRow({ id: row.id, email: row.email, name: row.name, accountType: row.accountType }),
     profile: { username: row.username, displayName: row.displayName, avatarUrl: row.avatarUrl },
     customRole: null,
     permissionCounts: { view: 0, edit: 0, share: 0 },
@@ -327,6 +331,7 @@ export async function getDriveMemberDetails(
         id: users.id,
         email: users.email,
         name: users.name,
+        accountType: users.accountType,
       },
       profile: {
         username: userProfiles.username,

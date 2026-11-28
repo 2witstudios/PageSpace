@@ -1,0 +1,2 @@
+ALTER TABLE "agent_claims" ADD COLUMN "claimTokenHash" text NOT NULL;--> statement-breakpoint
+CREATE INDEX "agent_claims_claim_token_hash_idx" ON "agent_claims" USING btree ("claimTokenHash","createdAt");

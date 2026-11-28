@@ -24,6 +24,7 @@ import { isBillingEnabled } from '../deployment-mode';
 import { loggers } from '../logging/logger-config';
 import type { SubscriptionTier } from '../services/subscription-utils';
 import { getCreditBalance, resolveTier } from './credit-balance';
+import { resolveOwnCreditsPayer } from './agent-billing-owner';
 import { errorLogFields } from '../logging/error-cause';
 
 export interface EmitCreditsOptions {
@@ -71,7 +72,11 @@ export async function emitCreditsUpdated(
   if (!isBillingEnabled()) return;
   try {
     const tier = opts.tier ?? (await resolveTier(userId));
-    const summary = await getCreditBalance(userId, tier);
+    // A claimed agent's own credits are its owner's (ADR 0008 Decision 8): push the balance
+    // its calls actually spend, never its own empty wallet, and refresh the owner's view too.
+    const payer = await resolveOwnCreditsPayer({ userId, tier });
+    const summary = await getCreditBalance(payer.payerId, payer.tier);
+    if (payer.viaAgentOwner) void emitCreditsUpdated(payer.payerId, { tier: payer.tier });
     await broadcastCreditsUpdated(userId, {
       billingEnabled: summary.billingEnabled,
       monthly: summary.monthly,

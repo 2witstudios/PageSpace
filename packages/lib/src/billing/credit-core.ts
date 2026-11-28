@@ -17,6 +17,9 @@
 // Type-only import (erased at compile time, zero runtime cost) — usage-source.ts
 // is itself a pure, zero-I/O module, so this doesn't break the invariant above.
 import type { AIUsageSource } from '../monitoring/usage-source';
+// Type-only import of the account discriminator (ADR 0008 Decision 1) — same
+// zero-runtime-cost reasoning as above.
+import type { AccountType } from '../auth/agent/account-type';
 import type { SpendKind } from '@pagespace/db/schema/credits';
 // The ONE definition of a credit (MON-5): the conversions below are pure functions of
 // their arguments. money-model's own env knobs (MARKUP_BPS, top-up bounds) are never read
@@ -138,7 +141,32 @@ export type GateReason =
   // The source the call named is empty, paused, or not this person's to spend, or none was
   // named where several exist (SPEND-4). Nothing is reserved or charged, and the gate never
   // switches to another wallet; the refusal names the source and the remaining options.
-  | 'source_refused';
+  | 'source_refused'
+  // An UNCLAIMED agent is out of credits — and has no way to get any except a
+  // human claiming it. Never produced by evaluateGate; derived from
+  // `out_of_credits` by refineGateReason so the caller can point at the claim
+  // URL instead of the human "add credits" copy. Maps to HTTP 402.
+  | 'requires_funding';
+
+export interface RefineGateReasonInput {
+  reason: GateReason;
+  accountType: AccountType;
+  /** True when `agent_identities.ownerUserId` is set (a claimed agent). */
+  hasOwner: boolean;
+}
+
+/**
+ * Pure post-step over evaluateGate's reason (ADR 0008 Decision 9). Only ONE
+ * transition exists: `out_of_credits` for an unclaimed agent becomes
+ * `requires_funding`. A claimed agent is judged on its owner's balance, so its
+ * denial is the ordinary one; every other reason passes through untouched.
+ */
+export function refineGateReason(input: RefineGateReasonInput): GateReason {
+  if (input.reason === 'out_of_credits' && input.accountType === 'agent' && !input.hasOwner) {
+    return 'requires_funding';
+  }
+  return input.reason;
+}
 
 export interface DailyCapInput {
   /** This user's charged spend (whole cents) since the start of the current UTC day. */

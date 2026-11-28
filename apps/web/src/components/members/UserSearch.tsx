@@ -7,9 +7,12 @@ import { Button } from '@/components/ui/button';
 import { Mail, Search, User } from 'lucide-react';
 import { useDebounce } from '@/hooks/useDebounce';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 interface SearchResult {
   userId: string;
+  /** `agent` renders the AgentBadge — the name is self-chosen (Phase 2b). */
+  accountType?: 'human' | 'agent';
   username?: string;
   displayName: string;
   // Public-profile substring matches no longer carry an email (M3 hardening);
@@ -125,6 +128,7 @@ export function UserSearch({ onSelect, onInviteEmail }: UserSearchProps) {
               <div className="flex-1">
                 <div className="flex items-center space-x-2">
                   <p className="font-medium">{user.displayName}</p>
+                  <AgentBadge accountType={user.accountType} />
                   {user.username && (
                     <span className="text-sm text-muted-foreground">@{user.username}</span>
                   )}

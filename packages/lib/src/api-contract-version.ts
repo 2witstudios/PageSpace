@@ -28,5 +28,10 @@
  * session a consultation is called from, which its credits, usage attribution and org model
  * policy follow (SPEND-7). Additive and optional, so MINOR; `MIN_SERVER_API_VERSION` stays at
  * 1.0.0 — an older server ignores the field and bills the agent's own drive.
+ *
+ * 1.5.0 — four agent-account operations (ADR 0008, Agent Signup): `GET /api/agent/challenge`,
+ * `POST /api/agent/identity`, `POST /api/agent/claim` and `POST /api/agent/secret/rotate`, the
+ * SDK's `agent.challenge|signup|claim|rotateSecret`. Additive, so MINOR; `MIN_SERVER_API_VERSION`
+ * stays at 1.0.0 — against an older server only these four calls are missing.
  */
-export const API_CONTRACT_VERSION = '1.4.0';
+export const API_CONTRACT_VERSION = '1.5.0';

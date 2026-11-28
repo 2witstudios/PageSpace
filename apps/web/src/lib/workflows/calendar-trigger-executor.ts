@@ -18,6 +18,8 @@ import { creditDeniedError } from '@/lib/workflows/workflow-credit-gate';
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { automationActor, inDrives } from '@pagespace/lib/permissions/access-actor';
+import { classifyGateRefusal, type DeniedGateReason } from '@pagespace/lib/billing/classify-gate-refusal';
+import { shouldRetryRefusal } from './core/refusal-retry';
 
 const logger = loggers.api.child({ module: 'calendar-trigger-executor' });
 
@@ -104,19 +106,47 @@ export async function executeCalendarTrigger(
       .where(eq(users.id, scheduledById));
     //    SPEND-6: a trigger has no person present; it spends the workflow's drive wallet
     //    or is skipped, never the scheduling user's credits or allowance.
+    //
+    //    The discovery cron re-fires an occurrence only while it has NO
+    //    workflow_runs row, so how a refusal is left decides whether the
+    //    meeting run is retried or settled: a transient refusal (or a gate
+    //    that threw) inside the 24h window writes no row and comes back
+    //    `retryable`; anything else is recorded once as a cancelled/error run,
+    //    so a terminal refusal (out of credits, an unclaimed agent's
+    //    requires_funding, an empty drive wallet) is not re-fired every tick.
+    const source = { table: 'calendarTriggers', triggerAt: trigger.triggerAt } as const;
     const spend = automationSpend(workflow.driveId);
-    const gate = await canConsumeAI(
-      scheduledById,
-      toPersonalSubscriptionTier(schedulingUser?.subscriptionTier),
-      { spend, skipDailyCap: true },
-    );
+    let gate: Awaited<ReturnType<typeof canConsumeAI>>;
+    try {
+      gate = await canConsumeAI(
+        scheduledById,
+        toPersonalSubscriptionTier(schedulingUser?.subscriptionTier),
+        { spend, skipDailyCap: true },
+      );
+    } catch (gateErr) {
+      const error = gateErr instanceof Error ? gateErr.message : String(gateErr);
+      if (shouldRetryRefusal({ kind: 'transient', source, now: new Date() })) {
+        logger.warn('Calendar trigger: deferred (credit gate failed)', { triggerId: trigger.id, error });
+        return { success: false, retryable: true, durationMs: Date.now() - startTime, error };
+      }
+      await recordUnstartedRun(trigger, 'error', error);
+      return { success: false, durationMs: Date.now() - startTime, error };
+    }
     if (!gate.allowed) {
+      const reason = gate.reason as DeniedGateReason;
+      const refusal = { reason, kind: classifyGateRefusal(reason) };
+      const error = creditDeniedError(gate.reason, gate.refusal);
+      if (shouldRetryRefusal({ kind: refusal.kind, source, now: new Date() })) {
+        logger.info('Calendar trigger: deferred (transient credit refusal)', { triggerId: trigger.id, reason: gate.reason });
+        return { success: false, retryable: true, refusal, durationMs: Date.now() - startTime, error };
+      }
       logger.info('Calendar trigger: skipped (credit gate denied)', {
         triggerId: trigger.id,
         reason: gate.reason,
         refusal: gate.refusal?.reason,
       });
-      return { success: false, durationMs: Date.now() - startTime, error: creditDeniedError(gate.reason, gate.refusal) };
+      await recordUnstartedRun(trigger, 'cancelled', error);
+      return { success: false, skipped: true, refusal, durationMs: Date.now() - startTime, error };
     }
     const holdId = gate.holdId;
 
@@ -173,6 +203,23 @@ export async function executeCalendarTrigger(
 
     return { success: false, durationMs, error: errorMessage };
   }
+}
+
+/**
+ * Settle an occurrence that never reached the executor's claim: one terminal
+ * workflow_runs row, so the discovery cron stops re-firing it. ON CONFLICT DO
+ * NOTHING, as for the owner-left skip above.
+ */
+async function recordUnstartedRun(trigger: CalendarTrigger, status: 'cancelled' | 'error', error: string): Promise<void> {
+  await db.insert(workflowRuns).values({
+    workflowId: trigger.workflowId,
+    sourceTable: 'calendarTriggers',
+    sourceId: trigger.id,
+    triggerAt: trigger.triggerAt,
+    status,
+    endedAt: new Date(),
+    error,
+  }).onConflictDoNothing();
 }
 
 async function buildTriggerPrompt(workflowPrompt: string, event: CalendarEvent): Promise<string> {

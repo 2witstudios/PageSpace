@@ -10,7 +10,13 @@
  */
 
 import type { SubscriptionTier } from '../services/subscription-utils';
+import type { AccountType } from '../auth/agent/account-type';
 import { envBool, envFloat, envInt } from './env-parse';
+import { tierAllowanceCents } from './money-model';
+
+// The strict env reader, re-exported for the agent-signup knobs (auth/agent pow,
+// signup-budget) that import it from here; defined once in env-parse.
+export { envInt };
 
 /**
  * Markup applied to real provider cost, in basis points. Defined ONCE in
@@ -77,6 +83,44 @@ export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpa
  */
 export function isOneTimeAllowanceTier(tier: string): boolean {
   return tier in TIER_ALLOWANCE_REFILLS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
+}
+
+/**
+ * The one-time starter grant a brand-new personal root wallet is seeded with (ADR
+ * 0007 Decision 9). Agents get NOTHING — no free AI credits, ever; a human may
+ * claim an agent later and from then on its spend bills the owner. Humans get
+ * their tier's no-invoice allowance (money-model tierAllowanceCents: the free
+ * starter grant, which an unknown/legacy tier also falls back to). The gate's
+ * BOTH lazy-init branches (no wallet; bare wallet) must use this and nothing
+ * else, so the exclusion cannot be bypassed by the order in which a top-up and a
+ * first call race.
+ */
+export function starterGrantCents(input: { tier: string; accountType: AccountType }): number {
+  return allowanceGrantCents({ ...input, kind: 'starter' });
+}
+
+type AllowanceGrantKind = 'starter' | 'refill';
+
+/**
+ * The ONE allowance function every grant with no invoice to size it from uses
+ * (Agent Signup Phase 1b): the one-time starter grant (both lazy-init branches of
+ * the gate, via starterGrantCents) and the period roll of a comped paid account
+ * (kind 'refill'). Agents get 0 from every one of them — no free AI credits, ever
+ * (ADR 0008 Decision 9). Humans get money-model's tierAllowanceCents (MON-2: paid
+ * tiers derive from the list price; free and any unknown/legacy value get the
+ * starter grant). An invoice-sized grant (allowanceCentsForPaidCents) needs a
+ * Stripe customer, which an agent is refused on every path.
+ *
+ * Both kinds resolve the same amount today; the caller names which grant it is
+ * so a future divergence has exactly one home.
+ */
+export function allowanceGrantCents(input: {
+  tier: string;
+  accountType: AccountType;
+  kind: AllowanceGrantKind;
+}): number {
+  if (input.accountType === 'agent') return 0;
+  return tierAllowanceCents(input.tier);
 }
 
 /**

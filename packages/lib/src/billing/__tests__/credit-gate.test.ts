@@ -37,7 +37,31 @@ vi.mock('../credit-emit', () => ({ emitCreditsUpdated: mockEmitCreditsUpdated })
 const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValue('w_root'));
 vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 
+const mockReadGateAccount = vi.hoisted(() =>
+  vi.fn(async (_userId?: string): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({ accountType: 'human', ownerUserId: null })),
+);
+vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
+
+// ADR 0008 Decision 8: whose own credits a call spends. Default: the caller's own.
+const mockResolveOwnCreditsPayer = vi.hoisted(() =>
+  vi.fn(async (input: { userId: string; tier: string }) => ({ payerId: input.userId, tier: input.tier, viaAgentOwner: false })),
+);
+vi.mock('../agent-billing-owner', () => ({ resolveOwnCreditsPayer: mockResolveOwnCreditsPayer }));
+// Spy (not stub) on the personal-root predicate, so a test can name whose wallet the gate read.
+const personalRootReads = vi.hoisted(() => [] as string[]);
+vi.mock('@pagespace/db/schema/wallets', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/db/schema/wallets')>();
+  return {
+    ...actual,
+    personalRootWalletOf: (userId: string) => {
+      personalRootReads.push(userId);
+      return actual.personalRootWalletOf(userId);
+    },
+  };
+});
+
 import { canConsumeAI, addOneMonth } from '../credit-gate';
+import { GateAccountNotFoundError } from '../gate-account-not-found';
 import { PERSONAL_SPEND } from '../spend-target';
 
 // Default pricing (unmocked credit-pricing): RESERVE_FLOOR_CENTS = 25,
@@ -220,6 +244,7 @@ const FUTURE = new Date(Date.now() + 60 * 60 * 1000);
 describe('canConsumeAI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockReadGateAccount.mockReset().mockResolvedValue({ accountType: 'human', ownerUserId: null });
     mockIsBillingEnabled.mockReturnValue(true);
     mockDb.insert.mockReturnValue(insertChain());
   });
@@ -230,6 +255,33 @@ describe('canConsumeAI', () => {
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given billing off and an unclaimed agent, should refuse with requires_funding before the unlimited fast path (no hold, no metering)', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValueOnce({ accountType: 'agent', ownerUserId: null });
+
+    const r = await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(r).toEqual({ allowed: false, reason: 'requires_funding' });
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given billing off and a claimed agent, should stay unlimited like its owner', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockResolvedValueOnce({ accountType: 'agent', ownerUserId: 'owner-1' });
+
+    expect(await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND })).toEqual({ allowed: true, reason: 'unlimited' });
+  });
+
+  it('given billing on, should not read the account up front (the billing-off gate reads it only when billing is off)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(mockReadGateAccount).not.toHaveBeenCalled();
   });
 
   it('allows a user with spendable credits and returns a holdId', async () => {
@@ -584,6 +636,115 @@ describe('canConsumeAI', () => {
 
 });
 
+describe('canConsumeAI — agents get no starter grant (ADR 0008 Decision 9)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+    mockReadGateAccount.mockResolvedValue({ accountType: 'human', ownerUserId: null });
+  });
+
+  it('given an agent on the no-row branch, should create a zero-allowance, period-stamped row and write no ledger grant', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.balanceValues).toMatchObject({ userId: 'agent-1', monthlyRemainingCents: 0, monthlyAllowanceCents: 0 });
+    expect(sink.balanceValues?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    expect(sink.ledgerValues).toBeUndefined();
+    expect(r).toMatchObject({ allowed: false, reason: 'requires_funding' });
+  });
+
+  it('given a human on the no-row branch, should still write the free-init grant', async () => {
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+    const sink: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(sink);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(sink.balanceValues).toMatchObject({ monthlyRemainingCents: 500 });
+    expect(sink.ledgerValues).toMatchObject({ stripeRef: 'free-init-u1', amountCents: 500 });
+  });
+
+  it('given an agent on the bare-row branch, should open no grant transaction and leave the row bare', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1); // the hold transaction only
+    expect(mockDb.select).toHaveBeenCalledTimes(1); // no post-grant re-read
+    expect(r.allowed).toBe(true); // its own top-up is spendable
+  });
+
+  it('given an unclaimed agent out of credits, should refine the denial to requires_funding', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    expect(await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND })).toMatchObject({ allowed: false, reason: 'requires_funding' });
+  });
+
+  it('given a claimed agent out of credits, should keep the ordinary out_of_credits', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: 'owner-1' });
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    expect(await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND })).toMatchObject({ allowed: false, reason: 'out_of_credits' });
+  });
+
+  it('given an agent on a comped refilling tier with an expired window, should not roll the period (the sweep owns renewal) and refuse with requires_funding', async () => {
+    mockReadGateAccount.mockResolvedValue({ accountType: 'agent', ownerUserId: null });
+    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }]));
+    mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 0, monthlyPeriodEnd: PAST }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('agent-1', 'business', { spend: PERSONAL_SPEND });
+
+    expect(mockDb.transaction).toHaveBeenCalledTimes(1); // the hold transaction only: no reset
+    expect(r).toMatchObject({ allowed: false, reason: 'requires_funding' });
+  });
+
+  it('given no users row (billing on), should fail closed with a refusal and never create a balance row', async () => {
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+
+    const r = await canConsumeAI('ghost', 'free', { spend: PERSONAL_SPEND });
+
+    expect(r).toEqual({ allowed: false, reason: 'needs_init' });
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+  });
+
+  it('given no users row (billing off), should fail closed instead of the unlimited fast path', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    mockReadGateAccount.mockRejectedValue(new GateAccountNotFoundError('ghost'));
+
+    expect(await canConsumeAI('ghost', 'free', { spend: PERSONAL_SPEND })).toEqual({ allowed: false, reason: 'needs_init' });
+  });
+
+  it('given any other account-read failure, should rethrow (not a silent refusal)', async () => {
+    mockReadGateAccount.mockRejectedValue(new Error('db down'));
+    mockDb.select.mockReturnValueOnce(selectReturning([]));
+
+    await expect(canConsumeAI('u1', 'free', { spend: PERSONAL_SPEND })).rejects.toThrow('db down');
+  });
+
+  it('given a funded row that allows, should never read the account (hot path stays one balance read)', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(mockReadGateAccount).not.toHaveBeenCalled();
+  });
+});
+
 describe('canConsumeAI — per-user/day exposure cap', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -783,12 +944,13 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     mockIsBillingEnabled.mockReturnValue(false);
   });
 
-  it('stays a pure fast path (no queries) when no ceiling is passed', async () => {
+  it('stays the unlimited fast path (no ledger, hold or metering query; one account read) when no ceiling is passed', async () => {
     const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
 
     expect(r).toEqual({ allowed: true, reason: 'unlimited' });
     expect(mockDb.select).not.toHaveBeenCalled();
     expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(mockReadGateAccount).toHaveBeenCalledTimes(1);
   });
 
   it('denies when the day metered cost (aiUsageLogs) has reached the ceiling, without reserving a hold', async () => {
@@ -837,5 +999,78 @@ describe('canConsumeAI — dailyCapCeilingCents with billing disabled (tenant/on
     const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND, dailyCapCeilingCents: 500 });
 
     expect(r.allowed).toBe(true);
+  });
+});
+
+describe('canConsumeAI — a claimed agent spends its OWNER\'s own credits (ADR 0008 Decision 8)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    personalRootReads.length = 0;
+    mockReadGateAccount.mockReset().mockResolvedValue({ accountType: 'agent', ownerUserId: 'owner-1' });
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(insertChain());
+    mockResolveOwnCreditsPayer.mockImplementation(async (input: { userId: string }) =>
+      input.userId === 'agent-1'
+        ? { payerId: 'owner-1', tier: 'pro', viaAgentOwner: true }
+        : { payerId: input.userId, tier: 'free', viaAgentOwner: false },
+    );
+  });
+
+  it("given a claimed agent's personal call, should read and lock the OWNER's personal root and hold on it, recorded as the agent's own call", async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ id: 'w_owner', monthlyRemainingCents: 1000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ id: 'w_owner', monthlyRemainingCents: 1000, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: true, walletId: 'w_owner', spendSource: 'own_credits', entitlementTier: 'pro' });
+    expect(mockResolveOwnCreditsPayer).toHaveBeenCalledWith({ userId: 'agent-1', tier: 'free' });
+    expect(personalRootReads.length).toBeGreaterThan(0);
+    expect(new Set(personalRootReads)).toEqual(new Set(['owner-1']));
+    // The agent is the consumer: the hold (in-flight count, daily cap) is the agent's; the wallet is the owner's.
+    expect(sink.holdValues).toMatchObject({ userId: 'agent-1', walletId: 'w_owner' });
+  });
+
+  it("given a claimed agent of a PRO owner, should apply the owner's tier (no free-tier in-flight cap) even though the agent's own tier is free", async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ id: 'w_owner', monthlyRemainingCents: 100000, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    mockTransaction({ id: 'w_owner', monthlyRemainingCents: 100000, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 50, inFlight: 2 });
+
+    // MAX_FREE_INFLIGHT = 2: at the agent's own (free) tier this third call would be refused.
+    const r = await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(r.allowed).toBe(true);
+  });
+
+  it("given the owner's wallet does not exist yet, should lazily create the OWNER's wallet with the owner's (human) starter grant — never an agent row", async () => {
+    mockReadGateAccount.mockImplementation(async (id?: string) =>
+      id === 'owner-1'
+        ? { accountType: 'human' as const, ownerUserId: null }
+        : { accountType: 'agent' as const, ownerUserId: 'owner-1' },
+    );
+    mockResolveOwnCreditsPayer.mockResolvedValue({ payerId: 'owner-1', tier: 'free', viaAgentOwner: true });
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([]))
+      .mockReturnValue(selectReturning([{ id: 'w_new', monthlyRemainingCents: 500, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const init: { balanceValues?: Record<string, unknown>; ledgerValues?: Record<string, unknown> } = {};
+    mockLazyInitTransaction(init);
+    mockTransaction({ id: 'w_new', monthlyRemainingCents: 500, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    await canConsumeAI('agent-1', 'free', { spend: PERSONAL_SPEND });
+
+    expect(init.balanceValues).toMatchObject({ userId: 'owner-1' });
+    expect(init.ledgerValues).toMatchObject({ userId: 'owner-1', stripeRef: 'free-init-owner-1' });
+    expect(mockReadGateAccount).toHaveBeenCalledWith('owner-1');
+  });
+
+  it('given a human, should spend their own personal root exactly as before', async () => {
+    mockDb.select.mockReturnValue(selectReturning([{ id: 'w_u1', monthlyRemainingCents: 100, topupRemainingCents: 0, monthlyPeriodEnd: FUTURE }]));
+    const sink: { holdValues?: Record<string, unknown> } = {};
+    mockTransaction({ id: 'w_u1', monthlyRemainingCents: 100, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 }, sink);
+
+    const r = await canConsumeAI('u1', 'pro', { spend: PERSONAL_SPEND });
+
+    expect(r).toMatchObject({ allowed: true, walletId: 'w_u1' });
+    expect(new Set(personalRootReads)).toEqual(new Set(['u1']));
+    expect(sink.holdValues).toMatchObject({ userId: 'u1', walletId: 'w_u1' });
   });
 });

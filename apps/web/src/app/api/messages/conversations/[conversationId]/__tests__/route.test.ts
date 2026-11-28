@@ -117,6 +117,24 @@ describe('GET /api/messages/conversations/[conversationId] PII decryption', () =
     expect(body.conversation.otherUser.email).toBe('other@example.com');
   });
 
+  it('given the counterpart is an AI agent account, should return accountType agent so the header can mark it (Phase 2b)', async () => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: [detailRow({ user_account_type: 'agent' })],
+    });
+
+    const body = await (await makeRequest()).json();
+
+    expect(body.conversation.otherUser.accountType).toBe('agent');
+  });
+
+  it('given no account type on the row (missing join), should default to human', async () => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [detailRow({})] });
+
+    const body = await (await makeRequest()).json();
+
+    expect(body.conversation.otherUser.accountType).toBe('human');
+  });
+
   it('does not crash when the counterpart user row is gone (deleted user)', async () => {
     (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
       rows: [detailRow({ user_id: null, user_name: null, user_email: null })],

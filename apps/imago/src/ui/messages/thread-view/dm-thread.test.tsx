@@ -398,3 +398,36 @@ describe('DmThread', () => {
     });
   });
 });
+
+describe('DmThread agent marker (Agent Signup Phase 2c)', () => {
+  test('an agent’s messages the server did not name are marked from the DM list', async () => {
+    const agentConversation = conversation('dm1', { otherUser: { ...conversation('dm1').otherUser, accountType: 'agent' } });
+    const { container } = show({
+      [CONVERSATIONS]: () => Response.json({ conversations: [agentConversation], pagination: { hasMore: false, nextCursor: null } }),
+      [MESSAGES]: () =>
+        Response.json({
+          messages: [
+            bare('m1', { createdAt: '2026-10-05T09:00:00.000Z' }),
+            dmMessage('m2', { createdAt: '2026-10-05T09:01:00.000Z', senderId: 'u1', sender: ada, content: 'morning' }),
+          ],
+          notificationsMarkedRead: 0,
+        }),
+    });
+    await settle(() => {
+      if (container.querySelector('h1 [aria-label="AI agent account"]') === null) throw new Error('name not loaded');
+      if (container.querySelectorAll('ol > li b').length !== 2) throw new Error('messages not loaded');
+    });
+
+    assert({
+      given: 'a DM with an agent account whose message row carries no sender',
+      should: 'mark the title, name the message from the DM list and mark it as an agent; the viewer’s own message stays unmarked',
+      actual: [...container.querySelectorAll('ol > li')]
+        .filter((row) => row.querySelector('b'))
+        .map((row) => [row.querySelector('b')?.textContent, row.querySelector('[aria-label="AI agent account"]') !== null]),
+      expected: [
+        ['Grace', true],
+        ['Ada Lovelace', false],
+      ],
+    });
+  });
+});

@@ -47,7 +47,11 @@ import { probeDriveCount, type ProbeDriveCount } from '../auth/probe-drives.js';
 import { describeCredentialSource, resolveCredentialSource } from '../auth/resolve-credential-source.js';
 import { TOKEN_ENV_VAR_NAME } from '../auth/resolve.js';
 import { createRefreshAccessToken } from '../auth/silent-refresh.js';
-import type { RefreshAccessToken } from '@pagespace/sdk';
+import { exchangeAgentAssertion } from '@pagespace/sdk';
+import type { OAuthTokens, RefreshAccessToken } from '@pagespace/sdk';
+import { agentCredentialWithTokens, createAgentRefreshAccessToken } from '../auth/agent-session.js';
+import { fetchAccountProfile, type AccountProfile, type FetchAccountProfile } from '../auth/agent-profile.js';
+import type { AgentHostCredential } from '../credentials/serialize.js';
 
 export interface WhoamiHandlerDeps {
   readonly createCredentialStore: () => CredentialStore;
@@ -56,6 +60,75 @@ export interface WhoamiHandlerDeps {
   readonly confirmIdentity: ConfirmIdentity;
   readonly probeDriveCount: ProbeDriveCount;
   readonly now: () => number;
+  /** The jwt-bearer exchange of an agent secret (ADR 0008); the SDK's by default. */
+  readonly exchangeAgentAssertion?: (tokenEndpoint: string, secret: string, clientId: string) => Promise<OAuthTokens>;
+  /** `/api/auth/me` with the account type and owner; the real call by default. */
+  readonly fetchAccountProfile?: FetchAccountProfile;
+}
+
+/** What `whoami` reports about an AI agent's own account (ADR 0008). */
+interface AgentReport {
+  readonly agentId: string;
+  readonly name: string | null;
+  readonly ownerUserId: string | null;
+  readonly claimedAt: string | null;
+  readonly source: string | null;
+}
+
+/**
+ * Asks the server who the stored AGENT credential is, and whether anyone owns
+ * it: refresh (re-exchanging the secret on invalid_grant, `agent-session.ts`),
+ * persist the rotated refresh token BEFORE using the new access token, then
+ * `/api/auth/me`. Never deletes the credential.
+ */
+async function reportAgent(
+  deps: WhoamiHandlerDeps,
+  store: CredentialStore,
+  host: string,
+  profile: string,
+  credential: AgentHostCredential,
+): Promise<{ readonly ok: true; readonly report: AgentReport } | { readonly ok: false; readonly message: string }> {
+  let tokens: OAuthTokens;
+  try {
+    const { tokenEndpoint } = await deps.discoverMetadata(host);
+    const exchange =
+      deps.exchangeAgentAssertion ?? ((endpoint: string, secret: string, clientId: string) => exchangeAgentAssertion(endpoint, secret, clientId));
+    tokens = await createAgentRefreshAccessToken({
+      secret: credential.secret,
+      refresh: (refreshToken) => deps.createRefreshAccessToken(tokenEndpoint, credential.clientId)(refreshToken),
+      exchange: (secret) => exchange(tokenEndpoint, secret, credential.clientId),
+    })(credential.refreshToken ?? '');
+  } catch (error) {
+    return { ok: false, message: `the agent credential was refused (${messageOf(error)}); if its secret was rotated elsewhere, pipe the new one to "pagespace login --agent --yes"` };
+  }
+  await store.set(host, agentCredentialWithTokens(credential, tokens, deps.now()), profile);
+
+  let profileInfo: AccountProfile;
+  try {
+    profileInfo = await (deps.fetchAccountProfile ?? fetchAccountProfile)({ host, accessToken: tokens.accessToken });
+  } catch (error) {
+    return { ok: false, message: `could not read the agent's account: ${messageOf(error)}` };
+  }
+  return {
+    ok: true,
+    report: {
+      agentId: profileInfo.id,
+      name: profileInfo.name,
+      ownerUserId: profileInfo.agent?.ownerUserId ?? null,
+      claimedAt: profileInfo.agent?.claimedAt ?? null,
+      source: profileInfo.agent?.source ?? null,
+    },
+  };
+}
+
+function agentLines(report: AgentReport): string[] {
+  return [
+    'Account: AI agent',
+    `Agent:  ${report.name ?? 'Agent'} (${report.agentId})`,
+    report.ownerUserId === null
+      ? 'Owner:  Unclaimed — no AI credits until a human claims you; run "pagespace agent claim"'
+      : `Owner:  ${report.ownerUserId} (claimed${report.claimedAt ? ` ${report.claimedAt}` : ''}; your AI usage bills them)`,
+  ];
 }
 
 /** `mcp_*` tokens are scoped keys, not OAuth access tokens — see `auth/probe-drives.ts`. */
@@ -131,6 +204,27 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
         ? null
         : (await store.get(host, DEFAULT_PROFILE_NAME)) !== null;
 
+    // An AI agent's own account (ADR 0008): the stored login is the agent
+    // itself. Report the account type and owner whatever credential resolved —
+    // after `signup --agent` that is usually the agent's own active key, which
+    // `/api/auth/me` cannot speak for.
+    const loginForAgent =
+      source.kind === 'stored' && source.credential.kind === 'agent'
+        ? { profile: resolved.keyName, credential: source.credential }
+        : await (async () => {
+            const stored = await store.get(host, DEFAULT_PROFILE_NAME);
+            return stored !== null && stored.kind === 'agent' ? { profile: DEFAULT_PROFILE_NAME, credential: stored } : null;
+          })();
+    let agent: AgentReport | null = null;
+    if (loginForAgent !== null) {
+      const result = await reportAgent(deps, store, host, loginForAgent.profile, loginForAgent.credential);
+      if (!result.ok) {
+        ctx.stderr.write(`Could not confirm the agent account on ${host}: ${result.message}\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
+      agent = result.report;
+    }
+
     const sourceLabel = describeCredentialSource(resolved, TOKEN_ENV_VAR_NAME);
     let identity: Identity | null = null;
     let scopes: readonly string[] | null = null;
@@ -146,7 +240,11 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
      */
     let shownTokenPrefix: string | null = null;
 
-    if (source.kind === 'stored' && source.credential.kind === 'oauth') {
+    if (source.kind === 'stored' && source.credential.kind === 'agent') {
+      // Reported above: the account token has `account offline_access` and no
+      // drives; its live scope is what the refresh just returned.
+      scopes = source.credential.scopes;
+    } else if (source.kind === 'stored' && source.credential.kind === 'oauth') {
       const credential = source.credential;
       let tokenEndpoint: string;
       try {
@@ -257,6 +355,12 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
           tokenPrefix: shownTokenPrefix,
           driveCount,
           personalLogin,
+          ...(agent === null
+            ? {}
+            : {
+                accountType: 'agent',
+                agent: { id: agent.agentId, name: agent.name, ownerUserId: agent.ownerUserId, claimed: agent.ownerUserId !== null, claimedAt: agent.claimedAt, source: agent.source },
+              }),
         })}\n`,
       );
       return EXIT_SUCCESS;
@@ -274,7 +378,9 @@ export function createWhoamiHandler(deps: WhoamiHandlerDeps): CommandHandler {
     if (driveCount !== null) {
       ctx.stdout.write(`Drives: ${driveCount} accessible\n`);
     }
-    if (personalLogin !== null) {
+    if (agent !== null) {
+      ctx.stdout.write(`${agentLines(agent).join('\n')}\n`);
+    } else if (personalLogin !== null) {
       ctx.stdout.write(personalLogin ? 'Personal login: present\n' : 'Personal login: none (run "pagespace login")\n');
     }
 

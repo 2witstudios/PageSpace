@@ -125,3 +125,36 @@ describe('inboxThreadsFrom()', () => {
     });
   });
 });
+
+describe('agent marker (Agent Signup Phase 2c)', () => {
+  const agentUser: ConversationUserResponse = {
+    id: 'u3', name: 'PageSpace Support', email: null, image: null, username: null, displayName: null, avatarUrl: null, accountType: 'agent',
+  };
+
+  test('a DM with an agent', () => {
+    assert({
+      given: 'a conversation whose other person is an agent account, and the same in the unified inbox',
+      should: 'carry the account type next to the unchanged name',
+      actual: [
+        directThreadsFrom([conversation('m1', { otherUser: agentUser })]).map(({ name, accountType }) => ({ name, accountType })),
+        inboxThreadsFrom([{ ...inboxChannel('m2'), type: 'dm', name: 'PageSpace Support', accountType: 'agent' }]).map((thread) =>
+          thread.kind === 'dm' ? { name: thread.name, accountType: thread.accountType } : null,
+        ),
+      ],
+      expected: [[{ name: 'PageSpace Support', accountType: 'agent' }], [{ name: 'PageSpace Support', accountType: 'agent' }]],
+    });
+  });
+
+  test('a DM with a person', () => {
+    assert({
+      given: 'a human other person, with or without an account type',
+      should: 'carry it when sent and add nothing when absent',
+      actual: [
+        directThreadsFrom([conversation('m1', { otherUser: { ...agentUser, accountType: 'human' } })])[0]?.accountType,
+        'accountType' in (directThreadsFrom([conversation('m1')])[0] ?? {}),
+        'accountType' in (inboxThreadsFrom([{ ...inboxChannel('m2'), type: 'dm' }])[0] ?? {}),
+      ],
+      expected: ['human', false, false],
+    });
+  });
+});

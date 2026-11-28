@@ -17,8 +17,11 @@ import type { RunAdmission, RunCreditSpend, WorkflowExecutionInput } from './wor
  *     exposure cap applies and the in-flight cap stops a click-storm fan-out.
  *   - scheduled: a cron fired it. Like the calendar/zoom trigger executors, the
  *     interactive daily backstop does not apply (one fire per schedule tick).
+ *   - user-paced: a task-completion trigger. Fired by a person's actions, not a
+ *     schedule (completing 500 tasks fires 500 runs), so the tier daily cap
+ *     stays on as the per-user/day backstop; no in-flight cap, as nobody waits.
  */
-type WorkflowRunMode = 'interactive' | 'scheduled';
+export type WorkflowRunMode = 'interactive' | 'scheduled' | 'user-paced';
 
 type WorkflowCreditHold =
   | { allowed: true; release: () => void; creditSpend: RunCreditSpend }
@@ -79,7 +82,9 @@ export async function acquireWorkflowCreditHold(
   const estCostCents = CREDIT_HOLD_ESTIMATE_CENTS * countAiSteps(steps);
   const opts: GateOptions = mode === 'interactive'
     ? { spend: target, estCostCents, maxInFlight: MAX_CHAT_INFLIGHT }
-    : { spend: target, estCostCents, skipDailyCap: true };
+    : mode === 'user-paced'
+      ? { spend: target, estCostCents }
+      : { spend: target, estCostCents, skipDailyCap: true };
 
   const gate = await canConsumeAI(userId, toPersonalSubscriptionTier(user?.subscriptionTier), opts);
   if (!gate.allowed) return gate.refusal ? { allowed: false, reason: gate.reason, refusal: gate.refusal } : { allowed: false, reason: gate.reason };
@@ -109,8 +114,11 @@ export async function acquireWorkflowCreditHold(
  * and never gates, and a refused fire is finalized by the executor as a
  * `cancelled` run whose error names the reason (a skip, not a failure). The
  * executor calls `release` exactly once when an admitted run settles.
- * `onDenied` hands the raw gate reason to a caller that maps it (the manual
- * Run route's 402/429).
+ * The refusal carries the raw gate reason: the executor classifies it (a
+ * transient refusal of a rescheduled source inside 24h gives the claim back as
+ * `retryable`; anything else is a cancelled skip with `refusal`), and the
+ * manual Run route maps `refusal` to its 402/429 (+ claim_url for an unclaimed
+ * agent). `onDenied` also hands it to a caller that wants it directly.
  */
 export function creditAdmission(
   input: GatedRunInput,
@@ -123,6 +131,8 @@ export function creditAdmission(
     const hold = await acquireWorkflowCreditHold(input, mode, triggeredBy);
     if (hold.allowed) return { admitted: true, release: hold.release, creditSpend: hold.creditSpend };
     onDenied?.(hold.reason);
-    return { admitted: false, error: creditDeniedError(hold.reason, hold.refusal) };
+    // The reason lets the executor give a transient refusal's claim back
+    // (retryable) instead of settling it, and the manual Run route map it.
+    return { admitted: false, error: creditDeniedError(hold.reason, hold.refusal), reason: hold.reason };
   };
 }

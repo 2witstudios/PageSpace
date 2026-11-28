@@ -38,6 +38,7 @@ export async function GET(
         u.name as user_name,
         u.email as user_email,
         u.image as user_image,
+        u."accountType" as user_account_type,
         up.username as user_username,
         up."displayName" as user_display_name,
         up."avatarUrl" as user_avatar_url
@@ -83,6 +84,7 @@ export async function GET(
         name: decryptedUser?.name ?? null,
         email: decryptedUser?.email ?? null,
         image: row.user_image,
+        accountType: row.user_account_type ?? 'human',
         username: row.user_username,
         displayName: row.user_display_name,
         avatarUrl: row.user_avatar_url,

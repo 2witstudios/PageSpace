@@ -263,4 +263,29 @@ describe('GET /api/messages/conversations PII decryption dedup', () => {
     expect(body.conversations[0].otherUser.name).toBeNull();
     expect(body.conversations[0].otherUser.email).toBeNull();
   });
+
+  it('selects the counterpart accountType and returns it beside the unchanged name (Agent Signup Phase 2c)', async () => {
+    const { sql } = await import('@pagespace/db/operators');
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: [conversationRow({ other_user_account_type: 'agent' }), conversationRow({ id: 'conv_2', other_user_account_type: 'human' })],
+    });
+
+    const response = await GET(new Request('http://localhost/api/messages/conversations'));
+    const body = await response.json();
+
+    const sqlText = vi.mocked(sql).mock.calls.map(([strings]) => (strings as unknown as string[]).join('?')).join('\n');
+    expect(sqlText).toContain('u."accountType" as other_user_account_type');
+    expect(body.conversations[0].otherUser).toMatchObject({ name: 'Other', accountType: 'agent' });
+    expect(body.conversations[1].otherUser).toMatchObject({ name: 'Other', accountType: 'human' });
+  });
+
+  it('returns a null accountType when the counterpart row is gone', async () => {
+    (db.execute as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      rows: [conversationRow({ other_user_id: null, other_user_name: null, other_user_email: null })],
+    });
+
+    const body = await (await GET(new Request('http://localhost/api/messages/conversations'))).json();
+
+    expect(body.conversations[0].otherUser.accountType).toBeNull();
+  });
 });

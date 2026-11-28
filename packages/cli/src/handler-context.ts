@@ -45,6 +45,22 @@ export interface HandlerContext {
   readonly credentialSourceEnvVarName: string | null;
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
+  /**
+   * True only when the resolved credential is an AI agent's own key on a
+   * machine where that agent is the stored login (`auth/agent-machine.ts`) —
+   * what lets `pagespace mcp` run with no credential named after
+   * `pagespace signup --agent`. Secret-free; absent means false.
+   */
+  readonly agentOwnKey?: boolean;
+  /**
+   * The current access token of the very credential `ctx.sdk` authenticates
+   * with — the same provider, refreshed the same way, never a second auth
+   * path. For the one call that cannot go through a registry operation: the
+   * claim-grant poll on the token endpoint (`pagespace agent claim`), which an
+   * agent authenticates with its own access token (ADR 0008 security review
+   * addendum). Absent in contexts that have no provider.
+   */
+  readonly accessToken?: () => Promise<string>;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */
   readonly isTTY: boolean;
   /** Writes `message` and reads one line of interactive input. Never called when `isTTY` is false. */

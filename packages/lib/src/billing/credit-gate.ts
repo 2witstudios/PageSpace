@@ -13,6 +13,14 @@
  * account, and the hourly period sweep (wallet-funding-shell rollDuePersonalRoots) renews a
  * comped paid account no invoice will ever reach. One writer per reset, so a period can
  * never be reset twice. Free's allowance is a single starter grant and never refills.
+ *
+ * An agent's starter grant is 0 (ADR 0008 Decision 9, via starterGrantCents in both
+ * lazy branches), and an unclaimed agent's out_of_credits is refined to requires_funding.
+ *
+ * Owner pays (ADR 0008 Decision 8): "own credits" are the PAYER's personal root —
+ * resolveOwnCreditsPayer names it once per billed call, the caller's own or, for a
+ * claimed agent, its owner's at the owner's tier. The hold, in-flight count and daily
+ * cap stay the caller's (the consumer); settle and release follow the hold's wallet.
  */
 
 import { db } from '@pagespace/db/db';
@@ -31,6 +39,7 @@ import {
   evaluateDailyCap,
   reservationCents,
   holdExpiresAt,
+  refineGateReason,
   type GateResult,
 } from './credit-core';
 import {
@@ -40,9 +49,14 @@ import {
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
+  starterGrantCents,
 } from './credit-pricing';
+import { readGateAccount, type GateAccount } from './gate-account';
+import { GateAccountNotFoundError } from './gate-account-not-found';
+import { billingOffAgentGate } from './billing-off-agent-gate';
+import { resolveOwnCreditsPayer, type OwnCreditsPayer } from './agent-billing-owner';
 import { readSpendableCents } from './credit-balance';
-import { exactCentsFromDollars, tierAllowanceCents } from './money-model';
+import { exactCentsFromDollars } from './money-model';
 import { ensurePersonalRootWalletId } from './personal-wallet';
 import { addOneMonth } from './wallet-funding';
 import {
@@ -298,7 +312,30 @@ export async function canConsumeAI(
   tier: SubscriptionTier,
   opts: GateOptions,
 ): Promise<CreditGateResult> {
+  try {
+    return await decideAndReserve(userId, tier, opts);
+  } catch (error) {
+    // Fail closed on a principal with no users row (Phase 1b). Every account read
+    // happens before a hold is reserved, so a refusal here leaks no hold.
+    if (error instanceof GateAccountNotFoundError) return { allowed: false, reason: 'needs_init' };
+    throw error;
+  }
+}
+
+async function decideAndReserve(
+  userId: string,
+  tier: SubscriptionTier,
+  opts: GateOptions,
+): Promise<CreditGateResult> {
   if (!isBillingEnabled()) {
+    // Agents get no free AI here either (ADR 0008 Decision 9): with billing off
+    // the deployment's customer pays for every call, so an unclaimed agent is
+    // refused before the unlimited fast path. The account is read only on this
+    // billing-off path; the billed path keeps its own lazy read below.
+    const offAccount = await readGateAccount(userId);
+    if (billingOffAgentGate({ accountType: offAccount.accountType, hasOwner: offAccount.ownerUserId !== null }) === 'requires_funding') {
+      return { allowed: false, reason: 'requires_funding' };
+    }
     // Billing-off deployments (tenant/onprem) have no credit ledger, but a
     // caller-supplied daily ceiling must still bind: a metered provider (e.g.
     // Azure OpenAI on-prem) spends real money, and the ceiling exists precisely
@@ -310,8 +347,8 @@ export async function canConsumeAI(
     // concurrent decisions the way the billed path's balance row lock does
     // (there is no balance row to lock in this mode). The caller releases the
     // hold after the run (releaseHold deletes in every mode); an abandoned hold
-    // expires via its TTL. Without a ceiling this stays the query-free
-    // unlimited fast path.
+    // expires via its TTL. Without a ceiling this stays the unlimited fast
+    // path: no ledger, hold or metering query (only the account read above).
     const ceiling = callerCeilingCents(opts);
     if (ceiling === null) return { allowed: true, reason: 'unlimited' };
     const now = new Date();
@@ -354,6 +391,11 @@ export async function canConsumeAI(
   // init, starter grant) runs below; its renewal is invoice.paid's or the period sweep's; a drive
   // wallet or a seat on the org pool is reserved by gateSharedWallet.
   const reservation = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
+  // Whose own credits this call spends (ADR 0008 Decision 8): the caller's, or a claimed
+  // agent's owner's at the owner's tier. Named before any balance read, so every own-credits
+  // read, lock, lazy init and hold below targets the payer. Drive wallets and seats are not
+  // anyone's own credits and keep their rules.
+  const payer = await resolveOwnCreditsPayer({ userId, tier });
   // The drive-wallet reads (and the permissions they go through) load only when a drive
   // session can resolve to a shared wallet: for a call with no drive (the personal target), the
   // personal root is answered with no reads.
@@ -366,13 +408,23 @@ export async function canConsumeAI(
         consumerTier: tier,
         target: opts.spend,
         reservationCents: reservation,
+        ownCredits: payer,
       })
-    : personalRootDecision(tier);
+    : personalRootDecision(payer.tier);
   // SPEND-3: resolution named the source a conversation's first call preselected; persist it now.
   const pinned = resolution
-    ? await resolution.persistPreselectedSource({ userId, target: opts.spend, preselectedWalletId: decision.preselectedWalletId })
+    ? await resolution.persistPreselectedSource({ userId, target: opts.spend, preselectedWalletId: decision.preselectedWalletId, ownCreditsUserId: payer.payerId })
     : undefined;
   if (decision.kind !== 'spend') {
+    // An empty own-credits leg is, for the person, out of credits — and an UNCLAIMED agent's
+    // out of credits is requires_funding (refineGateReason, ADR 0008 Decision 9): the drive
+    // resolution must not turn the claim path into a generic "choose another source".
+    if (decision.kind === 'refuse' && decision.source === 'own_credits' && decision.reason === 'source_empty' && !payer.viaAgentOwner) {
+      const consumer = await readGateAccount(userId);
+      if (refineGateReason({ reason: 'out_of_credits', accountType: consumer.accountType, hasOwner: consumer.ownerUserId !== null }) === 'requires_funding') {
+        return { allowed: false, reason: 'requires_funding' };
+      }
+    }
     return {
       allowed: false,
       reason: 'source_refused',
@@ -399,7 +451,7 @@ export async function canConsumeAI(
         entitlementTier: decision.entitlementTier,
         fallbackFromWalletId,
       })
-    : await gatePersonalRoot(userId, tier, opts, fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
+    : await gatePersonalRoot(userId, payer, opts, fallbackFromWalletId).then((personal): CreditGateResult => personal.allowed
         ? { ...personal, spendSource: 'own_credits', entitlementTier: decision.entitlementTier }
         : personal);
   if (!result.allowed) return result;
@@ -423,8 +475,9 @@ export async function canConsumeAI(
  * the routes that decide model entitlement BEFORE they gate; a route that gates first
  * reads `CreditGateResult.entitlementTier` instead. Read-only: it reserves nothing.
  *
- * Answers `tier` with no reads for a call with no drive, and when
- * the target names no spendable wallet — the gate refuses that call itself.
+ * For a call with no drive it answers the own-credits payer's tier — the caller's own, or a
+ * claimed agent's owner's (ADR 0008 Decision 8) — and `tier` when the target names no
+ * spendable wallet: the gate refuses that call itself.
  */
 export async function resolveEntitlementTier(
   userId: string,
@@ -432,33 +485,48 @@ export async function resolveEntitlementTier(
   spend: SpendTarget,
   estCostCents: number = CREDIT_HOLD_ESTIMATE_CENTS,
 ): Promise<SubscriptionTier> {
-  if (spend.kind === 'personal') return tier;
+  const payer = await resolveOwnCreditsPayer({ userId, tier });
+  if (spend.kind === 'personal') return payer.tier;
   const decision = await (await import('./spend-resolution')).resolveCallSpend({
     userId,
     consumerTier: tier,
     target: spend,
     reservationCents: reservationCents(estCostCents),
     recordRefusal: false,
+    ownCredits: payer,
   });
   return decision.kind === 'spend' ? decision.entitlementTier : tier;
 }
 
 /**
- * The caller's personal root wallet: lazy-init, the one-time starter grant, then the locked
- * decision and hold. It never renews a period (the period sweep does). Unchanged from
- * before wallets except that the reservation it nets is what is held against THIS wallet
+ * The own-credits payer's personal root wallet: lazy-init, the one-time starter grant, then
+ * the locked decision and hold. It never renews a period (the period sweep does). Unchanged
+ * from before wallets except that the reservation it nets is what is held against THIS wallet
  * (and its child wallets, which draw their allocation from it), while the in-flight count
  * stays the caller's own calls.
+ *
+ * `userId` is the CONSUMER (whose call it is: the hold's userId, the in-flight count, the
+ * daily cap); `payer` names whose wallet and tier (ADR 0008 Decision 8). For everyone but a
+ * claimed agent the two are the same person.
  */
 async function gatePersonalRoot(
   userId: string,
-  tier: SubscriptionTier,
+  payer: OwnCreditsPayer,
   opts: GateOptions,
   // WAL-6b: the chosen source's wallet when a drive rule fell back onto own credits, recorded
   // on the hold so the settle lands overshoot where that choice would have (credit-consume).
   fallbackFromWalletId: string | null = null,
 ): Promise<CreditGateResult> {
   const now = new Date();
+  const tier = payer.tier;
+  // Whose personal root wallet this is: the starter grant, the balance and the lock are the payer's.
+  const walletUserId = payer.payerId;
+
+  // Read at most once per call, and only where a decision needs it. The wallet owner's account
+  // decides its starter grant; the consumer's decides the refusal copy below.
+  let account: GateAccount | null = null;
+  const getAccount = async (): Promise<GateAccount> => (account ??= await readGateAccount(walletUserId));
+  const getConsumerAccount = async (): Promise<GateAccount> => (payer.viaAgentOwner ? readGateAccount(userId) : getAccount());
 
   const readBalance = async (): Promise<BalanceRow | null> => {
     const rows = await db
@@ -470,7 +538,7 @@ async function gatePersonalRoot(
         monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
       .from(wallets)
-      .where(personalRootWalletOf(userId))
+      .where(personalRootWalletOf(walletUserId))
       .limit(1);
     return rows[0] ?? null;
   };
@@ -489,13 +557,17 @@ async function gatePersonalRoot(
   // period sweep rolls a comped paid account on. onConflictDoNothing tolerates a concurrent init — the transaction
   // judges the REAL persisted balance under a row lock, never our assumed allowance,
   // so we can't allow when a racing request already drew the row down.
+  //
+  // An agent's starter grant is 0 (ADR 0008 Decision 9): the row is still
+  // created — the hold transaction below locks it — but no ledger grant is
+  // written, so no `free-init-<agentId>` row can ever exist.
   if (!row) {
-    const monthly = tierAllowanceCents(tier);
+    const monthly = starterGrantCents({ tier, accountType: (await getAccount()).accountType });
     await db.transaction(async (tx) => {
       const balanceInserted = await tx
         .insert(wallets)
         .values({
-          userId,
+          userId: walletUserId,
           monthlyRemainingCents: monthly,
           monthlyAllowanceCents: monthly,
           topupRemainingCents: 0,
@@ -509,10 +581,10 @@ async function gatePersonalRoot(
       // readBalance() and here, balanceInserted is empty and we skip the ledger
       // write — that path writes its own grant/purchase entry, and a phantom
       // monthly_grant here would overstate the user's credits in the drift formula.
-      if (balanceInserted.length > 0) {
+      if (balanceInserted.length > 0 && monthly > 0) {
         await tx
           .insert(creditLedger)
-          .values(starterGrantLedgerRow(userId, balanceInserted[0].id, monthly))
+          .values(starterGrantLedgerRow(walletUserId, balanceInserted[0].id, monthly))
           .onConflictDoNothing(STRIPE_REF_ARBITER);
       }
     });
@@ -530,13 +602,20 @@ async function gatePersonalRoot(
   // concurrent init, or a grant already recorded under the old monthly scheme, can
   // never double-fund. The increment is one relative UPDATE, atomic against a
   // concurrent top-up's own locked write to the same row.
-  if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
-    const monthly = tierAllowanceCents(tier);
+  //
+  // Same exclusion as the no-row branch: an agent's grant is 0, so neither the
+  // ledger key nor the balance is touched and the row stays bare.
+  const bareRowGrant =
+    row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)
+      ? starterGrantCents({ tier, accountType: (await getAccount()).accountType })
+      : 0;
+  if (row && bareRowGrant > 0) {
+    const monthly = bareRowGrant;
     const walletId = row.id;
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)
-        .values(starterGrantLedgerRow(userId, walletId, monthly))
+        .values(starterGrantLedgerRow(walletUserId, walletId, monthly))
         .onConflictDoNothing(STRIPE_REF_ARBITER)
         .returning({ id: creditLedger.id });
       if (granted.length === 0) return;
@@ -548,7 +627,7 @@ async function gatePersonalRoot(
           monthlyPeriodStart: now,
           monthlyPeriodEnd: addOneMonth(now),
         })
-        .where(personalRootWalletOf(userId));
+        .where(personalRootWalletOf(walletUserId));
     });
     row = await readBalance();
   }
@@ -569,7 +648,7 @@ async function gatePersonalRoot(
         monthlyPeriodEnd: wallets.monthlyPeriodEnd,
       })
       .from(wallets)
-      .where(personalRootWalletOf(userId))
+      .where(personalRootWalletOf(walletUserId))
       .for('update');
     const bal = balRows[0] ?? null;
 
@@ -672,6 +751,14 @@ async function gatePersonalRoot(
   // and pop back up at settle — the "more → less → more" flicker. An abandoned/crashed
   // call leaves a dangling hold for the reconcile sweep (credit-backfill) to expire; it
   // no longer affects the displayed balance, so no gate-time push is needed.
+
+  // An unclaimed agent that is out of credits has exactly one way to get any: a
+  // human claiming it. Refine the reason so the HTTP layer can say so (402
+  // requires_funding + claim_url) instead of the human "add credits" copy.
+  if (!result.allowed && result.reason === 'out_of_credits') {
+    const { accountType, ownerUserId } = await getConsumerAccount();
+    return { ...result, reason: refineGateReason({ reason: result.reason, accountType, hasOwner: ownerUserId !== null }) };
+  }
 
   return result;
 }
@@ -897,7 +984,19 @@ export async function hasSpendableBalance(
   userId: string,
   tier: SubscriptionTier = 'free',
 ): Promise<boolean> {
-  if (!isBillingEnabled()) return true;
+  if (!isBillingEnabled()) {
+    // Parity with canConsumeAI's billing-off path (Phase 1b): an unclaimed agent
+    // is refused exactly as billingOffAgentGate refuses it, and a missing users
+    // row fails closed.
+    let account: GateAccount;
+    try {
+      account = await readGateAccount(userId);
+    } catch (error) {
+      if (error instanceof GateAccountNotFoundError) return false;
+      throw error;
+    }
+    return billingOffAgentGate({ accountType: account.accountType, hasOwner: account.ownerUserId !== null }) === 'allow';
+  }
   const spendable = await readSpendableCents(userId, tier);
   return spendable > RESERVE_FLOOR_CENTS;
 }

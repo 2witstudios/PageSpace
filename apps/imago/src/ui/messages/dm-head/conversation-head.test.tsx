@@ -12,7 +12,10 @@ vi.mock('@/retained/components/moderation/UserSafetyMenu', async () => {
 });
 vi.mock('../use-messages/use-messages', () => ({
   useDirectThreads: () => ({
-    threads: [{ kind: 'dm', id: 'c1', name: 'Dana Whitfield', otherUserId: 'u2', avatarUrl: null, lastMessageAt: null, lastMessagePreview: null, lastReadAt: null, unreadCount: 0 }],
+    threads: [
+      { kind: 'dm', id: 'c1', name: 'Dana Whitfield', otherUserId: 'u2', avatarUrl: null, lastMessageAt: null, lastMessagePreview: null, lastReadAt: null, unreadCount: 0 },
+      { kind: 'dm', id: 'c2', name: 'PageSpace Support', otherUserId: 'u3', accountType: 'agent', avatarUrl: null, lastMessageAt: null, lastMessagePreview: null, lastReadAt: null, unreadCount: 0 },
+    ],
   }),
 }));
 
@@ -31,6 +34,17 @@ describe('ConversationHead', () => {
         buttons: [...container.querySelectorAll('button')].map((button) => button.getAttribute('aria-label')),
       },
       expected: { crumbs: ['Direct messages', 'Dana Whitfield'], buttons: ['Conversation options', 'Close'] },
+    });
+  });
+
+  test('a DM with an agent account marks the head (Agent Signup Phase 2c)', () => {
+    const agent = mount(createElement(ConversationHead, { conversationId: 'c2' }));
+    const human = mount(createElement(ConversationHead, { conversationId: 'c1' }));
+    assert({
+      given: 'open DMs with an agent and with a person',
+      should: 'mark only the agent’s head',
+      actual: [agent, human].map((container) => container.querySelector('[aria-label="AI agent account"]') !== null),
+      expected: [true, false],
     });
   });
 });

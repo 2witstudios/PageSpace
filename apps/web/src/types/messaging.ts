@@ -20,6 +20,8 @@ export interface ConversationRow extends Record<string, unknown> {
   // LEFT JOIN users — nullable so consumers must handle a missing join row.
   other_user_id: string | null;
   other_user_name: string | null;
+  /** users.accountType — drives the agent marker beside the name (Phase 2c). */
+  other_user_account_type?: string | null;
   other_user_email: string | null;
   other_user_image: string | null;
   other_user_username: string | null;
@@ -37,6 +39,8 @@ export interface ChannelRow extends Record<string, unknown> {
   last_message: string | null;
   last_message_at: string | null;
   sender_name: string | null;
+  /** users.accountType of a user sender; null for an AI page sender or no message (Phase 2c). */
+  sender_account_type?: string | null;
   unread_count: string;
 }
 
@@ -58,6 +62,8 @@ export interface DMRow extends Record<string, unknown> {
   last_message: string | null;
   // LEFT JOIN users — nullable so consumers must handle a missing join row.
   other_user_name: string | null;
+  /** users.accountType — drives the agent marker beside the name (Phase 2c). */
+  other_user_account_type?: string | null;
   other_user_display_name: string | null;
   other_user_image: string | null;
   other_user_avatar_url: string | null;
@@ -78,6 +84,8 @@ export interface ConversationDetailRow extends Record<string, unknown> {
   user_name: string | null;
   user_email: string | null;
   user_image: string | null;
+  /** `users.accountType` — `agent` marks a self-named AI agent account (Phase 2b). */
+  user_account_type: 'human' | 'agent' | null;
   user_username: string | null;
   user_display_name: string | null;
   user_avatar_url: string | null;

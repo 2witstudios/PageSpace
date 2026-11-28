@@ -542,7 +542,7 @@ async function runList(keys: readonly KeySummary[]): Promise<FlowOutcome> {
 
 /** Whether a locally stored credential is the one a server-side key summary describes. */
 function matchesServerKey(credential: HostCredential, key: KeySummary): boolean {
-  return credential.kind !== 'oauth' && credentialSecret(credential).startsWith(key.tokenPrefix);
+  return credential.kind === 'static' && credentialSecret(credential).startsWith(key.tokenPrefix);
 }
 
 /**

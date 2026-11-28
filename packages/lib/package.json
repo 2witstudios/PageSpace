@@ -156,6 +156,21 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./services/agent-identities": {
+      "types": "./dist/services/agent-identities.d.ts",
+      "import": "./dist/services/agent-identities.js",
+      "require": "./dist/services/agent-identities.js"
+    },
+    "./services/agent-ownership": {
+      "types": "./dist/services/agent-ownership.d.ts",
+      "import": "./dist/services/agent-ownership.js",
+      "require": "./dist/services/agent-ownership.js"
+    },
+    "./services/agent-lifecycle": {
+      "types": "./dist/services/agent-lifecycle.d.ts",
+      "import": "./dist/services/agent-lifecycle.js",
+      "require": "./dist/services/agent-lifecycle.js"
+    },
     "./organizations/api-error-codes": {
       "types": "./dist/organizations/api-error-codes.d.ts",
       "import": "./dist/organizations/api-error-codes.js",
@@ -861,6 +876,16 @@
       "import": "./dist/billing/credit-core.js",
       "require": "./dist/billing/credit-core.js"
     },
+    "./billing/classify-gate-refusal": {
+      "types": "./dist/billing/classify-gate-refusal.d.ts",
+      "import": "./dist/billing/classify-gate-refusal.js",
+      "require": "./dist/billing/classify-gate-refusal.js"
+    },
+    "./billing/stripe-customer-eligibility": {
+      "types": "./dist/billing/stripe-customer-eligibility.d.ts",
+      "import": "./dist/billing/stripe-customer-eligibility.js",
+      "require": "./dist/billing/stripe-customer-eligibility.js"
+    },
     "./billing/credit-consume": {
       "types": "./dist/billing/credit-consume.d.ts",
       "import": "./dist/billing/credit-consume.js",
@@ -870,6 +895,11 @@
       "types": "./dist/billing/credit-balance.d.ts",
       "import": "./dist/billing/credit-balance.js",
       "require": "./dist/billing/credit-balance.js"
+    },
+    "./billing/own-credits-balance": {
+      "types": "./dist/billing/own-credits-balance.d.ts",
+      "import": "./dist/billing/own-credits-balance.js",
+      "require": "./dist/billing/own-credits-balance.js"
     },
     "./billing/credit-emit": {
       "types": "./dist/billing/credit-emit.d.ts",
@@ -975,6 +1005,11 @@
       "types": "./dist/logging/siem-error-hook.d.ts",
       "import": "./dist/logging/siem-error-hook.js",
       "require": "./dist/logging/siem-error-hook.js"
+    },
+    "./logging/db-error-redaction": {
+      "types": "./dist/logging/db-error-redaction.d.ts",
+      "import": "./dist/logging/db-error-redaction.js",
+      "require": "./dist/logging/db-error-redaction.js"
     },
     "./logging/monitoring-purge": {
       "types": "./dist/logging/monitoring-purge.d.ts",
@@ -3176,6 +3211,76 @@
       "import": "./dist/validators/fly-ownership.js",
       "require": "./dist/validators/fly-ownership.js"
     },
+    "./auth/agent/reserved-email": {
+      "types": "./dist/auth/agent/reserved-email.d.ts",
+      "import": "./dist/auth/agent/reserved-email.js",
+      "require": "./dist/auth/agent/reserved-email.js"
+    },
+    "./auth/agent/secret": {
+      "types": "./dist/auth/agent/secret.d.ts",
+      "import": "./dist/auth/agent/secret.js",
+      "require": "./dist/auth/agent/secret.js"
+    },
+    "./auth/agent/enabled": {
+      "types": "./dist/auth/agent/enabled.d.ts",
+      "import": "./dist/auth/agent/enabled.js",
+      "require": "./dist/auth/agent/enabled.js"
+    },
+    "./auth/agent/pow": {
+      "types": "./dist/auth/agent/pow.d.ts",
+      "import": "./dist/auth/agent/pow.js",
+      "require": "./dist/auth/agent/pow.js"
+    },
+    "./auth/agent/signup-decision": {
+      "types": "./dist/auth/agent/signup-decision.d.ts",
+      "import": "./dist/auth/agent/signup-decision.js",
+      "require": "./dist/auth/agent/signup-decision.js"
+    },
+    "./auth/agent/signin-decision": {
+      "types": "./dist/auth/agent/signin-decision.d.ts",
+      "import": "./dist/auth/agent/signin-decision.js",
+      "require": "./dist/auth/agent/signin-decision.js"
+    },
+    "./auth/agent/caller-policy": {
+      "types": "./dist/auth/agent/caller-policy.d.ts",
+      "import": "./dist/auth/agent/caller-policy.js",
+      "require": "./dist/auth/agent/caller-policy.js"
+    },
+    "./auth/agent/claim-decision": {
+      "types": "./dist/auth/agent/claim-decision.d.ts",
+      "import": "./dist/auth/agent/claim-decision.js",
+      "require": "./dist/auth/agent/claim-decision.js"
+    },
+    "./auth/agent/display-name": {
+      "types": "./dist/auth/agent/display-name.d.ts",
+      "import": "./dist/auth/agent/display-name.js",
+      "require": "./dist/auth/agent/display-name.js"
+    },
+    "./auth/agent/signup-budget": {
+      "types": "./dist/auth/agent/signup-budget.d.ts",
+      "import": "./dist/auth/agent/signup-budget.js",
+      "require": "./dist/auth/agent/signup-budget.js"
+    },
+    "./auth/agent/account-type": {
+      "types": "./dist/auth/agent/account-type.d.ts",
+      "import": "./dist/auth/agent/account-type.js",
+      "require": "./dist/auth/agent/account-type.js"
+    },
+    "./auth/agent/token-rate-limit-keys": {
+      "types": "./dist/auth/agent/token-rate-limit-keys.d.ts",
+      "import": "./dist/auth/agent/token-rate-limit-keys.js",
+      "require": "./dist/auth/agent/token-rate-limit-keys.js"
+    },
+    "./auth/agent/lifecycle-decision": {
+      "types": "./dist/auth/agent/lifecycle-decision.d.ts",
+      "import": "./dist/auth/agent/lifecycle-decision.js",
+      "require": "./dist/auth/agent/lifecycle-decision.js"
+    },
+    "./billing/agent-payer": {
+      "types": "./dist/billing/agent-payer.d.ts",
+      "import": "./dist/billing/agent-payer.js",
+      "require": "./dist/billing/agent-payer.js"
+    },
     "./agent-accounts/account-authority-executor": {
       "types": "./dist/agent-accounts/account-authority-executor.d.ts",
       "import": "./dist/agent-accounts/account-authority-executor.js",
@@ -3337,6 +3442,21 @@
       "validators/custom-domain": [
         "./dist/validators/custom-domain.d.ts"
       ],
+      "auth/agent/reserved-email": [
+        "./dist/auth/agent/reserved-email.d.ts"
+      ],
+      "auth/agent/caller-policy": [
+        "./dist/auth/agent/caller-policy.d.ts"
+      ],
+      "services/agent-lifecycle": [
+        "./dist/services/agent-lifecycle.d.ts"
+      ],
+      "billing/classify-gate-refusal": [
+        "./dist/billing/classify-gate-refusal.d.ts"
+      ],
+      "billing/stripe-customer-eligibility": [
+        "./dist/billing/stripe-customer-eligibility.d.ts"
+      ],
       "client-safe": [
         "./dist/client-safe.d.ts"
       ],
@@ -3388,6 +3508,9 @@
       "billing/credit-balance": [
         "./dist/billing/credit-balance.d.ts"
       ],
+      "billing/own-credits-balance": [
+        "./dist/billing/own-credits-balance.d.ts"
+      ],
       "billing/credit-emit": [
         "./dist/billing/credit-emit.d.ts"
       ],
@@ -3423,6 +3546,9 @@
       ],
       "billing/live-concurrency-query": [
         "./dist/billing/live-concurrency-query.d.ts"
+      ],
+      "logging/db-error-redaction": [
+        "./dist/logging/db-error-redaction.d.ts"
       ],
       "billing/wallet-core": [
         "./dist/billing/wallet-core.d.ts"

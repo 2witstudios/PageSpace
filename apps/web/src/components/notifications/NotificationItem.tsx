@@ -8,6 +8,7 @@ import { isConnectionRequest } from '@pagespace/lib/notifications/guards';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { getNotificationIcon } from './notificationIcons';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 
 export type NotificationItemVariant = 'dropdown' | 'page';
 
@@ -116,6 +117,7 @@ export function NotificationItem({
             <>
               <span aria-hidden>·</span>
               <span>by {triggeredByName}</span>
+              <AgentBadge accountType={notification.triggeredByUser?.accountType} />
             </>
           ) : null}
           {driveName ? (

@@ -11,6 +11,7 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { AgentBadge } from '@/components/shared/AgentBadge';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useInboxSocket } from '@/hooks/useInboxSocket';
 import { useEditingStore } from '@/stores/useEditingStore';
@@ -174,12 +175,15 @@ export default function DMCenterList() {
 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2 mb-0.5">
-                  <p className={cn(
-                    'text-sm truncate',
-                    item.unreadCount > 0 ? 'font-semibold' : 'font-medium'
-                  )}>
-                    {item.name}
-                  </p>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <p className={cn(
+                      'text-sm truncate',
+                      item.unreadCount > 0 ? 'font-semibold' : 'font-medium'
+                    )}>
+                      {item.name}
+                    </p>
+                    <AgentBadge accountType={item.accountType} />
+                  </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     {item.lastMessageAt && (
                       <span className="text-xs text-muted-foreground">

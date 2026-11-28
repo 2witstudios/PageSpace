@@ -329,3 +329,40 @@ describe('renderThreadView() a DM', () => {
     });
   });
 });
+
+describe('renderThreadView() agent marker (Agent Signup Phase 2c)', () => {
+  test('a post by an agent account', () => {
+    const view = dom({
+      items: [
+        { kind: 'post', id: 'a', post: post('a', { authorName: 'PageSpace Support', authorAccountType: 'agent' }), lead: true },
+        { kind: 'post', id: 'b', post: post('b', { authorName: 'Ada', authorAccountType: 'human' }), lead: true },
+        { kind: 'post', id: 'c', post: post('c', { authorName: 'Grace' }), lead: true },
+      ],
+    });
+    assert({
+      given: 'lead posts by an agent account, a typed person and an untyped person',
+      should: 'mark only the agent’s author line, names unchanged',
+      actual: [...view.querySelectorAll('ol > li')].map((item) => [
+        text(item.querySelector('b')),
+        item.querySelector('[aria-label="AI agent account"]') !== null,
+      ]),
+      expected: [
+        ['PageSpace Support', true],
+        ['Ada', false],
+        ['Grace', false],
+      ],
+    });
+  });
+
+  test('a DM with an agent account', () => {
+    assert({
+      given: 'a DM titled for an agent account, and one for a person',
+      should: 'mark only the agent’s title, after the unchanged name',
+      actual: [
+        dom({ kind: 'dm', name: 'PageSpace Support', accountType: 'agent' }).querySelector('h1 > span + [aria-label="AI agent account"]') !== null,
+        dom({ kind: 'dm', name: 'Grace' }).querySelector('h1 [aria-label="AI agent account"]'),
+      ],
+      expected: [true, null],
+    });
+  });
+});

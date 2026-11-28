@@ -653,6 +653,14 @@ describe('spend-target: what a source is called', () => {
     expect(spendChoiceLabel({ source: 'own_credits', driveName: 'Product', orgName: null })).toBe('Your credits');
     expect(spendChoiceLabel({ source: 'drive_wallet', driveName: null, orgName: null })).toBe('Drive wallet');
   });
+
+  it("a claimed agent's own credits are named for the owner who pays for them (ADR 0008 owner pays)", () => {
+    expect(spendChoiceLabel({ source: 'own_credits', driveName: null, orgName: null, billedToName: 'Dana Owner' })).toBe('Billed to Dana Owner');
+    expect(spendChoiceLabel({ source: 'own_credits', driveName: null, orgName: null, billedToName: '' })).toBe("Billed to the agent's owner");
+    expect(spendChoiceLabel({ source: 'own_credits', driveName: null, orgName: null, billedToName: null })).toBe('Your credits');
+    // Only own credits move to the owner; a drive wallet stays the drive's.
+    expect(spendChoiceLabel({ source: 'drive_wallet', driveName: 'Product', orgName: null, billedToName: 'Dana Owner' })).toBe('Product wallet');
+  });
 });
 
 describe('spend-target: a run a person triggers', () => {

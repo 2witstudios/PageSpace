@@ -10,6 +10,8 @@ export type ActivityRow = {
   readonly action: string;
   readonly time: string;
   readonly byImago: boolean;
+  /** The actor's live account type, so an agent account is marked; null for Imago's own work. */
+  readonly accountType: string | null;
 };
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -55,6 +57,7 @@ export const activityRows = (activities: readonly ActivityResponse[], now: Date)
       action: actionOf(activity),
       time: timeAgo(activity.timestamp, now),
       byImago,
+      accountType: byImago ? null : (activity.user?.accountType ?? null),
     };
   });
 

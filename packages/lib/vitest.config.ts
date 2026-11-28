@@ -53,6 +53,12 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/services/__tests__/agent-identities.integration.test.ts',
+      'src/services/__tests__/agent-lifecycle.integration.test.ts',
+      'src/billing/__tests__/agent-starter-grant.integration.test.ts',
+      'src/billing/__tests__/agent-owner-pays.integration.test.ts',
+      'src/services/__tests__/agent-ownership.integration.test.ts',
+      'src/compliance/export/__tests__/agent-identity-export.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
       'src/organizations/__tests__/org-member-revocation.integration.test.ts',
       'src/organizations/__tests__/seat-service.integration.test.ts',
@@ -140,6 +146,11 @@ export default defineConfig({
       'src/agent-accounts/__tests__/grant-gate-executor.integration.test.ts',
       'src/agent-accounts/__tests__/audit-repository.integration.test.ts',
       'src/agent-accounts/store/__tests__/store-adapter-infisical.integration.test.ts',
+      'src/services/__tests__/agent-identities.integration.test.ts',
+      'src/billing/__tests__/agent-starter-grant.integration.test.ts',
+      'src/billing/__tests__/agent-owner-pays.integration.test.ts',
+      'src/services/__tests__/agent-ownership.integration.test.ts',
+      'src/compliance/export/__tests__/agent-identity-export.integration.test.ts',
       'src/organizations/__tests__/org-services.integration.test.ts',
       'src/organizations/__tests__/org-member-revocation.integration.test.ts',
       'src/organizations/__tests__/seat-service.integration.test.ts',
@@ -160,6 +171,13 @@ export default defineConfig({
         // share one definition of what rule edits are allowed, and a shared
         // definition tested less than its old home is a downgrade wearing a
         // refactor's clothes.
+        // Agents get no free AI in billing-off deployments (ADR 0008 Decision 9):
+        // a pure security decision, pinned so an untested branch cannot land.
+        'src/billing/billing-off-agent-gate.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Agents never hold their own Stripe customer (ADR 0008 Decision 8, Phase 1b).
+        'src/billing/stripe-customer-eligibility.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
+        // Scheduled AI runs retry transient refusals and record terminal ones (Phase 1b).
+        'src/billing/classify-gate-refusal.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/conditional-ops.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/palette.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },
         'src/sheets/regions.ts': { lines: 100, branches: 100, functions: 100, statements: 100 },

@@ -201,3 +201,41 @@ describe('GET /api/activities/export pagination', () => {
     expect(response.headers.get('X-Truncated')).toBeNull();
   });
 });
+
+describe('GET /api/activities/export agent marker (Agent Signup Phase 2c)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuth();
+  });
+
+  const exportCsv = async () => {
+    const response = await GET(new Request('http://localhost/api/activities/export?context=user'));
+    return response.text();
+  };
+
+  it('selects the actor accountType', async () => {
+    mockFindMany.mockResolvedValueOnce([]);
+    await exportCsv();
+    expect(mockFindMany.mock.calls[0][0].with.user.columns.accountType).toBe(true);
+  });
+
+  it('marks an agent actor as "Name (AI agent)" in the Actor Name column, the stored name included', async () => {
+    mockFindMany.mockResolvedValueOnce([
+      { ...makeActivity(1), actorDisplayName: 'Helper', user: { id: 'agent-1', name: 'Helper', email: 'a@agents.invalid', accountType: 'agent' } },
+      { ...makeActivity(2), user: { id: 'agent-1', name: 'Helper', email: 'a@agents.invalid', accountType: 'agent' } },
+    ]);
+    const rows = (await exportCsv()).split('\r\n');
+    expect(rows[1].split(',')[1]).toBe('Helper (AI agent)');
+    expect(rows[2].split(',')[1]).toBe('Helper (AI agent)');
+  });
+
+  it('leaves a human actor and an erased actor (no user row) byte-identical', async () => {
+    mockFindMany.mockResolvedValueOnce([
+      { ...makeActivity(1), actorDisplayName: 'Jane Doe', user: { id: 'u-1', name: 'Jane Doe', email: 'j@example.com', accountType: 'human' } },
+      { ...makeActivity(2), actorDisplayName: 'Deleted User', user: null },
+    ]);
+    const rows = (await exportCsv()).split('\r\n');
+    expect(rows[1].split(',')[1]).toBe('Jane Doe');
+    expect(rows[2].split(',')[1]).toBe('Deleted User');
+  });
+});

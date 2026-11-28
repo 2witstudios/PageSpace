@@ -21,6 +21,7 @@ import {
   orphanSpendKind,
   computeCostDrift,
   isNegativeMargin,
+  refineGateReason,
 } from '../credit-core';
 
 // MON-2: computeMonthlyRefill takes the DERIVED allowance in cents; these fixtures
@@ -846,5 +847,58 @@ describe('credit-core purity', () => {
     expect(src).not.toMatch(/process\.env/);
     expect(src).not.toMatch(/Date\.now/);
     expect(src).not.toMatch(/new Date\b/);
+  });
+});
+
+describe('refineGateReason (ADR 0008 Decision 9 — requires_funding for an unclaimed agent)', () => {
+  it('maps out_of_credits to requires_funding for an agent with no owner', () => {
+    expect(refineGateReason({ reason: 'out_of_credits', accountType: 'agent', hasOwner: false })).toBe(
+      'requires_funding',
+    );
+  });
+
+  it('leaves out_of_credits alone for a human', () => {
+    expect(refineGateReason({ reason: 'out_of_credits', accountType: 'human', hasOwner: false })).toBe(
+      'out_of_credits',
+    );
+    expect(refineGateReason({ reason: 'out_of_credits', accountType: 'human', hasOwner: true })).toBe(
+      'out_of_credits',
+    );
+  });
+
+  it('leaves out_of_credits alone for a CLAIMED agent (the owner pays; this is the owner’s balance)', () => {
+    expect(refineGateReason({ reason: 'out_of_credits', accountType: 'agent', hasOwner: true })).toBe(
+      'out_of_credits',
+    );
+  });
+
+  it('passes every other reason through unchanged, for every account shape', () => {
+    const others = ['unlimited', 'ok', 'needs_init', 'too_many_in_flight', 'daily_cap_exceeded', 'requires_funding'] as const;
+    for (const reason of others) {
+      expect(refineGateReason({ reason, accountType: 'agent', hasOwner: false })).toBe(reason);
+      expect(refineGateReason({ reason, accountType: 'human', hasOwner: false })).toBe(reason);
+    }
+  });
+
+  it('evaluateGate itself never returns requires_funding (the refinement is a separate, later step)', () => {
+    const denied = evaluateGate({
+      billingEnabled: true,
+      balance: { monthlyCents: 0, topupCents: 0 },
+      reserveFloorCents: 25,
+      estCostCents: 25,
+    });
+    expect(denied).toEqual({ allowed: false, reason: 'out_of_credits' });
+  });
+});
+
+describe('computeMonthlyRefill over an allowance already resolved (allowanceGrantCents: 0 for an agent)', () => {
+  it('given a zero allowance (an agent), should only net debt against the carry', async () => {
+    const { computeMonthlyRefill } = await import('../credit-core');
+    expect(computeMonthlyRefill(0, 300, 100)).toEqual({ monthlyRemainingCents: 200, monthlyAllowanceCents: 0, debtCents: 0 });
+  });
+
+  it('given debt beyond carry plus allowance, should clamp at 0', async () => {
+    const { computeMonthlyRefill } = await import('../credit-core');
+    expect(computeMonthlyRefill(0, 0, 50)).toEqual({ monthlyRemainingCents: 0, monthlyAllowanceCents: 0, debtCents: 0 });
   });
 });

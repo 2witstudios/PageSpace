@@ -441,4 +441,62 @@ describe('executeCalendarTrigger', () => {
     expect(result.error).toContain('credit gate denied');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
+
+  describe('a refused or failed gate leaves the occurrence retryable or settles it once', () => {
+    const fresh = () => createTrigger({ triggerAt: new Date(Date.now() - 60_000) });
+    const stale = () => createTrigger({ triggerAt: new Date(Date.now() - 25 * 60 * 60 * 1000) });
+    const unstartedRuns = () => mockInsertValues.mock.calls.map((call) => call[0] as Record<string, unknown>);
+
+    it('given a transient refusal for a fresh occurrence, should write NO workflow_runs row and report it retryable, so the discovery cron re-fires it next tick', async () => {
+      mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+
+      const result = await executeCalendarTrigger(fresh(), createEvent());
+
+      expect(result).toMatchObject({ success: false, retryable: true, refusal: { reason: 'too_many_in_flight', kind: 'transient' } });
+      expect(result.skipped).toBeFalsy();
+      expect(mockInsert).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('given a transient refusal past the 24h window, should record one cancelled run so the occurrence stops being re-discovered', async () => {
+      mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'too_many_in_flight' });
+
+      const result = await executeCalendarTrigger(stale(), createEvent());
+
+      expect(result).toMatchObject({ success: false, skipped: true, refusal: { kind: 'transient' } });
+      expect(result.retryable).toBeFalsy();
+      expect(unstartedRuns()).toEqual([expect.objectContaining({ sourceTable: 'calendarTriggers', sourceId: 'trg-1', status: 'cancelled', error: 'AI credit gate denied: too_many_in_flight' })]);
+    });
+
+    it('given a terminal refusal (an unclaimed agent) for a fresh occurrence, should record one cancelled run with the reason, never re-fired every tick', async () => {
+      mockCanConsumeAI.mockResolvedValue({ allowed: false, reason: 'requires_funding' });
+
+      const result = await executeCalendarTrigger(fresh(), createEvent());
+
+      expect(result).toMatchObject({ success: false, skipped: true, error: 'AI credit gate denied: requires_funding', refusal: { reason: 'requires_funding', kind: 'terminal' } });
+      expect(result.retryable).toBeFalsy();
+      expect(unstartedRuns()).toEqual([expect.objectContaining({ status: 'cancelled', error: 'AI credit gate denied: requires_funding' })]);
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('given the gate itself throws for a fresh occurrence, should write no row and report it retryable (no refusal)', async () => {
+      mockCanConsumeAI.mockRejectedValue(new Error('db down'));
+
+      const result = await executeCalendarTrigger(fresh(), createEvent());
+
+      expect(result).toMatchObject({ success: false, retryable: true, error: 'db down' });
+      expect(result.refusal).toBeUndefined();
+      expect(mockInsert).not.toHaveBeenCalled();
+    });
+
+    it('given the gate keeps throwing past the 24h window, should record one error run', async () => {
+      mockCanConsumeAI.mockRejectedValue(new Error('db down'));
+
+      const result = await executeCalendarTrigger(stale(), createEvent());
+
+      expect(result).toMatchObject({ success: false, error: 'db down' });
+      expect(result.retryable).toBeFalsy();
+      expect(unstartedRuns()).toEqual([expect.objectContaining({ status: 'error', error: 'db down' })]);
+    });
+  });
 });

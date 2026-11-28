@@ -153,7 +153,7 @@ export async function sendPendingPageInvite(args: {
 
   // R6: SMTP failure → compensating delete so the partial unique index stays clean
   try {
-    await sendPendingPageShareInvitationEmail({
+    const outcome = await sendPendingPageShareInvitationEmail({
       recipientEmail: email,
       inviterName: inviter?.name ?? 'A teammate',
       pageTitle: page.title,
@@ -161,6 +161,11 @@ export async function sendPendingPageInvite(args: {
       permissions: permissions.map((p) => p.toLowerCase()),
       inviteUrl,
     });
+    // A suppressed send (reserved agent recipient) delivered nothing: undo it
+    // exactly like a failed send.
+    if (outcome.status === 'suppressed') {
+      throw new Error('Invitation email suppressed: recipient cannot receive mail');
+    }
   } catch (emailError) {
     loggers.api.error(
       'Failed to send pending page share invitation email; rolling back pending invite row',

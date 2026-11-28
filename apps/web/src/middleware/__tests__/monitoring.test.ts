@@ -82,6 +82,9 @@ describe('monitoringMiddleware', () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv };
     process.env.MONITORING_INGEST_KEY = 'test-key';
+    // Behind one trusted reverse proxy: off Fly, x-forwarded-for is default-deny
+    // without TRUSTED_PROXY_HOPS (Agent Signup Phase 2b, edge-client-ip.ts).
+    process.env.TRUSTED_PROXY_HOPS = '1';
     delete process.env.MONITORING_INGEST_DISABLED;
     delete process.env.MONITORING_INGEST_PATH;
     fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));

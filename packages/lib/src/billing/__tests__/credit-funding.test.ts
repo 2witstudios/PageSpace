@@ -539,6 +539,18 @@ describe('applyStripeFunding', () => {
     await expect(applyStripeFunding(invoiceEvent, { tier: 'pro' })).resolves.toBeUndefined(); // billing disabled
   });
 
+  it('given invoice.paid for an agent account, should grant no allowance: no transaction, no monthly_grant row', async () => {
+    mockDb.select.mockReturnValue(userSelectReturning([{ id: 'agent-1', subscriptionTier: 'pro', accountType: 'agent' }]));
+
+    await applyStripeFunding(invoiceEvent);
+
+    expect(mockDb.transaction).not.toHaveBeenCalled();
+    expect(mockApiLogger.warn).toHaveBeenCalledWith(
+      'credit funding skipped: agent accounts receive no allowance',
+      expect.objectContaining({ eventId: 'evt_inv', userId: 'agent-1' }),
+    );
+  });
+
   it('skips funding (and never opens a transaction) when no user matches the Stripe customer', async () => {
     mockDb.select.mockReturnValue(userSelectReturning([]));
     await applyStripeFunding(invoiceEvent, { tier: 'pro' });

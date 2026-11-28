@@ -536,6 +536,12 @@ jobs:
   # they seed orgs, subscriptions, drives and wallets straight into Postgres
   # (apps/e2e/fixtures/org.fixture.ts) and drive everything else through the browser.
   #
+  # 38-39 are Agent Signup (ADR 0008): 38 drives the browser door end to end — an agent signs up
+  # at /auth/agent with a real proof of work, is refused AI with 402 requires_funding and no
+  # starter grant, a human claims it at /claim, and its next AI call bills the owner's wallet. 39
+  # walks /auth.md as a headless agent and fetches every URL it, /llms.txt and the RFC 8414
+  # metadata advertise, so nothing advertised can 404 on a running app.
+  #
   # The topology is reproduced deliberately and every piece of it is load-bearing — see the
   # comments on each step. Getting it wrong does not fail loudly; it makes the live-delivery
   # specs pass for the wrong reason.
@@ -599,7 +605,7 @@ jobs:
       BUCKET_NAME: pagespace-e2e
       # Org lapse tests reach the publishing policy guard before any upload.
       PUBLISH_BUCKET: pagespace-e2e-published
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/29-imago-messages.spec.ts tests/31-imago-chat.spec.ts tests/33-imago-tasks.spec.ts tests/36-imago-reuse.spec.ts tests/37-imago-org-wallet-cutover.spec.ts tests/30-org-membership-ui.spec.ts tests/31-org-lapsed.spec.ts tests/32-org-settings-pages.spec.ts tests/33-org-spend-surfaces.spec.ts tests/34-org-realtime-live.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts tests/26-imago-api-proxy.spec.ts tests/27-imago-shell.spec.ts tests/29-imago-messages.spec.ts tests/31-imago-chat.spec.ts tests/33-imago-tasks.spec.ts tests/36-imago-reuse.spec.ts tests/37-imago-org-wallet-cutover.spec.ts tests/30-org-membership-ui.spec.ts tests/31-org-lapsed.spec.ts tests/32-org-settings-pages.spec.ts tests/33-org-spend-surfaces.spec.ts tests/34-org-realtime-live.spec.ts tests/38-agent-signup-browser.spec.ts tests/39-agent-signup-api-door.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

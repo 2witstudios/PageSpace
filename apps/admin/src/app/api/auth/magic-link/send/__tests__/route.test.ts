@@ -100,6 +100,23 @@ describe('POST /api/auth/magic-link/send', () => {
     expect(mockSendEmail).toHaveBeenCalledOnce();
   });
 
+  it('given an address under the agent reserved domain, should refuse with the ordinary 400 validation error before any lookup, token or send', async () => {
+    const res = await POST(makeRequest('Agent-x@AGENTS.pagespace.invalid'));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ errors: { email: ['Please enter a valid email address'] } });
+    expect(mockDbFindFirst).not.toHaveBeenCalled();
+    expect(mockDbInsert).not.toHaveBeenCalled();
+    expect(mockSendEmail).not.toHaveBeenCalled();
+  });
+
+  it('given a malformed address (control), should give the identical 400 body', async () => {
+    const res = await POST(makeRequest('not-an-email'));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ errors: { email: ['Please enter a valid email address'] } });
+  });
+
   it('returns generic success without sending an email for a non-admin/unknown user', async () => {
     mockDbFindFirst.mockResolvedValueOnce(undefined);
 

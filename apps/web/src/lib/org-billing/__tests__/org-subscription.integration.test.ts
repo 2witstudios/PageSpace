@@ -160,6 +160,17 @@ describe('org Business subscription shell (real Postgres, in-memory Stripe)', ()
     expect(rows[0].collectionMethod).toBe('charge_automatically');
   });
 
+  it('ADR 0008 Decision 8: an org whose owner row is an agent account gets no Stripe customer (refused before any create)', async () => {
+    if (!dbAvailable) return;
+    const { orgId, ownerId, deps, stripe } = await northwind(1);
+    // ORG-1 keeps an agent off the Owner seat (loadOrgPrincipalKind); simulate a row that slipped past it.
+    await db.update(users).set({ accountType: 'agent' }).where(eq(users.id, ownerId));
+
+    await expect(ensureOrgStripeCustomer(orgId, deps)).rejects.toMatchObject({ code: 'owner_not_human' });
+    expect(stripe.customers.size).toBe(0);
+    expect((await orgRow(orgId)).stripeCustomerId).toBeNull();
+  });
+
   it('A-8 an org created with 7 seats starts at extra-seat quantity 2', async () => {
     if (!dbAvailable) return;
     const { orgId, deps, stripe } = await northwind(7);

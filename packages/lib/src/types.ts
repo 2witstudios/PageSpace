@@ -12,6 +12,8 @@ export interface PresenceViewer {
   socketId: string;
   name: string;
   avatarUrl: string | null;
+  /** `agent` marks a self-named AI agent account among the viewers (Agent Signup Phase 2b). */
+  accountType?: 'human' | 'agent';
 }
 
 export interface PresencePageViewersPayload {
@@ -125,6 +127,14 @@ export interface InboxItem {
   lastMessageAt: string | null;
   lastMessagePreview: string | null;
   lastMessageSender: string | null;
+  /**
+   * Agent marker (Agent Signup Phase 2c): `users.accountType` of the DM's
+   * other participant (`accountType`) and of a channel's last sender when that
+   * sender is a user (`lastMessageSenderAccountType`). The marker comes from
+   * these, never from the name.
+   */
+  accountType?: string | null;
+  lastMessageSenderAccountType?: string | null;
   unreadCount: number;
   driveId?: string;
   driveName?: string;

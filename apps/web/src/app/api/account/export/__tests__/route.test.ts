@@ -129,6 +129,8 @@ const mockUserData = {
     fundingLegs: [{ id: 'leg-1', walletId: 'w-drive', walletOwnerType: 'org', walletSubjectType: 'drive', walletSubjectDriveName: 'Product', funderKind: 'donation', originalCents: 500, remainingCents: 200, nonRefundable: true, createdAt: new Date('2026-09-04T00:00:00.000Z') }],
     spendOverrides: [],
   },
+  // An agent account's own identity row (ADR 0008), secrets withheld.
+  agentIdentity: [{ userId: 'user-1', ownerUserId: null, claimedAt: null, source: 'claude-code', lastAuthAt: null, createdAt: new Date('2026-09-16T00:00:00.000Z'), revokedAt: null, secretVersion: 1, createdByIp: null }],
 };
 
 describe('GET /api/account/export', () => {
@@ -264,6 +266,8 @@ describe('GET /api/account/export', () => {
       expect(names).toContain('stream-state.json');
       // The machines the subject enrolled as local environments are a first-class category.
       expect(names).toContain('local-environments.json');
+      // An agent account's own identity facts (ADR 0008), secrets withheld.
+      expect(names).toContain('agent-identity.json');
     });
 
     it('manifest.json documents the schema version and file inventory', async () => {

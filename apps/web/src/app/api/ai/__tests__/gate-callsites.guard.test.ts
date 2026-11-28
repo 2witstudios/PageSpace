@@ -738,3 +738,67 @@ describe('AI gate call-site guards: apps/realtime', () => {
     expect(meter!.indexOf('await gate(userId')).toBeGreaterThan(-1);
   });
 });
+
+// ─── Workflow runs: where the gate sits, and what a refusal leaves behind ────────────────
+//
+// The manual run route and both crons once called executeWorkflow with no credit gate, so a
+// zero-balance account — and any unclaimed agent — could schedule free AI (Agent Signup
+// Phase 1b / D-33). Every caller now passes the gate (automation-spend.guard pins which way);
+// these pins keep the gate's PLACEMENT and its retry semantics, so a transient refusal never
+// loses a calendar occurrence, a cron slot or a one-shot task trigger.
+describe('workflow run gate guards', () => {
+  const read = (rel: string) => stripComments(readFileSync(join(SRC_DIR, rel), 'utf8'));
+  const body = (src: string, signature: string) => {
+    const start = src.indexOf(signature);
+    expect(start, signature).toBeGreaterThan(-1);
+    return src.slice(start, src.indexOf('\n}\n', start));
+  };
+
+  it('executeWorkflow admits a run inside the claim, before any model: claim -> admit -> runClaimed, and a transient refusal gives the claim back', () => {
+    const run = body(read('lib/workflows/workflow-executor.ts'), 'export async function executeWorkflow(');
+    const claim = run.indexOf('.insert(workflowRuns)');
+    const admit = run.indexOf('await options.admit()');
+    expect(claim).toBeGreaterThan(-1);
+    // After the claim: an overlapping fire loses the claim and never gates.
+    expect(admit).toBeGreaterThan(claim);
+    // Before the model: runClaimed is the only path to runStepChain/runExecution.
+    expect(admit).toBeLessThan(run.indexOf('runClaimed('));
+    // A transient refusal (or a throwing gate) of a rescheduled source gives the claim back.
+    expect(run.slice(admit)).toMatch(/shouldRetryRefusal\(/);
+    expect(run.slice(admit)).toMatch(/abandonClaim\(runId/);
+    // The fail-closed backstop: a model run with no reserved drive wallet is skipped.
+    expect(run).toMatch(/automationRunUnreserved\(/);
+  });
+
+  it('every trigger executor that gates before the claim calls the gate before executeWorkflow', () => {
+    for (const rel of [
+      'lib/workflows/calendar-trigger-executor.ts',
+      'lib/integrations/zoom/webhook-trigger-executor.ts',
+      'lib/webhooks/page-webhook-trigger-executor.ts',
+    ]) {
+      const src = read(rel);
+      const gateAt = src.indexOf('canConsumeAI(');
+      expect(gateAt, rel).toBeGreaterThan(-1);
+      expect(src.indexOf('executeWorkflow(', gateAt), rel).toBeGreaterThan(gateAt);
+    }
+  });
+
+  it('a calendar occurrence refused before the claim is retried only inside the window, else settled once', () => {
+    const src = read('lib/workflows/calendar-trigger-executor.ts');
+    expect(src).toMatch(/shouldRetryRefusal\(/);
+    expect(src).toMatch(/retryable: true/);
+    expect(src).toMatch(/recordUnstartedRun\(trigger, 'cancelled'/);
+  });
+
+  it('every scheduled caller keeps its source eligible on a retryable result', () => {
+    expect(read('app/api/cron/workflows/route.ts')).toMatch(/!result\.claimConflict && !result\.retryable/);
+    expect(read('app/api/cron/task-triggers/route.ts')).toMatch(/if \(result\.retryable\)/);
+    expect(read('lib/workflows/task-trigger-helpers.ts')).toMatch(/if \(result\.retryable\)/);
+    expect(read('app/api/cron/calendar-triggers/route.ts')).toMatch(/result\.retryable/);
+  });
+
+  it('a completion fire keeps the tier daily cap (user-paced), the due-date cron skips it', () => {
+    expect(read('lib/workflows/task-trigger-helpers.ts')).toMatch(/creditAdmission\(input, 'user-paced'\)/);
+    expect(read('app/api/cron/task-triggers/route.ts')).toMatch(/'due_date' \? 'scheduled' : 'user-paced'/);
+  });
+});

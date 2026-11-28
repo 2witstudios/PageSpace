@@ -28,6 +28,16 @@ const GLOBAL_FLAG_LINES = [
   '  --version       Show the CLI version',
 ];
 
+/**
+ * First thing an AI agent reading `pagespace --help` sees: it can make its own
+ * account, and after one command the content verbs and `pagespace mcp` work.
+ */
+export const AGENT_INTRO_LINES: readonly string[] = [
+  'Are you an AI agent? You can create your own PageSpace account — no email, no human:',
+  '    pagespace signup --agent --name "<your name>"',
+  '  Then "pagespace drives list", "pagespace mcp", and "pagespace agent claim" when a human should fund your AI usage.',
+];
+
 interface GroupDefinition {
   readonly key: string;
   readonly title: string;
@@ -42,6 +52,12 @@ interface GroupDefinition {
  * dropped, so every registered command still appears exactly once.
  */
 const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
+  {
+    key: 'agent-account',
+    title: 'AI agents: create your own account (no email, no human needed)',
+    example: 'pagespace signup --agent --name "<your name>"',
+    resources: ['signup', 'agent'],
+  },
   { key: 'auth', title: 'Auth', example: 'pagespace login', resources: ['login', 'logout', 'whoami'] },
   { key: 'drives', title: 'Drives', example: 'pagespace drives list', resources: ['drives', 'trash', 'roles'] },
   { key: 'pages', title: 'Pages', example: 'pagespace pages read <pageId>', resources: ['pages', 'sheets'] },
@@ -107,6 +123,8 @@ function groupedLines(groups: readonly HelpGroup[]): string[] {
 export function createHelpHandler(commands: readonly HelpCommandDescriptor[]): CommandHandler {
   const lines = [
     'pagespace <command> [flags]',
+    '',
+    ...AGENT_INTRO_LINES,
     '',
     ...groupedLines(groupHelpCommands(commands)),
     ...GLOBAL_FLAG_LINES,
