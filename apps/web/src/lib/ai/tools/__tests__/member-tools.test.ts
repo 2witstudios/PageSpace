@@ -126,11 +126,11 @@ describe('member-tools', () => {
       };
       vi.mocked(db.select).mockReturnValueOnce(ownerChain as never);
       vi.mocked(listDriveMembers).mockResolvedValueOnce([{
-        id: 'dm1', userId: 'agent1', role: 'MEMBER', invitedBy: null, invitedAt: null, acceptedAt: new Date(), lastAccessedAt: null,
+        id: 'dm1', userId: 'agent1', role: 'MEMBER', source: 'invite', isGuest: false, invitedBy: null, invitedAt: null, acceptedAt: new Date(), lastAccessedAt: null,
         user: { id: 'agent1', email: 'agent-agent1@agents.pagespace.invalid', name: 'Drive Owner', accountType: 'agent' },
         profile: null, customRole: null, permissionCounts: { view: 0, edit: 0, share: 0 },
       }, {
-        id: 'dm2', userId: 'human2', role: 'MEMBER', invitedBy: null, invitedAt: null, acceptedAt: new Date(), lastAccessedAt: null,
+        id: 'dm2', userId: 'human2', role: 'MEMBER', source: 'invite', isGuest: false, invitedBy: null, invitedAt: null, acceptedAt: new Date(), lastAccessedAt: null,
         user: { id: 'human2', email: 'h2@x.com', name: null, accountType: 'human' },
         profile: null, customRole: null, permissionCounts: { view: 0, edit: 0, share: 0 },
       }]);
