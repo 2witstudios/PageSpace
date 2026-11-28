@@ -9,7 +9,11 @@ const fetchWithAuth = vi.hoisted(() => vi.fn(async () => ({ ok: true, json: asyn
 vi.mock('@/retained/lib/auth/auth-fetch', async (importOriginal) => ({ ...(await importOriginal<object>()), put, fetchWithAuth }));
 const state = vi.hoisted(() => ({ wallets: null as MyWallets | null, refresh: vi.fn(async () => undefined) }));
 vi.mock('@/retained/hooks/useMyWallets', () => ({ useMyWallets: () => ({ wallets: state.wallets, isLoading: false, refresh: state.refresh }) }));
-vi.mock('@/retained/hooks/useCreditBalance', () => ({ useCreditBalance: () => ({ balance: { monthly: { allowance: 90_000, periodEnd: '2026-10-01T00:00:00Z' } } }) }));
+const credit = vi.hoisted(() => {
+  const pro = { billingEnabled: true, subscriptionTier: 'pro', monthly: { remaining: 0, allowance: 90_000, periodEnd: '2026-10-01T00:00:00Z' }, topup: { remaining: 0 }, debt: 0, spendable: 0, reserved: 0 };
+  return { pro, balance: pro as Record<string, unknown> };
+});
+vi.mock('@/retained/hooks/useCreditBalance', () => ({ useCreditBalance: () => ({ balance: credit.balance }) }));
 vi.mock('@/retained/hooks/useDrive', () => ({
   useDriveStore: (select: (s: unknown) => unknown) => select({
     drives: [
@@ -85,6 +89,25 @@ describe('Settings › Usage › Wallets', () => {
     expect(product).toContain('Product wallet');
     expect(research).toContain('paused by whoever funds it, your calls follow the drive\'s fallback rule');
     expect(research).toContain('Paused');
+  });
+
+  it('the personal row promises the same next grant as the credit balance card (nextGrantOf, UTC date)', () => {
+    const detail = (balance: Record<string, unknown>) => {
+      credit.balance = balance;
+      const { unmount } = render(<UsageWallets />);
+      const text = screen.getByTestId('usage-wallet-personal').textContent ?? '';
+      unmount();
+      return text;
+    };
+    const [plain, inDebt, free] = [
+      detail(credit.pro),
+      detail({ ...credit.pro, debt: 25_000, spendable: -25_000 }),
+      detail({ ...credit.pro, subscriptionTier: 'free' }),
+    ];
+    credit.balance = credit.pro;
+    expect(plain).toContain('9,000 credits included on Oct 1');
+    expect(inDebt).toContain('6,500 credits included on Oct 1');
+    expect(free).not.toContain('included on');
   });
 
   it('UI-10 (partial) lists what I fund and offers to fund a drive I own that has no wallet yet', () => {
