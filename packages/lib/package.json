@@ -8,6 +8,8 @@
     "test": "vitest run",
     "test:db": "vitest run --config vitest.security.config.ts",
     "credential-plane": "bun src/agent-accounts/executor/plane-main.ts",
+    "credential-plane:secrets": "bun src/agent-accounts/executor/generate-plane-secrets-main.ts",
+    "credential-plane:migrate": "bun src/agent-accounts/store/plane-metadata/plane-metadata-migrate-main.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:coverage": "vitest run --coverage",
     "email:dev": "email dev --dir emails",
@@ -4385,6 +4387,7 @@
     "html-to-docx": "^1.8.0",
     "marked": "^17.0.1",
     "pako": "^2.1.0",
+    "pg": "^8.16.3",
     "react": "^19.1.2",
     "react-email": "^5.1.1",
     "resend": "^6.1.2",
@@ -4404,7 +4407,6 @@
     "@types/sanitize-html": "^2.16.1",
     "@types/xlsx": "^0.0.36",
     "eslint": "^9.36.0",
-    "pg": "^8.16.3",
     "typescript-eslint": "^8.59.0"
   }
 }

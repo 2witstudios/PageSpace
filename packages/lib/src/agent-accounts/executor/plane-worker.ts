@@ -36,6 +36,7 @@ import { createPinnedHttpsClient, DEFAULT_PINNED_HTTPS_LIMITS } from './pinned-h
 import { createHttpRequestExecutor } from './http-request-executor';
 import { createPlaneRequestHandler } from './plane-http-adapter';
 import { sweepOrphanedRefs } from './plane-orphan-sweep-worker';
+import { hmacSha3_256 } from './plane-crypto';
 
 const sha3: HashBytes = (bytes) => createHash('sha3-256').update(bytes).digest('hex');
 const sha256: HashBytes = (bytes) => createHash('sha256').update(bytes).digest('hex');
@@ -63,7 +64,8 @@ export async function startCredentialPlane({ config }: { readonly config: PlaneC
     resolveCredentials: (input) => provisioner.credentialsFor(input),
     hash: sha3,
     writeDigestKey: config.writeDigestKey,
-    hmac: (key, bytes) => createHmac('sha3-256', key).update(bytes).digest('hex'),
+    // Never createHmac('sha3-256'): Bun, the plane's runtime, rejects that digest (plane-crypto.ts).
+    hmac: hmacSha3_256,
     now: () => Date.now(),
     consentPublicKey: config.consentPublicKey ?? new Uint8Array(0),
     verify: verifyEd25519,

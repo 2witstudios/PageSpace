@@ -46,6 +46,22 @@ const ACCESS_TOKEN_TTL_SECONDS = 600;
 const LOCK_RETRY_ATTEMPTS = 400;
 const LOCK_RETRY_DELAY_MS = 25;
 
+/**
+ * The tenant identity's Universal Auth settings. The trusted-IP lists must
+ * admit IPv6: on Fly the plane reaches Infisical over 6PN (fdaa::/16), and an
+ * IPv4-only `0.0.0.0/0` made Infisical refuse every tenant login there
+ * ("not allowed to access this resource from the current IP address") while
+ * the IPv4 Docker test network passed. Network reach is the 6PN boundary's
+ * job (Infisical has no public service); the credential is the gate here.
+ */
+export const TENANT_UNIVERSAL_AUTH_CONFIG = {
+  clientSecretTrustedIps: [{ ipAddress: '0.0.0.0/0' }, { ipAddress: '::/0' }],
+  accessTokenTrustedIps: [{ ipAddress: '0.0.0.0/0' }, { ipAddress: '::/0' }],
+  accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
+  accessTokenMaxTTL: ACCESS_TOKEN_TTL_SECONDS,
+  accessTokenNumUsesLimit: 0,
+} as const;
+
 export function createInfisicalTenantProvisioner({
   baseUrl,
   organizationId,
@@ -101,13 +117,7 @@ export function createInfisicalTenantProvisioner({
     const identity = await api<{ identity: { id: string } }>('/api/v1/identities', { method: 'POST', body: { name, organizationId } });
     await api(`/api/v1/auth/universal-auth/identities/${identity.identity.id}`, {
       method: 'POST',
-      body: {
-        clientSecretTrustedIps: [{ ipAddress: '0.0.0.0/0' }],
-        accessTokenTrustedIps: [{ ipAddress: '0.0.0.0/0' }],
-        accessTokenTTL: ACCESS_TOKEN_TTL_SECONDS,
-        accessTokenMaxTTL: ACCESS_TOKEN_TTL_SECONDS,
-        accessTokenNumUsesLimit: 0,
-      },
+      body: TENANT_UNIVERSAL_AUTH_CONFIG,
     });
     // `member`, never `admin`: the tenant identity reads and writes secrets in its ONE project.
     await api(`/api/v2/workspace/${project.project.id}/identity-memberships/${identity.identity.id}`, { method: 'POST', body: { roles: [{ role: 'member' }] } });

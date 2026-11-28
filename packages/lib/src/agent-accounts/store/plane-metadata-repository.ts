@@ -1,6 +1,6 @@
 /**
  * The plane's OWN metadata DB (ADR 0005 §2.3, §2.5) — I/O only, no decision
- * logic. Two rows per ref (`infisical-dev/plane-metadata.sql` owns the DDL):
+ * logic. Two rows per ref (`plane-metadata/*.sql` owns the DDL):
  *   - `agent_account_secret_versions`: the CAS bookkeeping and the
  *     PLANE-ATTESTED rotation/revocation facts (`currentVersion`,
  *     `previousVersion`, `rotatedAt`, `revokedAt`) plus the uncertain-write
