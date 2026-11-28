@@ -1,7 +1,8 @@
 /**
  * POST /api/agent/claim/session — an agent signed in by SESSION gets a claim
- * link for a human (Agent Signup Phase 3; the claim_token-holding API path is
- * Phase 4's POST /api/agent/claim).
+ * link for a human (Agent Signup Phase 3). The bearer twin is
+ * POST /api/agent/claim; both run `handleOwnClaimStart`, so only the agent
+ * itself can start its claim (security review addendum).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
@@ -9,7 +10,7 @@ import { NextResponse } from 'next/server';
 const mocks = vi.hoisted(() => ({
   enabled: vi.fn(),
   auth: vi.fn(),
-  findUser: vi.fn(),
+  accountType: vi.fn(),
   rateLimit: vi.fn(),
   start: vi.fn(),
   audit: vi.fn(),
@@ -26,11 +27,13 @@ vi.mock('@/lib/agent-auth/door', async (importOriginal) => ({
   agentIssuer: () => 'https://pagespace.test',
 }));
 vi.mock('@/lib/auth', () => ({
+  getClientIP: () => '203.0.113.9',
   authenticateRequestWithOptions: mocks.auth,
   isAuthError: (r: unknown) => typeof r === 'object' && r !== null && 'error' in r,
 }));
-vi.mock('@/lib/repositories/auth-repository', () => ({ authRepository: { findUserById: mocks.findUser } }));
-vi.mock('@/lib/agent-auth/claim-start', () => ({ startAgentClaimForSession: mocks.start }));
+vi.mock('@/lib/repositories/oauth-repository', () => ({ findAccessTokenIssuance: vi.fn().mockResolvedValue({ clientId: 'pagespace-agent', accountType: 'agent' }) }));
+vi.mock('@/lib/repositories/session-repository', () => ({ sessionRepository: { findAccountType: mocks.accountType } }));
+vi.mock('@/lib/agent-auth/claim-start', () => ({ startOwnAgentClaim: mocks.start }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: mocks.audit }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: mocks.rateLimit,
@@ -47,7 +50,7 @@ describe('POST /api/agent/claim/session', () => {
     vi.clearAllMocks();
     mocks.enabled.mockReturnValue(true);
     mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'session' });
-    mocks.findUser.mockResolvedValue({ id: 'agent-1', accountType: 'agent' });
+    mocks.accountType.mockResolvedValue('agent');
     mocks.rateLimit.mockResolvedValue({ allowed: true });
     mocks.start.mockResolvedValue({ ok: true, userCode: 'ABCD-EFGH', expiresAt: new Date(Date.now() + 900_000) });
   });
@@ -73,7 +76,7 @@ describe('POST /api/agent/claim/session', () => {
 
   it('should audit the claim start without the user code', async () => {
     await call();
-    expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', userId: 'agent-1', resourceType: 'agent_identity' }));
+    expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', userId: 'agent-1', resourceType: 'agent_claim', details: expect.objectContaining({ door: 'session' }) }));
     expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain('ABCD-EFGH');
   });
 
@@ -89,8 +92,9 @@ describe('POST /api/agent/claim/session', () => {
     expect(mocks.start).not.toHaveBeenCalled();
   });
 
-  it('given a human session, should 404 (only an agent can be claimed)', async () => {
-    mocks.findUser.mockResolvedValue({ id: 'human-1', accountType: 'human' });
+  it('given a human session (a former owner, a throwaway approver), should 404 and start nothing', async () => {
+    mocks.auth.mockResolvedValue({ userId: 'human-1', tokenType: 'session' });
+    mocks.accountType.mockResolvedValue('human');
     expect((await call()).status).toBe(404);
     expect(mocks.start).not.toHaveBeenCalled();
     expect(mocks.rateLimit).not.toHaveBeenCalled();
@@ -115,13 +119,19 @@ describe('POST /api/agent/claim/session', () => {
     expect(await response.json()).toEqual({ error: 'already_claimed' });
   });
 
-  it('given a revoked agent or a spent claim token, should 404', async () => {
+  it('given an agent bearer instead of a session, should never reach the start (session door only)', async () => {
+    mocks.auth.mockResolvedValue({ userId: 'agent-1', tokenType: 'oauth', tokenId: 'at-1', scopes: { account: true } });
+    expect((await call()).status).toBe(404);
+    expect(mocks.start).not.toHaveBeenCalled();
+  });
+
+  it('given a revoked or suspended agent, should 404', async () => {
     mocks.start.mockResolvedValue({ ok: false, error: 'not_claimable' });
     expect((await call()).status).toBe(404);
   });
 
   it('given a store failure, should 503', async () => {
-    mocks.start.mockRejectedValue(new mocks.StoreError('start_session_claim', { errorName: 'x', code: null, constraint: null }));
+    mocks.start.mockRejectedValue(new mocks.StoreError('start_claim', { errorName: 'x', code: null, constraint: null }));
     const response = await call();
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });

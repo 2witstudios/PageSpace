@@ -28,7 +28,8 @@
  * device_code falls back to the shared invalid_grant.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getClientIP } from '@/lib/auth';
+import { authenticateRequestWithOptions, getClientIP, isAuthError } from '@/lib/auth';
+import { resolveClaimCaller } from '@/lib/agent-auth/claim-caller';
 import { getRegisteredClient, clientAllowsGrant, type RegisteredClient } from '@pagespace/lib/auth/oauth/clients';
 import { ACCESS_TOKEN_TTL_SECONDS, type IssuedTokenPair } from '@pagespace/lib/auth/oauth/issue-tokens';
 import {
@@ -41,7 +42,6 @@ import {
 } from '@/lib/repositories/oauth-repository';
 import { AGENT_ASSERTION_GRANT_TYPE, AGENT_CLAIM_GRANT_TYPE } from '@pagespace/lib/auth/oauth/metadata';
 import { pollAgentClaim, type PollAgentClaimResult } from '@/lib/repositories/agent-claim-repository';
-import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { resolveAgentAssertionScopes } from '@/lib/agent-auth/assertion-scope';
 import { isAgentDoorOpen } from '@/lib/agent-auth/door';
 import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
@@ -582,18 +582,26 @@ async function handleAgentAssertionGrant(req: NextRequest, form: URLSearchParams
 }
 
 /**
- * The agent claim grant (auth.md "Fund"; ADR 0008 Decisions 3, 5, 7): an agent
- * polls with the `claim_token` it started a claim with while a human approves
- * at `/claim`. The device-flow vocabulary is answered by name (the poller must
- * know whether to keep waiting, back off, or restart); an unknown token, a
- * second poll after redemption and an agent that became unusable are the one
- * `invalid_grant`. On approval the answer is `{claimed:true, owner, ...tokens}`
- * — a fresh pair minted for the AGENT (the principal never changes), scoped as
- * its jwt-bearer grant is. Its earlier tokens keep working.
+ * The agent claim grant (auth.md "Fund"; ADR 0008 Decisions 3, 5, 7 and the
+ * security review addendum): the AGENT polls its own claim while a human
+ * approves at `/claim`, authenticated by its own `pagespace-agent` access token
+ * as `Authorization: Bearer` — the only credential that can name the claim, so
+ * nobody but the agent (not a claim approver, not a former owner, not a client
+ * the agent granted access) can poll it. A `claim_token` parameter is refused:
+ * there is no claim token.
  *
- * Polling uses the device-poll limit (OAUTH_DEVICE_POLL), keyed per IP and per
- * claim token — never per client: every agent shares `pagespace-agent`, and a
- * per-client bucket would be one platform-wide bucket an IP could exhaust.
+ * The device-flow vocabulary is answered by name (the poller must know whether
+ * to keep waiting, back off, or restart); a missing, invalid or foreign bearer
+ * is one 401 `invalid_token` (RFC 6750); no claim, a second poll after the
+ * approval was reported, and an agent that became unusable are the one
+ * `invalid_grant`. On approval the answer is `{claimed:true, owner}` — and
+ * NOTHING else: no token is minted on this grant (Decision 7 — the agent keeps
+ * the tokens it already holds).
+ *
+ * Polling uses the device-poll limit (OAUTH_DEVICE_POLL), keyed per IP (before
+ * anything is authenticated) and per agent — never per client: every agent
+ * shares `pagespace-agent`, and a per-client bucket would be one platform-wide
+ * bucket an IP could exhaust.
  */
 const CLAIM_POLL_ERROR_BODY: Record<Exclude<PollAgentClaimResult['outcome'], 'ok'>, Record<string, unknown>> = {
   not_found: INVALID_GRANT,
@@ -605,20 +613,22 @@ const CLAIM_POLL_ERROR_BODY: Record<Exclude<PollAgentClaimResult['outcome'], 'ok
   agent_unavailable: INVALID_GRANT,
 };
 
-async function checkAgentClaimPollRateLimit(req: NextRequest, claimToken: string): Promise<NextResponse | null> {
-  const ip = getClientIP(req);
-  const claimBucket = hashToken(`agent-claim-poll-rate-limit:${claimToken}`).slice(0, 32);
-  const [ipLimit, claimLimit] = await Promise.all([
-    checkDistributedRateLimit(`oauth-token:agent_claim_poll:ip:${agentRateLimitAddress(ip)}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL),
-    checkDistributedRateLimit(`oauth-token:agent_claim_poll:claim:${claimBucket}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL),
-  ]);
-  if (ipLimit.allowed && claimLimit.allowed) return null;
+const CLAIM_POLL_AUTH_OPTIONS = { allow: ['oauth'] as const, requireCSRF: false };
 
+function claimPollRateLimited(req: NextRequest, bucket: 'ip' | 'agent'): NextResponse {
   auditRequest(req, {
     eventType: 'security.rate.limited',
-    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_claim_poll_rate_limited' },
+    details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_claim_poll_rate_limited', bucket },
   });
   return noStoreJson({ error: 'slow_down' }, 400);
+}
+
+function invalidClaimPollToken(req: NextRequest, reason: string): NextResponse {
+  auditRequest(req, { eventType: 'authz.access.denied', details: { clientId: PAGESPACE_AGENT_CLIENT_ID, oauthEvent: 'agent_claim_poll_refused', reason } });
+  return NextResponse.json({ error: 'invalid_token' }, {
+    status: 401,
+    headers: { 'Cache-Control': 'no-store', 'WWW-Authenticate': 'Bearer error="invalid_token"' },
+  });
 }
 
 async function handleAgentClaimGrant(req: NextRequest, form: URLSearchParams): Promise<NextResponse> {
@@ -627,15 +637,16 @@ async function handleAgentClaimGrant(req: NextRequest, form: URLSearchParams): P
     return noStoreJson({ error: 'unsupported_grant_type' }, 400);
   }
 
-  const claimToken = form.get('claim_token');
   const clientId = form.get('client_id');
-  if (!claimToken || !clientId) {
+  // The retired claim token is refused by name, before anything else, so a
+  // stale client stops instead of presenting a second secret anywhere.
+  if (!clientId || form.has('claim_token')) {
     auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_claim_invalid_request' } });
     return noStoreJson(INVALID_REQUEST, 400);
   }
 
-  const rateLimited = await checkAgentClaimPollRateLimit(req, claimToken);
-  if (rateLimited) return rateLimited;
+  const ipLimit = await checkDistributedRateLimit(`oauth-token:agent_claim_poll:ip:${agentRateLimitAddress(getClientIP(req))}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL);
+  if (!ipLimit.allowed) return claimPollRateLimited(req, 'ip');
 
   const registered = getRegisteredClient(clientId);
   if (registered && !clientAllowsGrant(registered, AGENT_CLAIM_GRANT_TYPE)) {
@@ -648,32 +659,37 @@ async function handleAgentClaimGrant(req: NextRequest, form: URLSearchParams): P
     auditRequest(req, { eventType: 'authz.access.denied', details: { oauthEvent: 'agent_claim_client_rejected' } });
     return resolved.rejection;
   }
-  const { client, clientDbId } = resolved;
+  const { client } = resolved;
 
-  // The pair is the agent's own account grant — the same narrowing as jwt-bearer.
-  const scope = resolveAgentAssertionScopes(null);
-  if (!scope.ok) return noStoreJson(INVALID_GRANT, 400);
+  if (!req.headers.get('authorization')) return invalidClaimPollToken(req, 'no_bearer');
+  const auth = await authenticateRequestWithOptions(req, CLAIM_POLL_AUTH_OPTIONS);
+  if (isAuthError(auth)) return invalidClaimPollToken(req, 'bearer_invalid');
+  const caller = await resolveClaimCaller(auth, 'bearer');
+  if (!caller.ok) return invalidClaimPollToken(req, 'not_the_agent_itself');
 
-  const result = await pollAgentClaim({ claimToken, clientDbId, scopes: scope.scopes, now: new Date() });
+  const agentLimit = await checkDistributedRateLimit(`oauth-token:agent_claim_poll:agent:${caller.agentUserId}`, DISTRIBUTED_RATE_LIMITS.OAUTH_DEVICE_POLL);
+  if (!agentLimit.allowed) return claimPollRateLimited(req, 'agent');
+
+  const result = await pollAgentClaim({ agentUserId: caller.agentUserId, now: new Date() });
 
   if (result.outcome !== 'ok') {
     auditRequest(req, {
       eventType: 'authz.access.denied',
-      userId: result.outcome === 'agent_unavailable' ? result.agentUserId : undefined,
+      userId: caller.agentUserId,
       details: { clientId: client.clientId, oauthEvent: 'agent_claim_poll_rejected', outcome: result.outcome },
     });
     return noStoreJson(CLAIM_POLL_ERROR_BODY[result.outcome], 400);
   }
 
   auditRequest(req, {
-    eventType: 'auth.token.created',
+    eventType: 'authz.permission.granted',
     userId: result.agentUserId,
     resourceType: 'agent_identity',
     resourceId: result.agentUserId,
-    details: { clientId: client.clientId, oauthEvent: 'agent_claim_redeemed', ownerUserId: result.owner.id },
+    details: { clientId: client.clientId, oauthEvent: 'agent_claim_reported', ownerUserId: result.owner.id },
   });
 
-  return noStoreJson({ claimed: true, owner: result.owner, ...tokenSuccessBody(result.tokens, result.scopes) }, 200);
+  return noStoreJson({ claimed: true, owner: result.owner }, 200);
 }
 
 /**

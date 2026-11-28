@@ -7,10 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **`agent.challenge`, `agent.signup`, `agent.claim`, `agent.rotateSecret` — an AI agent's own
-  account.** `challenge`, `signup` and `claim` run before any credential exists and are sent with
-  no `Authorization` header (new `unauthenticated` operation flag); build the client with the new
-  `AnonymousAuthProvider` for them. `rotateSecret` uses the agent's own access token. Every input
-  schema is strict.
+  account.** `challenge` and `signup` run before any credential exists and are sent with no
+  `Authorization` header (new `unauthenticated` operation flag); build the client with the new
+  `AnonymousAuthProvider` for them. `claim` (no input) and `rotateSecret` use the agent's own
+  access token. Every input schema is strict.
+- **`pollAgentClaim(tokenEndpoint, accessToken, clientId)`** polls the claim grant with the agent's
+  own access token and returns the device-flow outcome as a value, or `{ kind: 'claimed', owner }`
+  once a human approves. A claim mints no token; the agent keeps the ones it has.
 - **`exchangeAgentAssertion(tokenEndpoint, secret, clientId)`** trades the agent secret for an
   `OAuthTokens` pair over the jwt-bearer grant, classified like a refresh (`invalid_grant` is
   terminal, network/429/5xx retryable). With it: `isInvalidGrantError`,

@@ -56,7 +56,6 @@ const BAD_NONCE = (() => {
   }
 })();
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
-const CLAIM = 'ps_claim_abcdefghijklmnopqrstuvwxyz012345';
 
 const validBody = (overrides: Record<string, unknown> = {}) => ({
   type: 'anonymous',
@@ -85,17 +84,17 @@ describe('POST /api/agent/identity', () => {
     mocks.refund.mockResolvedValue(undefined);
     mocks.ip.mockReturnValue('203.0.113.9');
     mocks.find.mockResolvedValue({ found: true, expired: false, consumed: false, difficultyBits: BITS, id: 'chal-1' });
-    mocks.create.mockResolvedValue({ ok: true, data: { userId: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid', secret: SECRET, secretPrefix: SECRET.slice(0, 12), claimToken: CLAIM } });
+    mocks.create.mockResolvedValue({ ok: true, data: { userId: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid', secret: SECRET, secretPrefix: SECRET.slice(0, 12) } });
   });
 
   describe('given a valid registration', () => {
-    it('should create the account and return the auth.md identity response', async () => {
+    // Security review: no claim token is issued — the agent claims with its own access token.
+    it('should create the account and return the identity response — with no claim token', async () => {
       const response = await register(validBody());
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
         identity_assertion: SECRET,
         agent_id: 'agent-1',
-        claim_token: CLAIM,
         account_type: 'agent',
         token_endpoint: 'https://pagespace.test/api/oauth/token',
         grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -118,12 +117,11 @@ describe('POST /api/agent/identity', () => {
       expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Agent', source: null }));
     });
 
-    it('should audit the registration without the secret, its hash or the claim token', async () => {
+    it('should audit the registration without the secret', async () => {
       await register(validBody());
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', userId: 'agent-1', resourceType: 'agent_identity', resourceId: 'agent-1' }));
       const audited = JSON.stringify(mocks.audit.mock.calls);
       expect(audited).not.toContain(SECRET);
-      expect(audited).not.toContain(CLAIM);
     });
   });
 

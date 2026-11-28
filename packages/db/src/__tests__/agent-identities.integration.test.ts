@@ -107,7 +107,6 @@ describe('agent identity schema (real Postgres)', () => {
     const agent = await seedUser({ accountType: 'agent' });
     const [claim] = await db.insert(agentClaims).values({
       agentUserId: agent.id,
-      claimTokenHash: `c-${createId()}`,
       userCodeHash: `u-${createId()}`,
       expiresAt: new Date(Date.now() + 15 * 60_000),
     }).returning();

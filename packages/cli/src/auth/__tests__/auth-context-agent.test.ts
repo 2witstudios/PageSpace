@@ -20,7 +20,6 @@ const AGENT: AgentHostCredential = {
   secret: SECRET,
   refreshToken: 'ps_rt_old',
   clientId: 'pagespace-agent',
-  claimToken: 'ps_claim_1',
   contentKeyName: 'agent',
   scopes: ['account', 'offline_access'],
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -65,7 +64,7 @@ describe('buildAuthProvider — stored agent credential', () => {
     expect(createRefresh).toHaveBeenCalledWith(`${HOST}/api/oauth/token`, 'pagespace-agent');
     expect(exchange).not.toHaveBeenCalled();
     expect(store.sets).toHaveLength(1);
-    expect(store.sets[0]?.credential).toMatchObject({ kind: 'agent', secret: SECRET, refreshToken: 'ps_rt_refreshed', claimToken: 'ps_claim_1', contentKeyName: 'agent' });
+    expect(store.sets[0]?.credential).toMatchObject({ kind: 'agent', secret: SECRET, refreshToken: 'ps_rt_refreshed', contentKeyName: 'agent' });
     expect(store.sets[0]?.profile).toBe('default');
   });
 

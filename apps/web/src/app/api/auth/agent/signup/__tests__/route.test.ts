@@ -60,7 +60,6 @@ const BAD_NONCE = (() => {
   }
 })();
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
-const CLAIM = 'ps_claim_abcdefghijklmnopqrstuvwxyz012345';
 
 const validBody = (overrides: Record<string, unknown> = {}) => ({
   name: 'Browser Agent',
@@ -96,7 +95,7 @@ describe('POST /api/auth/agent/signup', () => {
     mocks.refund.mockResolvedValue(undefined);
     mocks.ip.mockReturnValue('203.0.113.9');
     mocks.find.mockResolvedValue({ found: true, expired: false, consumed: false, difficultyBits: BITS, id: 'chal-1' });
-    mocks.create.mockResolvedValue({ ok: true, data: { userId: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid', secret: SECRET, secretPrefix: SECRET.slice(0, 12), claimToken: CLAIM } });
+    mocks.create.mockResolvedValue({ ok: true, data: { userId: 'agent-1', email: 'agent-agent-1@agents.pagespace.invalid', secret: SECRET, secretPrefix: SECRET.slice(0, 12) } });
     mocks.session.mockResolvedValue({ ok: true, csrfToken: 'session-csrf', sessionId: 'sess-1', headers: sessionHeaders(), deviceToken: 'ps_dev_x' });
   });
 
@@ -116,7 +115,7 @@ describe('POST /api/auth/agent/signup', () => {
       });
     });
 
-    it('should return the secret once with the agent id, claim token, CSRF, device token and redirect, with the session cookie and no-store', async () => {
+    it('should return the secret once with the agent id, CSRF, device token and redirect — and no claim token — with the session cookie and no-store', async () => {
       const response = await signup(validBody());
       expect(response.status).toBe(200);
       expect(await response.json()).toEqual({
@@ -124,7 +123,6 @@ describe('POST /api/auth/agent/signup', () => {
         agentId: 'agent-1',
         accountType: 'agent',
         secret: SECRET,
-        claimToken: CLAIM,
         csrfToken: 'session-csrf',
         deviceToken: 'ps_dev_x',
         redirectUrl: '/dashboard',
@@ -143,13 +141,12 @@ describe('POST /api/auth/agent/signup', () => {
       expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ source: null }));
     });
 
-    it('should audit the signup and the session without the secret or the claim token', async () => {
+    it('should audit the signup and the session without the secret', async () => {
       await signup(validBody());
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.created', userId: 'agent-1', resourceType: 'agent_identity' }));
       expect(mocks.audit).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.login.success', userId: 'agent-1', sessionId: 'sess-1' }));
       const audited = JSON.stringify(mocks.audit.mock.calls);
       expect(audited).not.toContain(SECRET);
-      expect(audited).not.toContain(CLAIM);
     });
   });
 
@@ -288,7 +285,6 @@ describe('POST /api/auth/agent/signup', () => {
         agentId: 'agent-1',
         accountType: 'agent',
         secret: SECRET,
-        claimToken: CLAIM,
         sessionStarted: false,
         redirectUrl: '/auth/agent?mode=signin',
       });

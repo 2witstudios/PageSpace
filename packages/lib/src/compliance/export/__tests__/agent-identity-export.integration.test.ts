@@ -33,21 +33,18 @@ async function seedAgent(ownerUserId: string | null) {
   const agent = await factories.createUser({ accountType: 'agent', emailVerified: null });
   createdUsers.push(agent.id);
   const secretHash = `sechash-${agent.id}`;
-  const claimTokenHash = `claimhash-${agent.id}`;
   await db.insert(agentIdentities).values({
     userId: agent.id,
     secretHash,
     secretPrefix: 'ps_agent_pfx',
     secretVersion: 3,
-    claimTokenHash,
-    claimTokenPrefix: 'ps_claim_pfx',
     source: 'claude-code',
     ownerUserId,
     claimedAt: ownerUserId ? new Date('2026-09-16T12:00:00.000Z') : null,
     createdByIp: '203.0.113.7',
     lastAuthAt: new Date('2026-09-16T13:00:00.000Z'),
   });
-  return { agent, secretHash, claimTokenHash };
+  return { agent, secretHash };
 }
 
 describe('collectUserAgentIdentity (real Postgres)', () => {
@@ -78,7 +75,7 @@ describe('collectUserAgentIdentity (real Postgres)', () => {
   });
 
   it('given an agent\'s native and portable bundles, should carry agent-identity.json and no secret or claim-token hash or prefix anywhere', async () => {
-    const { agent, secretHash, claimTokenHash } = await seedAgent(null);
+    const { agent, secretHash } = await seedAgent(null);
     const profile = await collectUserProfile(db, agent.id);
     const agentIdentity = await collectUserAgentIdentity(db, agent.id);
     if (!profile) throw new Error('profile missing');
@@ -99,7 +96,7 @@ describe('collectUserAgentIdentity (real Postgres)', () => {
 
     expect(profile.accountType).toBe('agent');
     expect(native.find((f) => f.name === 'agent-identity.json')?.recordCount).toBe(1);
-    for (const needle of [secretHash, claimTokenHash, 'ps_agent_pfx', 'ps_claim_pfx', 'secretHash', 'secretPrefix', 'claimTokenHash', 'claimTokenPrefix']) {
+    for (const needle of [secretHash, 'ps_agent_pfx', 'secretHash', 'secretPrefix']) {
       expect(serialized, needle).not.toContain(needle);
     }
   });

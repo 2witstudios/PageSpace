@@ -71,8 +71,9 @@ export interface MachineHostCredential {
  * loses nothing; losing `secret` loses the account, so nothing in this CLI
  * deletes one without being asked to.
  *
- * `claimToken` is what a human uses to claim (and fund) the agent; it is
- * cleared once a claim succeeds. `contentKeyName` names the stored `static`
+ * There is no claim token (security review addendum to ADR 0008): the agent
+ * starts and polls a claim with its own access token, and a `claimToken` an
+ * older build stored is dropped on read. `contentKeyName` names the stored `static`
  * key this agent minted for itself (an `mcp_` key — content access never rides
  * the account token), which is also what lets `pagespace mcp` use that key on
  * a machine where the agent is the only identity (`auth/agent-machine.ts`).
@@ -83,7 +84,6 @@ export interface AgentHostCredential {
   readonly secret: string;
   readonly refreshToken: string | null;
   readonly clientId: string;
-  readonly claimToken: string | null;
   readonly contentKeyName: string | null;
   readonly scopes: readonly string[];
   readonly createdAt: string;
@@ -188,7 +188,6 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
     const optional = (value: unknown): string | null | false =>
       value === undefined || value === null ? null : typeof value === 'string' && value.length > 0 ? value : false;
     const refreshToken = optional(candidate.refreshToken);
-    const claimToken = optional(candidate.claimToken);
     const contentKeyName = optional(candidate.contentKeyName);
     if (
       typeof candidate.agentId !== 'string' ||
@@ -198,7 +197,6 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
       typeof candidate.clientId !== 'string' ||
       candidate.clientId.length === 0 ||
       refreshToken === false ||
-      claimToken === false ||
       contentKeyName === false
     ) {
       return null;
@@ -209,7 +207,6 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
       secret: candidate.secret,
       refreshToken,
       clientId: candidate.clientId,
-      claimToken,
       contentKeyName,
       scopes: [...candidate.scopes],
       createdAt: candidate.createdAt,
@@ -243,7 +240,6 @@ function toHostCredential(value: HostCredential): HostCredential {
         secret: value.secret,
         refreshToken: value.refreshToken,
         clientId: value.clientId,
-        claimToken: value.claimToken,
         contentKeyName: value.contentKeyName,
         scopes: [...value.scopes],
         createdAt: value.createdAt,

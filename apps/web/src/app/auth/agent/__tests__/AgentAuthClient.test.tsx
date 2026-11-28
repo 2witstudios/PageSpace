@@ -32,7 +32,6 @@ import { describeAgentAuthError } from '../agent-auth-copy';
 import { useEditingStore } from '@/stores/useEditingStore';
 
 const SECRET = 'ps_agent_abcdefghijklmnopqrstuvwxyz012345';
-const CLAIM = 'ps_claim_abcdefghijklmnopqrstuvwxyz012345';
 
 const jsonResponse = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -84,7 +83,7 @@ describe('AgentAuthClient — signup', () => {
   it('should solve the fetched challenge, post the browser signup and reveal the secret once', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { challenge: 'ps_pow_c', difficulty_bits: 20 }))
-      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, claimToken: CLAIM, redirectUrl: '/dashboard/d1', csrfToken: 'x', deviceToken: 'ps_dev_x' }));
+      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, redirectUrl: '/dashboard/d1', csrfToken: 'x', deviceToken: 'ps_dev_x' }));
     render(<AgentAuthClient nextPath="/dashboard/d1" />);
     fillSignup();
     fireEvent.click(screen.getByRole('button', { name: 'Create agent account' }));
@@ -99,7 +98,8 @@ describe('AgentAuthClient — signup', () => {
       csrfToken: 'fresh-csrf', platform: 'web', deviceId: 'dev-1', deviceName: 'Chrome', next: '/dashboard/d1',
     });
     expect(screen.getByTestId('agent-id')).toHaveTextContent('agent-1');
-    expect(screen.getByTestId('agent-claim-token')).toHaveTextContent(CLAIM);
+    // Security review: no claim token exists, so the reveal shows none.
+    expect(screen.queryByTestId('agent-claim-token')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Copy secret' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Get claim link' })).toBeInTheDocument();
     expect(localStorage.getItem('deviceToken')).toBe('ps_dev_x');
@@ -122,7 +122,7 @@ describe('AgentAuthClient — signup', () => {
   it('should keep Continue disabled until "I have saved my secret", then go to the redirect', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { challenge: 'ps_pow_c', difficulty_bits: 20 }))
-      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, claimToken: CLAIM, redirectUrl: '/dashboard', csrfToken: 'x' }));
+      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, redirectUrl: '/dashboard', csrfToken: 'x' }));
     render(<AgentAuthClient />);
     fillSignup();
     fireEvent.click(screen.getByRole('button', { name: 'Create agent account' }));
@@ -137,7 +137,7 @@ describe('AgentAuthClient — signup', () => {
   it('should register the reveal with the editing store so no refresh can unmount it', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { challenge: 'ps_pow_c', difficulty_bits: 20 }))
-      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, claimToken: CLAIM, redirectUrl: '/dashboard', csrfToken: 'x' }));
+      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, redirectUrl: '/dashboard', csrfToken: 'x' }));
     render(<AgentAuthClient />);
     fillSignup();
     fireEvent.click(screen.getByRole('button', { name: 'Create agent account' }));
@@ -148,7 +148,7 @@ describe('AgentAuthClient — signup', () => {
   it('given the session could not start, should still reveal the secret and point at sign-in instead of a claim link', async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { challenge: 'ps_pow_c', difficulty_bits: 20 }))
-      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, claimToken: CLAIM, sessionStarted: false, redirectUrl: '/auth/agent?mode=signin' }));
+      .mockResolvedValueOnce(jsonResponse(200, { success: true, agentId: 'agent-1', secret: SECRET, sessionStarted: false, redirectUrl: '/auth/agent?mode=signin' }));
     render(<AgentAuthClient />);
     fillSignup();
     fireEvent.click(screen.getByRole('button', { name: 'Create agent account' }));

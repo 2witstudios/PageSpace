@@ -23,7 +23,7 @@ import type { OAuthTokens } from './oauth.js';
 /** RFC 7523 §2.1 — the URN the agent secret is presented under. */
 export const AGENT_ASSERTION_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 
-/** The grant an agent polls while a human approves its claim (auth.md "Fund"). */
+/** The grant an agent polls, with its own access token, while a human approves its claim (auth.md "Fund"; `pollAgentClaim`). */
 export const AGENT_CLAIM_GRANT_TYPE = 'urn:pagespace:agent-auth:grant-type:claim';
 
 /** The static public OAuth client every agent grant is redeemed as. */
@@ -69,9 +69,9 @@ function isBearerTokenBody(value: unknown): value is BearerTokenBody {
 }
 
 /**
- * Parses a token-endpoint response that should carry a Bearer pair. Shared by
- * the exchange and by callers polling the claim grant, whose approval body is
- * the same pair plus `claimed`/`owner`. Throws the classified error otherwise.
+ * Parses a token-endpoint response that should carry a Bearer pair (the
+ * exchange; the CLI's refresh edge). Throws the classified error otherwise.
+ * The claim grant never carries a pair — see `pollAgentClaim`.
  */
 export function parseBearerTokenResponse(
   status: number,

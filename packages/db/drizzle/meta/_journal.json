@@ -2521,6 +2521,13 @@
       "when": 1795836968355,
       "tag": "0390_agent_claim_token_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 360,
+      "version": "7",
+      "when": 1795856555308,
+      "tag": "0391_agent_claim_token_retired",
+      "breakpoints": true
     }
   ]
 }

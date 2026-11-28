@@ -128,7 +128,7 @@ async function register(request: Request) {
   }
   if (!created.ok) return refuse('challenge_consumed_concurrently');
 
-  const { userId, secret, claimToken } = created.data;
+  const { userId, secret } = created.data;
   auditRequest(request, {
     eventType: 'auth.token.created',
     userId,
@@ -141,7 +141,6 @@ async function register(request: Request) {
   return agentNoStoreJson({
     identity_assertion: secret,
     agent_id: userId,
-    claim_token: claimToken,
     account_type: 'agent',
     token_endpoint: metadata.token_endpoint,
     grant_type: AGENT_ASSERTION_GRANT_TYPE,

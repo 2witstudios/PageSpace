@@ -95,7 +95,8 @@ describe('agent browser door — real Postgres', () => {
       name: 'Browser Flow Agent', source: 'integration-test', tosAccepted: true, pow, csrfToken: generateLoginCSRFToken(), platform: 'web', deviceId: 'browser-flow-device',
     }));
     expect(signup.status).toBe(200);
-    const created = await signup.json() as { agentId: string; secret: string; claimToken: string; csrfToken: string; redirectUrl: string };
+    const created = await signup.json() as Record<string, unknown> & { agentId: string; secret: string; csrfToken: string; redirectUrl: string };
+    expect(created).not.toHaveProperty('claimToken');
     createdUserIds.push(created.agentId);
     expect(created.secret).toMatch(/^ps_agent_[a-z0-9]{32}$/);
     expect(created.redirectUrl).toBe('/dashboard');

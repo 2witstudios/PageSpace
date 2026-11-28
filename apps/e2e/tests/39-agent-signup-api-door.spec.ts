@@ -141,7 +141,8 @@ test.describe('agent signup: the API door on a running app', () => {
     record(agent.identity_endpoint, identityRes, 'identity endpoint');
     const identity = (await identityRes.json()) as Record<string, string>;
     expect(Object.keys(identity).sort()).toEqual(
-      ['identity_assertion', 'agent_id', 'claim_token', 'account_type', 'token_endpoint', 'grant_type', 'client_id', 'claim_endpoint'].sort(),
+      // No claim_token (security review): the agent claims with its own access token.
+      ['identity_assertion', 'agent_id', 'account_type', 'token_endpoint', 'grant_type', 'client_id', 'claim_endpoint'].sort(),
     );
     expect(identity.identity_assertion).toMatch(/^ps_agent_/);
     expect(identity.account_type).toBe('agent');
@@ -208,9 +209,16 @@ test.describe('agent signup: the API door on a running app', () => {
     expect([401, 403], 'a revoked key is dead').toContain((await request.get(`${origin}/api/drives`, { headers: keyAuth })).status());
 
     // ── Fund ──────────────────────────────────────────────────────────────────────────────
-    const claimRes = await request.post(agent.claim_endpoint, {
+    // A claim is started only by the agent itself, with its own access token. A body-only
+    // request (the retired claim-token shape) is refused before it reaches a claim.
+    const noBearer = await request.post(agent.claim_endpoint, {
       headers: { 'content-type': 'application/json' },
-      data: JSON.stringify({ claim_token: identity.claim_token }),
+      data: JSON.stringify({ claim_token: 'ps_claim_abcdefghijklmnopqrstuvwxyz012345' }),
+    });
+    expect(noBearer.status()).toBe(401);
+    const claimRes = await request.post(agent.claim_endpoint, {
+      headers: { ...bearer, 'content-type': 'application/json' },
+      data: JSON.stringify({}),
     });
     expect(claimRes.status(), await claimRes.text()).toBe(200);
     record(agent.claim_endpoint, claimRes, 'claim endpoint');
@@ -227,13 +235,26 @@ test.describe('agent signup: the API door on a running app', () => {
     expect(claimPageRes.headers().location ?? '').toContain('/auth/signin?next=');
     probed.set('/claim', claimPageRes.status());
 
-    // Poll: nobody has approved yet.
+    // Poll, with the same access token: nobody has approved yet.
     const pollRes = await request.post(metadata.token_endpoint, {
-      headers: FORM,
-      data: new URLSearchParams({ grant_type: agent.claim_grant_type, claim_token: identity.claim_token, client_id: 'pagespace-agent' }).toString(),
+      headers: { ...FORM, ...bearer },
+      data: new URLSearchParams({ grant_type: agent.claim_grant_type, client_id: 'pagespace-agent' }).toString(),
     });
     expect(pollRes.status()).toBe(400);
     expect(((await pollRes.json()) as { error: string }).error).toBe('authorization_pending');
+    // A claim token is no credential on the poll either, and no bearer is no answer.
+    const tokenPoll = await request.post(metadata.token_endpoint, {
+      headers: FORM,
+      data: new URLSearchParams({ grant_type: agent.claim_grant_type, claim_token: 'ps_claim_abcdefghijklmnopqrstuvwxyz012345', client_id: 'pagespace-agent' }).toString(),
+    });
+    expect(tokenPoll.status()).toBe(400);
+    expect(((await tokenPoll.json()) as { error: string }).error).toBe('invalid_request');
+    const anonymousPoll = await request.post(metadata.token_endpoint, {
+      headers: FORM,
+      data: new URLSearchParams({ grant_type: agent.claim_grant_type, client_id: 'pagespace-agent' }).toString(),
+    });
+    expect(anonymousPoll.status()).toBe(401);
+    expect(((await anonymousPoll.json()) as { error: string }).error).toBe('invalid_token');
 
     // ── Rotate / Revoke ───────────────────────────────────────────────────────────────────
     const rotateUrl = `${origin}/api/agent/secret/rotate`;

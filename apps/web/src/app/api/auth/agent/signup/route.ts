@@ -134,7 +134,7 @@ async function signup(request: Request) {
   }
   if (!created.ok) return refuse('challenge_consumed_concurrently');
 
-  const { userId, secret, claimToken } = created.data;
+  const { userId, secret } = created.data;
   auditRequest(request, {
     eventType: 'auth.token.created',
     userId,
@@ -158,7 +158,7 @@ async function signup(request: Request) {
     session = { ok: false };
   }
 
-  const identity = { success: true, agentId: userId, accountType: 'agent', secret, claimToken } as const;
+  const identity = { success: true, agentId: userId, accountType: 'agent', secret } as const;
 
   if (!session.ok) {
     // The account and its only copy of the secret exist: hand the secret over and

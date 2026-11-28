@@ -16,7 +16,8 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 const pushMock = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: pushMock }) }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+const toastSuccess = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 
 import { OwnedAgentsPanel } from '../OwnedAgentsPanel';
 
@@ -38,7 +39,7 @@ beforeEach(() => {
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     if (url === '/api/account/agents' && (!init || !init.method || init.method === 'GET')) return ok(AGENTS);
     if (url === '/api/account/agents/agent-1/revoke') return ok({ revoked: true });
-    if (url === '/api/account/agents/agent-1/unlink') return ok({ unlinked: true, claim_token: 'ps_claim_freshtoken0000000000000' });
+    if (url === '/api/account/agents/agent-1/unlink') return ok({ unlinked: true });
     if (url === '/api/agent/secret/rotate') return ok({ identity_assertion: 'ps_agent_newsecret000000000000000000000', agent_id: 'agent-1', secret_version: 2, revoked_existing_tokens: true });
     throw new Error(`unexpected fetch ${url}`);
   });
@@ -75,13 +76,18 @@ describe('OwnedAgentsPanel', () => {
     expect(JSON.parse(String((call?.[1] as RequestInit).body))).toEqual({ agentId: 'agent-1', revokeExistingTokens: true });
   });
 
-  it('unlinks after confirmation and shows the fresh claim token once', async () => {
+  // Security review: unlink used to show the former owner a fresh claim token
+  // with "give this to the agent (or to another person)" — a credential that
+  // could re-claim the agent. Nothing secret is shown now.
+  it('unlinks after confirmation and shows NO claim token or other secret', async () => {
     wrap(<OwnedAgentsPanel />);
     const row = await screen.findByTestId('owned-agent-agent-1');
     await userEvent.click(within(row).getByRole('button', { name: /unlink/i }));
     await userEvent.click(await screen.findByRole('button', { name: /unlink agent/i }));
-    await screen.findByText('ps_claim_freshtoken0000000000000');
-    expect(fetchMock).toHaveBeenCalledWith('/api/account/agents/agent-1/unlink', expect.objectContaining({ method: 'POST' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/account/agents/agent-1/unlink', expect.objectContaining({ method: 'POST' })));
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith(expect.stringMatching(/no longer yours/i)));
+    expect(screen.queryByText(/claim token/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/another person/i)).not.toBeInTheDocument();
   });
 
   it('sends a typed claim code to /claim', async () => {

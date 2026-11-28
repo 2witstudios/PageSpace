@@ -14,7 +14,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`pagespace login --agent`** signs an existing agent in with its secret, read from stdin or a
   prompt (never from an argument).
 - **`pagespace agent claim`** prints a link and code for a human to approve and waits; once
-  approved the human owns the agent and pays for its AI usage. **`pagespace agent rotate-secret`**
+  approved the human owns the agent and pays for its AI usage. It starts and polls the claim with
+  the agent's own sign-in — there is no claim token to keep, paste or leak. **`pagespace agent rotate-secret`**
   replaces the secret (`--revoke-tokens` also kills every token and key), and
   **`pagespace agent create-key`** mints and activates another key for the agent.
 - **`pagespace whoami`** shows `Account: AI agent` and the agent's owner, or `Unclaimed`.

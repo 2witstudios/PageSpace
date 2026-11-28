@@ -45,6 +45,8 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['avatar/[userId]/[filename]', 'Public asset serving, no auth required'],
   ['orgs/[orgId]/avatar/[filename]', 'ORG-1 member-only avatar image bytes: the org gate (authorizeOrgRequest) audits every refusal as authz.access.denied; a data.read row per rendered avatar would swamp the log, as for user avatars above'],
   ['drives/[driveId]/avatar/[filename]', 'Drive avatar image bytes for whoever can reach the drive: the route audits every refusal as authz.access.denied; a data.read row per rendered drive tile would swamp the log, as for org and user avatars above'],
+  ['agent/claim', 'Agent claim start (bearer door): audited in handleOwnClaimStart (lib/agent-auth/claim-start-handler.ts), the one handler both claim doors share — every refusal (closed door, rate limit, not the agent itself, unexpected body) and every start writes its own row'],
+  ['agent/claim/session', 'Agent claim start (session door): audited in handleOwnClaimStart (lib/agent-auth/claim-start-handler.ts), shared with agent/claim — same rows, tagged door: session'],
   ['orgs/invitations/accept', 'ORG-3: audited in acceptOrgInviteForUser (lib/orgs/accept-org-invite.ts), the one shell this route and the sign-in/sign-up invite door share, so both write the same authz.role.assigned / authz.access.denied rows'],
   ['track', 'Analytics fire-and-forget, no data read/write'],
   ['public/forms/[token]/submit', 'Public Canvas-form submission, no authenticated user — every accepted row-append is audit-logged via applyPageMutation activity logging inside appendFormSubmission (changeGroupType: automation), not SecurityAuditService directly'],

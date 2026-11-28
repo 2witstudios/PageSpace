@@ -12,7 +12,6 @@ import { AgentClaimLink } from './AgentClaimLink';
 interface AgentSecretRevealProps {
   agentId: string;
   secret: string;
-  claimToken: string;
   /** Where Continue goes. */
   redirectUrl: string;
   /** False when the account exists but no session could be started: no claim link until the agent signs in. */
@@ -41,7 +40,7 @@ function Field({ label, value, testId }: { label: string; value: string; testId:
  * secret". Registered with the editing store while shown, so no SWR revalidate
  * or auth refresh can unmount it and take the secret with it.
  */
-export function AgentSecretReveal({ agentId, secret, claimToken, redirectUrl, sessionStarted, onContinue }: AgentSecretRevealProps) {
+export function AgentSecretReveal({ agentId, secret, redirectUrl, sessionStarted, onContinue }: AgentSecretRevealProps) {
   const [saved, setSaved] = useState(false);
   const sessionId = `agent-secret-reveal-${useId()}`;
 
@@ -76,9 +75,8 @@ export function AgentSecretReveal({ agentId, secret, claimToken, redirectUrl, se
             : ' Sign in with your secret, then get a claim link from Settings.'}
         </p>
         {sessionStarted && <AgentClaimLink />}
-        <Field label="Claim token" value={claimToken} testId="agent-claim-token" />
         <p className="text-xs text-muted-foreground">
-          The claim token starts a claim through the API instead (see <a className="underline" href="/auth.md">/auth.md</a>). It is also shown only once.
+          Only you can start a claim: from this account, or through the API with your own access token (see <a className="underline" href="/auth.md">/auth.md</a>).
         </p>
       </div>
 

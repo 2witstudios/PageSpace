@@ -27,7 +27,7 @@ Fresh databases and later upgrades do not need the assertion.
 ## 2026-11 — AI agent self-signup (Agent Signup, migrations `0389`–`0390`)
 
 AI agents can create their own PageSpace accounts (ADR 0008): `/auth.md`,
-the `/auth/agent` page and `pagespace signup --agent`. The two migrations run
+the `/auth/agent` page and `pagespace signup --agent`. The three migrations run
 with the normal migrate service; no data is rewritten.
 
 - **Tenant stack:** on by default, nothing to set. The new hourly cron entry

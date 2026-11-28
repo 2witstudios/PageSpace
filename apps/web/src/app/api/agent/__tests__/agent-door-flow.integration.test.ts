@@ -103,10 +103,11 @@ describe('agent API door — real Postgres', () => {
     const pow = await solvedChallenge();
     const reg = await identityPOST(json('/api/agent/identity', registerBody(pow)));
     expect(reg.status).toBe(200);
-    const identity = await reg.json() as { identity_assertion: string; agent_id: string; claim_token: string; grant_type: string; client_id: string; token_endpoint: string };
+    const identity = await reg.json() as { identity_assertion: string; agent_id: string; grant_type: string; client_id: string; token_endpoint: string };
     createdUserIds.push(identity.agent_id);
     expect(identity.identity_assertion).toMatch(/^ps_agent_[a-z0-9]{32}$/);
-    expect(identity.claim_token.startsWith('ps_claim_')).toBe(true);
+    // Security review: no claim token — the agent claims with its own access token.
+    expect(identity).not.toHaveProperty('claim_token');
     expect(identity).toMatchObject({ grant_type: JWT, client_id: 'pagespace-agent', token_endpoint: 'https://pagespace.test/api/oauth/token' });
 
     // The secret is stored only as a hash.

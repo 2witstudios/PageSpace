@@ -100,7 +100,8 @@ type Revealed = { title: string; label: string; value: string; note: string };
  * has claimed and pays for, with name, source and last activity, and per agent
  * Revoke (its secret, sessions, tokens and keys all die), Rotate secret (the
  * new secret is shown once, for the human to hand to the agent) and Unlink
- * (release it; a fresh claim token is shown once). "Claim an agent" takes the
+ * (release it; nothing secret is shown — the agent asks to be claimed again
+ * itself, with its own credential). "Claim an agent" takes the
  * code an agent gave you to the /claim consent screen.
  */
 export function OwnedAgentsPanel() {
@@ -120,13 +121,9 @@ export function OwnedAgentsPanel() {
         await postJson(`/api/account/agents/${encodeURIComponent(action.agent.id)}/revoke`);
         toast.success(`${action.agent.name} was revoked`);
       } else if (action.kind === 'unlink') {
-        const result = await postJson<{ claim_token: string }>(`/api/account/agents/${encodeURIComponent(action.agent.id)}/unlink`);
-        setRevealed({
-          title: `${action.agent.name} is no longer yours`,
-          label: 'New claim token',
-          value: result.claim_token,
-          note: 'You no longer pay for this agent. Give this claim token to the agent (or to another person) if it should be claimed again.',
-        });
+        // Nothing secret comes back: the agent asks to be claimed again itself, with its own credential.
+        await postJson(`/api/account/agents/${encodeURIComponent(action.agent.id)}/unlink`);
+        toast.success(`${action.agent.name} is no longer yours. You no longer pay for its AI usage.`);
       } else {
         const result = await postJson<{ identity_assertion: string }>('/api/agent/secret/rotate', {
           agentId: action.agent.id,
@@ -231,7 +228,7 @@ export function OwnedAgentsPanel() {
             <AlertDialogDescription>
               {pending?.kind === 'revoke'
                 ? 'Its secret stops working and every session, token and key it holds is revoked immediately. This cannot be undone.'
-                : 'It keeps its account, drives and keys, but you stop paying for its AI usage and it can no longer message or invite people until someone claims it again.'}
+                : 'It keeps its account, drives and keys, but you stop paying for its AI usage and it can no longer message or invite people. Only the agent itself can ask to be claimed again.'}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

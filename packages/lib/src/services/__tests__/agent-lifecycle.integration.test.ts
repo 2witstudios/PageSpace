@@ -77,9 +77,9 @@ describe('agentLifecycleStore (real Postgres)', () => {
     const justExpiredId = createId();
     const liveId = createId();
     await db.insert(agentClaims).values([
-      { id: staleId, agentUserId: agentId, claimTokenHash: hashToken(`c-${staleId}`), userCodeHash: hashToken(`u-${staleId}`), expiresAt: new Date(NOW.getTime() - CLAIM_EXPIRED_GRACE_MS - 1000) },
-      { id: justExpiredId, agentUserId: agentId, claimTokenHash: hashToken(`c-${justExpiredId}`), userCodeHash: hashToken(`u-${justExpiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
-      { id: liveId, agentUserId: agentId, claimTokenHash: hashToken(`c-${liveId}`), userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
+      { id: staleId, agentUserId: agentId, userCodeHash: hashToken(`u-${staleId}`), expiresAt: new Date(NOW.getTime() - CLAIM_EXPIRED_GRACE_MS - 1000) },
+      { id: justExpiredId, agentUserId: agentId, userCodeHash: hashToken(`u-${justExpiredId}`), expiresAt: new Date(NOW.getTime() - 1000) },
+      { id: liveId, agentUserId: agentId, userCodeHash: hashToken(`u-${liveId}`), expiresAt: new Date(NOW.getTime() + 60_000) },
     ]);
 
     expect(await agentLifecycleStore.pruneExpiredClaims(NOW)).toBeGreaterThanOrEqual(1);

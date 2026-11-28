@@ -9,7 +9,8 @@
  *   agent.challenge   GET  /api/agent/challenge      proof-of-work challenge   (unauthenticated)
  *   agent.signup      POST /api/agent/identity       register → one-time secret (unauthenticated)
  *   exchangeAgentAssertion(tokenEndpoint, secret, 'pagespace-agent')   → ps_at_/ps_rt_ (auth/agent-assertion.ts)
- *   agent.claim       POST /api/agent/claim          a user code a human approves (unauthenticated)
+ *   agent.claim       POST /api/agent/claim          a user code a human approves (agent's access token)
+ *   pollAgentClaim(tokenEndpoint, accessToken, 'pagespace-agent')     → {claimed, owner} (auth/agent-claim.ts)
  *   agent.rotateSecret POST /api/agent/secret/rotate  new one-time secret        (agent's access token)
  *
  * Route-verified against `apps/web/src/app/api/agent/{challenge,identity,secret/rotate}`
@@ -67,8 +68,6 @@ export const signUpAgent = defineOperation({
     /** The agent's secret. Shown ONCE — store it; anyone holding it is this agent. */
     identity_assertion: z.string().min(1),
     agent_id: z.string().min(1),
-    /** What a human later uses to claim (and fund) this agent. */
-    claim_token: z.string().min(1),
     account_type: z.literal('agent'),
     token_endpoint: z.string(),
     grant_type: z.string(),
@@ -77,16 +76,15 @@ export const signUpAgent = defineOperation({
   }),
   unauthenticated: true,
   description:
-    'Create an AI agent account (no email). Requires a solved agent.challenge and tos_accepted: true. Returns identity_assertion (the secret, shown once) and claim_token; exchange the secret for tokens with exchangeAgentAssertion.',
+    'Create an AI agent account (no email). Requires a solved agent.challenge and tos_accepted: true. Returns identity_assertion (the secret, shown once) — the only credential the agent holds; exchange it for tokens with exchangeAgentAssertion.',
 });
 
 export const claimAgent = defineOperation({
   name: 'agent.claim',
   method: 'POST',
   path: '/api/agent/claim',
-  inputSchema: z.strictObject({
-    claim_token: z.string().min(1),
-  }),
+  /** Nothing: the agent's own access token is the credential (security review addendum to ADR 0008). */
+  inputSchema: z.strictObject({}),
   outputSchema: z.object({
     user_code: z.string().min(1),
     verification_uri: z.string().min(1),
@@ -96,9 +94,9 @@ export const claimAgent = defineOperation({
     /** Poll the claim grant no faster than this many seconds. */
     interval: z.number(),
   }),
-  unauthenticated: true,
+  requiredScope: 'account',
   description:
-    'Start a claim: returns a user code and verification_uri_complete for a human to approve. Once approved the human owns the agent and pays for its AI usage. Poll the claim grant on the token endpoint at interval seconds.',
+    "Start a claim with the agent's own access token: returns a user code and verification_uri_complete for a human to approve. Once approved the human owns the agent, pays for its AI usage and may rotate its secret, so hand the link only to the intended owner. Poll with pollAgentClaim at interval seconds; the claim mints no tokens.",
 });
 
 export const rotateAgentSecret = defineOperation({

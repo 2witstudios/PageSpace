@@ -253,10 +253,10 @@ const DEFAULT_OPERATIONS_MAP = {
   },
   /**
    * An AI agent's OWN PageSpace account (ADR 0008; `/auth.md`) — not the AI
-   * agent pages `agents.*` drives. `challenge`, `signup` and `claim` run before
-   * any credential exists and are sent unauthenticated; build the client with
-   * `AnonymousAuthProvider` for them. `rotateSecret` needs the agent's own
-   * access token (from `exchangeAgentAssertion`).
+   * agent pages `agents.*` drives. `challenge` and `signup` run before any
+   * credential exists and are sent unauthenticated; build the client with
+   * `AnonymousAuthProvider` for them. `claim` and `rotateSecret` need the
+   * agent's own access token (from `exchangeAgentAssertion`).
    */
   agent: {
     challenge: getAgentChallenge,

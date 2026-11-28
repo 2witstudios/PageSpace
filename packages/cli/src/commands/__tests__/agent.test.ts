@@ -7,7 +7,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { PermissionDeniedError, ValidationError } from '@pagespace/sdk';
+import { HttpError, NotFoundError, PermissionDeniedError, ValidationError } from '@pagespace/sdk';
 import type { OAuthTokens } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, helpHandler, parseArgv } from '@pagespace/cli';
 import type { AgentHostCredential, CredentialStore, HostCredential, OAuthHostCredential } from '@pagespace/cli';
@@ -43,7 +43,6 @@ const tokens = (tag: string): OAuthTokens => ({
 const IDENTITY = {
   identity_assertion: SECRET,
   agent_id: 'agent_1',
-  claim_token: 'ps_claim_1',
   account_type: 'agent' as const,
   token_endpoint: TOKEN_ENDPOINT,
   grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
@@ -111,7 +110,6 @@ const AGENT_CREDENTIAL: AgentHostCredential = {
   secret: SECRET,
   refreshToken: 'ps_rt_stored',
   clientId: 'pagespace-agent',
-  claimToken: 'ps_claim_1',
   contentKeyName: 'agent',
   scopes: ['account', 'offline_access'],
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -157,7 +155,9 @@ describe('pagespace signup', () => {
       pow: { challenge: 'ps_pow_c1', nonce: '7' },
     });
     // The very first write is the secret, with no refresh token yet.
-    expect(store.writes[0]).toMatchObject({ profile: 'default', credential: { kind: 'agent', secret: SECRET, refreshToken: null, claimToken: 'ps_claim_1' } });
+    expect(store.writes[0]).toMatchObject({ profile: 'default', credential: { kind: 'agent', secret: SECRET, refreshToken: null } });
+    // Security review: no claim token exists, so none is stored.
+    expect(store.writes[0]?.credential).not.toHaveProperty('claimToken');
     expect(d.exchange).toHaveBeenCalledWith(TOKEN_ENDPOINT, SECRET, 'pagespace-agent');
     expect(d.mintKey).toHaveBeenCalledWith({ host: HOST, accessToken: 'ps_at_exchanged', name: 'pagespace-cli (agent)' });
 
@@ -294,7 +294,7 @@ describe('pagespace login --agent', () => {
     expect(code).toBe(EXIT_SUCCESS);
     expect(d.readSecret).toHaveBeenCalledWith(expect.objectContaining({ isTTY: false }));
     expect(d.exchange).toHaveBeenCalledWith(TOKEN_ENDPOINT, SECRET, 'pagespace-agent');
-    expect(store.read('default')).toMatchObject({ kind: 'agent', agentId: 'agent_1', secret: SECRET, refreshToken: 'ps_rt_exchanged', claimToken: null, contentKeyName: 'agent' });
+    expect(store.read('default')).toMatchObject({ kind: 'agent', agentId: 'agent_1', secret: SECRET, refreshToken: 'ps_rt_exchanged', contentKeyName: 'agent' });
     expect(store.read('agent')).toMatchObject({ kind: 'static', token: 'mcp_agentkey' });
     expect(activeKeyStore.entries.get(HOST)).toBe('agent');
   });
@@ -351,35 +351,57 @@ describe('pagespace agent claim', () => {
     expires_in: 900,
     interval: 5,
   };
+  /** The live access token of the stored agent credential (run.ts wires the provider's). */
+  const accessToken = vi.fn(async () => 'ps_at_live');
 
-  it('prints the code and link, polls at the interval (slower after slow_down), and records the claim', async () => {
+  // Security review: the claim token was an agent-takeover credential. The
+  // claim is started (ctx.sdk, the stored agent credential) and polled with the
+  // agent's OWN access token; nothing else is read, prompted for, or stored.
+  it("starts with the agent's own credential, polls with its access token at the interval (slower after slow_down), and records nothing new", async () => {
     const store = profileStore({ default: AGENT_CREDENTIAL });
     const stdout = createRecordingSink();
     const claim = vi.fn(async () => STARTED);
     const results: AgentClaimPollResult[] = [
       { kind: 'authorization_pending' },
       { kind: 'slow_down' },
-      { kind: 'claimed', owner: { id: 'user_h', name: 'Ada' }, tokens: tokens('claimed') },
+      { kind: 'claimed', owner: { id: 'user_h', name: 'Ada' } },
     ];
     const d = deps({ pollClaim: vi.fn(async (): Promise<AgentClaimPollResult> => results.shift() ?? { kind: 'request_failed', message: 'unexpected' }) });
-    const ctx = createFakeContext({ stdout, credentialStore: store, sdk: fakeSdk({ agent: { claim } }) });
+    const ctx = createFakeContext({ stdout, credentialStore: store, accessToken, sdk: fakeSdk({ agent: { claim } }) });
 
     const code = await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim'], 2));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(claim).toHaveBeenCalledWith({ claim_token: 'ps_claim_1' });
-    expect(d.pollClaim).toHaveBeenCalledWith({ tokenEndpoint: TOKEN_ENDPOINT, claimToken: 'ps_claim_1', clientId: 'pagespace-agent' });
+    expect(claim).toHaveBeenCalledWith({});
+    expect(d.pollClaim).toHaveBeenCalledWith({ tokenEndpoint: TOKEN_ENDPOINT, accessToken: 'ps_at_live', clientId: 'pagespace-agent' });
+    expect(d.readSecret).not.toHaveBeenCalled();
     expect(vi.mocked(d.waitMs).mock.calls.map(([ms]) => ms)).toEqual([5_000, 5_000, 10_000]);
     const output = stdout.lines.join('');
     expect(output).toContain('ABCD-EFGH');
     expect(output).toContain(STARTED.verification_uri_complete);
     expect(output).toContain('Ada');
-    expect(store.read('default')).toMatchObject({ kind: 'agent', secret: SECRET, claimToken: null, refreshToken: 'ps_rt_claimed' });
+    // The claim minted nothing, so the stored credential is untouched.
+    expect(store.writes).toEqual([]);
+    expect(store.read('default')).toEqual(AGENT_CREDENTIAL);
+  });
+
+  it('asks the provider for the access token on every poll, so a token that expires mid-wait is refreshed', async () => {
+    const tokensSeen = ['ps_at_first', 'ps_at_refreshed'];
+    const results: AgentClaimPollResult[] = [{ kind: 'authorization_pending' }, { kind: 'claimed', owner: null }];
+    const d = deps({ pollClaim: vi.fn(async (): Promise<AgentClaimPollResult> => results.shift() ?? { kind: 'request_failed', message: 'unexpected' }) });
+    const ctx = createFakeContext({
+      credentialStore: profileStore({ default: AGENT_CREDENTIAL }),
+      accessToken: vi.fn(async () => tokensSeen.shift() ?? 'ps_at_none'),
+      sdk: fakeSdk({ agent: { claim: async () => STARTED } }),
+    });
+
+    expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_SUCCESS);
+    expect(vi.mocked(d.pollClaim).mock.calls.map(([params]) => params.accessToken)).toEqual(['ps_at_first', 'ps_at_refreshed']);
   });
 
   it('--no-wait prints the link and returns without polling', async () => {
     const d = deps();
-    const ctx = createFakeContext({ credentialStore: profileStore({ default: AGENT_CREDENTIAL }), sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
+    const ctx = createFakeContext({ credentialStore: profileStore({ default: AGENT_CREDENTIAL }), accessToken, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
 
     expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim', '--no-wait'], 2))).toBe(EXIT_SUCCESS);
     expect(d.pollClaim).not.toHaveBeenCalled();
@@ -388,25 +410,27 @@ describe('pagespace agent claim', () => {
   it.each([
     ['access_denied', 'declined'],
     ['expired_token', 'expired'],
-    ['invalid_grant', 'already redeemed'],
+    ['invalid_grant', 'no longer valid'],
+    ['invalid_token', 'access token was refused'],
   ] as const)('ends with an error on %s', async (kind, phrase) => {
     const stderr = createRecordingSink();
     const store = profileStore({ default: AGENT_CREDENTIAL });
     const d = deps({ pollClaim: vi.fn(async () => ({ kind }) as AgentClaimPollResult) });
-    const ctx = createFakeContext({ stderr, credentialStore: store, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
+    const ctx = createFakeContext({ stderr, credentialStore: store, accessToken, sdk: fakeSdk({ agent: { claim: async () => STARTED } }) });
 
     expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain(phrase);
     expect(store.read('default')).toEqual(AGENT_CREDENTIAL);
   });
 
-  it('asks for the claim token when this machine has none (an agent that signed in with login --agent)', async () => {
+  it('works for an agent that signed in with login --agent: nothing beyond its secret is needed', async () => {
     const claim = vi.fn(async () => STARTED);
-    const d = deps({ readSecret: vi.fn(async () => 'ps_claim_piped') });
-    const ctx = createFakeContext({ credentialStore: profileStore({ default: { ...AGENT_CREDENTIAL, claimToken: null } }), sdk: fakeSdk({ agent: { claim } }) });
+    const d = deps();
+    const ctx = createFakeContext({ credentialStore: profileStore({ default: { ...AGENT_CREDENTIAL, refreshToken: null } }), accessToken, sdk: fakeSdk({ agent: { claim } }) });
 
     expect(await createAgentClaimHandler(d)(ctx, routed(['agent', 'claim', '--no-wait'], 2))).toBe(EXIT_SUCCESS);
-    expect(claim).toHaveBeenCalledWith({ claim_token: 'ps_claim_piped' });
+    expect(claim).toHaveBeenCalledWith({});
+    expect(d.readSecret).not.toHaveBeenCalled();
   });
 
   it('refuses when no agent account is signed in on this machine', async () => {
@@ -416,15 +440,36 @@ describe('pagespace agent claim', () => {
     expect(stderr.lines.join('')).toContain('pagespace signup --agent');
   });
 
-  it('says plainly when the claim token is refused', async () => {
+  it('says plainly when the agent already has an owner (409)', async () => {
     const stderr = createRecordingSink();
     const ctx = createFakeContext({
       stderr,
       credentialStore: profileStore({ default: AGENT_CREDENTIAL }),
-      sdk: fakeSdk({ agent: { claim: async () => { throw new ValidationError('invalid_request', []); } } }),
+      accessToken,
+      sdk: fakeSdk({ agent: { claim: async () => { throw new HttpError('already_claimed', 409); } } }),
     });
     expect(await createAgentClaimHandler(deps())(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_RUNTIME_ERROR);
-    expect(stderr.lines.join('')).toContain('already be claimed');
+    expect(stderr.lines.join('')).toContain('already has an owner');
+  });
+
+  it('says plainly when the server refuses this credential as the agent (404)', async () => {
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({
+      stderr,
+      credentialStore: profileStore({ default: AGENT_CREDENTIAL }),
+      accessToken,
+      sdk: fakeSdk({ agent: { claim: async () => { throw new NotFoundError('Not found'); } } }),
+    });
+    expect(await createAgentClaimHandler(deps())(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_RUNTIME_ERROR);
+    expect(stderr.lines.join('')).toContain('revoked');
+  });
+
+  it('given no way to read the access token, should fail before starting a claim it could not poll', async () => {
+    const stderr = createRecordingSink();
+    const claim = vi.fn(async () => STARTED);
+    const ctx = createFakeContext({ stderr, credentialStore: profileStore({ default: AGENT_CREDENTIAL }), sdk: fakeSdk({ agent: { claim } }) });
+    expect(await createAgentClaimHandler(deps())(ctx, routed(['agent', 'claim'], 2))).toBe(EXIT_RUNTIME_ERROR);
+    expect(claim).not.toHaveBeenCalled();
   });
 });
 

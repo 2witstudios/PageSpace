@@ -10,7 +10,11 @@
 /** RFC 7523 §2.1 — the auth.md `identity_assertion` (our opaque `ps_agent_*` secret) is presented under this URN (ADR 0008 Decision 5). */
 export const AGENT_ASSERTION_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:jwt-bearer';
 
-/** The agent polls its claim with this grant; on approval it receives a fresh token pair for ITSELF (ADR 0008 Decision 7). */
+/**
+ * The agent polls its claim with this grant, authenticated by its own access
+ * token; on approval it learns its owner and receives NO token — it keeps its
+ * own (ADR 0008 Decision 7 and the security review addendum).
+ */
 export const AGENT_CLAIM_GRANT_TYPE = 'urn:pagespace:agent-auth:grant-type:claim';
 
 const GRANT_TYPES_SUPPORTED = [

@@ -5,8 +5,9 @@
  * and re-normalised from scratch — nothing from the earlier /verify call is
  * trusted. The frozen `decideClaimApproval` runs inside
  * `recordAgentClaimDecision` under FOR UPDATE, which on approval sets the
- * owner, `claimedAt`, nulls the claim token hash and stamps the agent's
- * `emailVerified` (D-31 option A) in one transaction.
+ * owner and `claimedAt` and stamps the agent's `emailVerified` (D-31 option
+ * A) in one transaction. Approval mints nothing: the agent learns its owner
+ * by polling the claim grant with its OWN access token.
  *
  * Wire: approval → `auth.agent.claimed`. Unknown, expired, settled and
  * already-claimed codes are the one `invalid_code` (no oracle on who owns an

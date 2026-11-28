@@ -3,9 +3,11 @@
  * `decideDevicePoll` / `decideDeviceApproval` (`auth/oauth/code-lifecycle.ts`).
  *
  * A claim record binds a HUMAN owner to an AGENT: the agent polls the claim
- * grant on the token endpoint, and a signed-in human approves or denies at
- * `/claim`. Unlike a device code, an approved claim mints for the AGENT
- * (the principal never changes — Decision 7), so the grant carries both ids.
+ * grant on the token endpoint with its own access token, and a signed-in human
+ * approves or denies at `/claim`. Unlike a device code, an approved claim
+ * mints NOTHING (security review addendum): the agent keeps its own tokens
+ * (the principal never changes — Decision 7), and the poll reports the owner.
+ * The grant still carries both ids so the route can report who that is.
  *
  * No I/O: the route fetches the claim row and the agent's current owner,
  * calls these, and persists what the decision implies.
@@ -39,7 +41,7 @@ export type ClaimRecord =
   | ({ status: 'pending' } & ClaimCommon)
   | ({ status: 'approved'; ownerUserId: string } & ClaimCommon)
   | ({ status: 'denied' } & ClaimCommon)
-  /** Already exchanged for the agent's credentials — dead for good. */
+  /** Already reported to the agent as claimed — dead for good. */
   | ({ status: 'redeemed' } & ClaimCommon);
 
 export interface ClaimGrant {

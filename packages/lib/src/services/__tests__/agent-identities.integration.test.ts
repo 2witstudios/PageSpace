@@ -130,11 +130,12 @@ describe('createAgentAccount', () => {
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    const { userId, secret, claimToken, email } = result.data;
+    const { userId, secret, email } = result.data;
 
     expect(isAgentSecretShape(secret)).toBe(true);
     expect(isAgentReservedEmail(email)).toBe(true);
-    expect(claimToken.length).toBeGreaterThan(20);
+    // No claim token exists (security review addendum): the agent claims with its own credential.
+    expect(result.data).not.toHaveProperty('claimToken');
 
     const [user] = await db.select().from(users).where(eq(users.id, userId));
     expect(user?.accountType).toBe('agent');
@@ -146,7 +147,6 @@ describe('createAgentAccount', () => {
 
     const [identity] = await db.select().from(agentIdentities).where(eq(agentIdentities.userId, userId));
     expect(identity?.secretHash).toBe(hashToken(secret));
-    expect(identity?.claimTokenHash).toBe(hashToken(claimToken));
     expect(identity?.secretVersion).toBe(1);
     expect(identity?.source).toBe('claude-code');
     expect(identity?.createdByIp).toBe('203.0.113.7');

@@ -18,7 +18,6 @@ const AGENT: AgentHostCredential = {
   secret: 'ps_agent_abcdefghijklmnopqrstuvwxyz012345',
   refreshToken: 'ps_rt_1',
   clientId: 'pagespace-agent',
-  claimToken: 'ps_claim_1',
   contentKeyName: 'agent',
   scopes: ['account', 'offline_access'],
   createdAt: '2026-11-27T00:00:00.000Z',
@@ -34,11 +33,20 @@ describe('agent credential (kind: "agent")', () => {
     expect(getHost(parseCredentialsFile(serializeCredentialsFile(file)), 'https://pagespace.ai')).toEqual(AGENT);
   });
 
-  it('allows the refresh token, claim token and content key to be absent (null)', () => {
-    const bare = { ...AGENT, refreshToken: null, claimToken: null, contentKeyName: null };
+  it('allows the refresh token and content key to be absent (null)', () => {
+    const bare = { ...AGENT, refreshToken: null, contentKeyName: null };
     expect(parseHostCredential(serializeHostCredential(bare))).toEqual(bare);
     const withoutOptional = { kind: 'agent', agentId: AGENT.agentId, secret: AGENT.secret, clientId: AGENT.clientId, scopes: AGENT.scopes, createdAt: AGENT.createdAt };
     expect(parseHostCredential(JSON.stringify(withoutOptional))).toEqual(bare);
+  });
+
+  // Security review: claim tokens are retired. A credential an older CLI stored
+  // with one still loads, and the token is dropped — never kept, never written back.
+  it('given a stored credential from an older CLI that carries a claimToken, should load it and drop the token', () => {
+    const legacy = JSON.stringify({ ...AGENT, claimToken: 'ps_claim_legacy' });
+    const parsed = parseHostCredential(legacy);
+    expect(parsed).toEqual(AGENT);
+    expect(serializeHostCredential(parsed)).not.toContain('ps_claim_legacy');
   });
 
   it('refuses an agent credential with no secret, no agent id, or a non-string refresh token', () => {
