@@ -38,7 +38,7 @@ const mockEnsurePersonalRootWalletId = vi.hoisted(() => vi.fn().mockResolvedValu
 vi.mock('../personal-wallet', () => ({ ensurePersonalRootWalletId: mockEnsurePersonalRootWalletId }));
 
 const mockReadGateAccount = vi.hoisted(() =>
-  vi.fn(async (): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({ accountType: 'human', ownerUserId: null })),
+  vi.fn(async (_userId?: string): Promise<{ accountType: 'human' | 'agent'; ownerUserId: string | null }> => ({ accountType: 'human', ownerUserId: null })),
 );
 vi.mock('../gate-account', () => ({ readGateAccount: mockReadGateAccount }));
 
@@ -1042,8 +1042,10 @@ describe('canConsumeAI — a claimed agent spends its OWNER\'s own credits (ADR 
   });
 
   it("given the owner's wallet does not exist yet, should lazily create the OWNER's wallet with the owner's (human) starter grant — never an agent row", async () => {
-    mockReadGateAccount.mockImplementation(async (id: string) =>
-      id === 'owner-1' ? { accountType: 'human', ownerUserId: null } : { accountType: 'agent', ownerUserId: 'owner-1' },
+    mockReadGateAccount.mockImplementation(async (id?: string) =>
+      id === 'owner-1'
+        ? { accountType: 'human' as const, ownerUserId: null }
+        : { accountType: 'agent' as const, ownerUserId: 'owner-1' },
     );
     mockResolveOwnCreditsPayer.mockResolvedValue({ payerId: 'owner-1', tier: 'free', viaAgentOwner: true });
     mockDb.select
