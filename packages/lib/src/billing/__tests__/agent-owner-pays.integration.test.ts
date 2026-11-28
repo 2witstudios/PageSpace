@@ -28,7 +28,7 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { canConsumeAI, resolveEntitlementTier } from '../credit-gate';
 import { consumeCredits, releaseHold } from '../credit-consume';
-import { PERSONAL_SPEND } from '../spend-target';
+import { PERSONAL_SPEND, driveSpend } from '../spend-target';
 import { listSpendChoices } from '../spend-resolution';
 import { getOwnCreditsBalance } from '../own-credits-balance';
 import { getCreditBalance } from '../credit-balance';
@@ -196,6 +196,19 @@ describe('owner pays — a claimed agent spends its owner\'s own credits (real P
     expect(await canConsumeAI(agentId, 'free', { spend: PERSONAL_SPEND })).toMatchObject({ allowed: false, reason: 'requires_funding' });
     expect(await walletOf(ownerId)).toEqual(before);
     const holds = await db.select({ id: creditHolds.id }).from(creditHolds).where(and(eq(creditHolds.userId, agentId)));
+    expect(holds).toEqual([]);
+  });
+
+  it('given an UNCLAIMED agent calling in its own drive, should refuse with requires_funding whatever the reservation (never source_refused)', async () => {
+    if (!dbAvailable) return;
+    const agentId = await seedAgent(null);
+    const drive = await factories.createDrive(agentId);
+    // A reservation above the free tier's would-be starter grant is the case that used to
+    // surface as source_refused: the drive resolution refused own credits as empty first.
+    for (const estCostCents of [25, 5_000]) {
+      expect(await canConsumeAI(agentId, 'free', { spend: driveSpend(drive.id), estCostCents })).toMatchObject({ allowed: false, reason: 'requires_funding' });
+    }
+    const holds = await db.select({ id: creditHolds.id }).from(creditHolds).where(eq(creditHolds.userId, agentId));
     expect(holds).toEqual([]);
   });
 
