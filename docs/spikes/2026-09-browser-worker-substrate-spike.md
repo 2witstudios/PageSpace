@@ -127,6 +127,16 @@ Capture runs inside the worker as an *executor* against the login context: `Stor
 
 Today's billing assumes `{1 vCPU, 0.25 GB}` (`credit-pricing.ts:336-337`), i.e. **$0.081/hr** — a browser Sprite billed that way under-recovers ~3×. R14 makes the browser holder pass its real shape to `MACHINE_ASSUMED_*`. Cold start: create → `status: 'cold'` immediately (2026-08 spike §1); wake from cold 1–2 s, from warm 100–500 ms **[vendor]**; Chromium launch adds ~1–3 s (UNVERIFIED in a Sprite, probe #1 measures it). Per-account profile persistence across reclaim: **deliberately none** — R3/R9; the durable object is the capture in Infisical, and a fresh Sprite + fresh context hydrates from it in seconds. Quota: browser sessions count against the owner's `CONCURRENCY_LIMITS` (`quota.ts:47-54`) and the `canRunCode` / `decideFullEgressEnablement` gates (`containment.ts:162-171`) exactly like a sandbox, so a free-tier user cannot open more browser VMs than shells.
 
+### 3a. Probe #1 result (2026-11-28) — PASS
+
+Run once against the production Sprites org with one throwaway Sprite (`createSprite`, 2 vCPU / 2048 MB; deleted in `finally`), driven through `@fly/sprites` `execFile('bash', ['-lc', …])`:
+
+- **Environment:** Node v24.22.1, `apt-get` and `npx` present, running as uid 1001 (not root).
+- **Install:** `npm i playwright-core@1.49` plus `npx playwright@1.49 install --with-deps chromium` completed. It takes about 60 s, which outlived the SDK exec's WebSocket keepalive (the exec reported `WebSocket keepalive timeout` while the install finished in the VM). A per-session install is therefore too slow and too fragile for the hot path: the worker bootstrap must not install Chromium on every provision.
+- **Launch:** headless Chromium 131.0.6778.33 (`--no-sandbox`) launched in **297 ms**. It opened `https://example.com` (title "Example Domain"), took an 87 KB PNG screenshot, and returned a CDP `Page.screencastFrame` (24.8 KB base64 JPEG).
+- **Verdict:** the zygote/Firecracker concern above does not reproduce on the current Sprite kernel. Option 1 stays the recommendation.
+- **Hand-off to the deploy step:** ship Chromium and the worker as a prebuilt bundle fetched at bootstrap (or keep a warm pool), instead of running `playwright install` at provision.
+
 ## 4. Option 2 — Browserbase (+ 1Password Agentic Autofill) for cloud
 
 ### 4.1 Isolation
