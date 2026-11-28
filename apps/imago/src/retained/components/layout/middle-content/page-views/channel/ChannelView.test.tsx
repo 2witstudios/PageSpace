@@ -3,7 +3,7 @@ import { createElement, type ComponentProps, type ReactNode } from 'react';
 import { act } from 'react';
 import { afterEach, describe, test, vi } from 'vitest';
 import { assert } from 'riteway/vitest';
-import { mount, unmountAll } from '@/ui/test-support/dom';
+import { click, mount, unmountAll } from '@/ui/test-support/dom';
 import ChannelView from './ChannelView';
 
 const fixtures = vi.hoisted(() => ({
@@ -303,6 +303,72 @@ describe('ChannelView posts and composer copy', () => {
         should: 'expose its card as a Download control named for the file',
         actual: container.querySelector('a[aria-label="Download onboarding-v3.pdf"]') !== null,
         expected: true,
+      });
+    });
+  });
+});
+
+describe('ChannelView agent-account marker (Agent Signup)', () => {
+  const badgeIn = (container: HTMLElement, id: string) =>
+    container.querySelector(`[data-message-id="${id}"] [aria-label="AI agent account"]`);
+
+  test('marks a post from an AI agent account, from accountType', async () => {
+    fixtures.messages = [
+      message('ag1', '2026-10-05T08:00:00.000Z', 'support', 'How can I help?', {
+        user: { id: 'support', name: 'PageSpace Support', image: null, accountType: 'agent' },
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a post whose author is an agent account named like a person',
+        should: 'render the AgentBadge beside the name',
+        actual: badgeIn(container, 'ag1') !== null,
+        expected: true,
+      });
+    });
+  });
+
+  test('leaves a human post and an AI-page persona unmarked', async () => {
+    fixtures.messages = [
+      message('h1', '2026-10-05T08:00:00.000Z', 'them', 'Hi', {
+        user: { id: 'them', name: 'Sam', image: null, accountType: 'human' },
+      }),
+      message('p1', '2026-10-05T08:30:00.000Z', 'them', 'Digest', {
+        userId: null,
+        user: null,
+        aiMeta: { senderType: 'agent', senderName: 'Launch Agent' },
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      assert({
+        given: 'a human post and an AI-page persona post',
+        should: 'render no AgentBadge on either',
+        actual: container.querySelectorAll('[aria-label="AI agent account"]').length,
+        expected: 0,
+      });
+    });
+  });
+
+  test('carries the agent account type into the quote-reply chip', async () => {
+    fixtures.inputProps = null;
+    fixtures.messages = [
+      message('q1', '2026-10-05T08:00:00.000Z', 'support', 'Quote me', {
+        user: { id: 'support', name: 'PageSpace Support', image: null, accountType: 'agent' },
+      }),
+    ];
+    const container = mount(createElement(ChannelView, { page }));
+    await settle(() => {
+      const quote = container.querySelector('[data-message-id="q1"] button[aria-label="Quote reply"]');
+      if (quote instanceof HTMLElement) click(quote);
+    });
+    await settle(() => {
+      assert({
+        given: 'the viewer quotes a post by an agent account',
+        should: 'hand the composer a preview that marks the author as an agent',
+        actual: fixtures.inputProps?.quotedPreview ?? null,
+        expected: { authorName: 'PageSpace Support', snippet: 'Quote me', authorAccountType: 'agent' },
       });
     });
   });

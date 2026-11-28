@@ -44,6 +44,7 @@ import { MessageDateSeparator } from '@/retained/components/messages/MessageDate
 import { cn } from '@/retained/lib/utils';
 import { ToolbarStrip } from '@/ui/frame/toolbar-strip/toolbar-strip';
 import { unreadMarkerOf, type UnreadMarker } from '@/retained/lib/messages/unread-divider';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 
 interface MessageAttachmentBearing {
   conversationId?: string;
@@ -114,6 +115,8 @@ interface DmConversation {
     name: string;
     email: string;
     image: string | null;
+    /** `agent` renders the AgentBadge: the name is self-chosen (Phase 2b). */
+    accountType?: 'human' | 'agent';
     username: string | null;
     displayName: string | null;
     avatarUrl: string | null;
@@ -136,7 +139,11 @@ export default function InboxDMPage() {
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
   const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
   const quotedPreview = activeQuotedSnapshot
-    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    ? {
+        authorName: activeQuotedSnapshot.authorName ?? 'Member',
+        snippet: activeQuotedSnapshot.contentSnippet,
+        authorAccountType: activeQuotedSnapshot.authorAccountType,
+      }
     : null;
   const chatInputRef = useRef<ChannelInputRef>(null);
   const socket = useSocket();
@@ -421,6 +428,7 @@ export default function InboxDMPage() {
       id: m.id,
       authorId: m.senderId,
       authorName,
+      authorAccountType: isOwn ? null : conversation?.otherUser?.accountType ?? null,
       authorImage,
       contentSnippet: buildThreadPreview(m.content),
       createdAt: typeof m.createdAt === 'string' ? new Date(m.createdAt) : m.createdAt,
@@ -569,6 +577,7 @@ export default function InboxDMPage() {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm">{name}</span>
+            {!isOwn && <AgentBadge accountType={otherUser.accountType} />}
             <span className="text-xs text-muted-foreground">
               {new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </span>
@@ -633,6 +642,7 @@ export default function InboxDMPage() {
         </Avatar>
         <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted-foreground">
           <span className="font-semibold text-foreground">{displayName}</span>
+          <AgentBadge accountType={otherUser.accountType} className="ml-1" />
           {otherUser.username && <span className="ml-1 font-mono">@{otherUser.username}</span>}
         </span>
       </ToolbarStrip>
@@ -698,6 +708,7 @@ export default function InboxDMPage() {
                     {isFirst && (
                       <div className="flex items-center gap-2 mb-1">
                         <span className="font-semibold text-sm">{senderName}</span>
+                        {!isOwnMessage && <AgentBadge accountType={otherUser.accountType} />}
                         <span className="text-xs text-muted-foreground">
                           {new Date(message.createdAt).toLocaleTimeString([], {
                             hour: '2-digit',

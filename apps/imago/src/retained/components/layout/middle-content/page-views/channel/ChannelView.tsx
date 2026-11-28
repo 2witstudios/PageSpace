@@ -15,6 +15,7 @@ import {
 } from '@/retained/components/ai/ui/conversation';
 import { type ChannelInputRef, type FileAttachment } from './ChannelInput';
 import { MessageInput } from '@/retained/components/shared/MessageInput';
+import { AgentBadge } from '@/retained/components/shared/AgentBadge';
 import { MessageDropZone } from './MessageDropZone';
 import { MessageReactions, type Reaction } from '@/retained/components/shared/MessageReactions';
 import { MessageHoverToolbar } from '@/retained/components/shared/MessageHoverToolbar';
@@ -207,7 +208,11 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
   const [quotedMessageId, setQuotedMessageId] = useState<string | null>(null);
   const [activeQuotedSnapshot, setActiveQuotedSnapshot] = useState<QuotedMessageSnapshot | null>(null);
   const quotedPreview = activeQuotedSnapshot
-    ? { authorName: activeQuotedSnapshot.authorName ?? 'Member', snippet: activeQuotedSnapshot.contentSnippet }
+    ? {
+        authorName: activeQuotedSnapshot.authorName ?? 'Member',
+        snippet: activeQuotedSnapshot.contentSnippet,
+        authorAccountType: activeQuotedSnapshot.authorAccountType,
+      }
     : null;
 
   // Close any open thread when navigating between channels — `useThreadPanelStore`
@@ -338,6 +343,8 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
       id: m.id,
       authorId: m.user?.id ?? m.userId ?? null,
       authorName: m.aiMeta?.senderName || m.user?.name || 'Member',
+      // An AI-page persona is not a user account, so it carries no marker.
+      authorAccountType: m.aiMeta?.senderName ? null : m.user?.accountType ?? null,
       authorImage: m.user?.image ?? null,
       contentSnippet: buildThreadPreview(m.content),
       createdAt: m.createdAt instanceof Date ? m.createdAt : new Date(m.createdAt),
@@ -706,6 +713,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm">{displayName}</span>
+            {!isAi && <AgentBadge accountType={m.user?.accountType} />}
             <span className="text-xs text-muted-foreground">
               {new Date(m.createdAt).toLocaleTimeString()}
             </span>
@@ -871,6 +879,7 @@ function ChannelView({ page, floatingWebhooks = true }: ChannelViewProps) {
                                 {isFirst && (
                                   <div className="flex items-center gap-2">
                                       <span className="font-semibold text-sm">{displayName}</span>
+                                      {!isAi && <AgentBadge accountType={m.user?.accountType} />}
                                       {aiLabel && (
                                         <span className="text-xs px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 font-medium">
                                           {aiLabel}

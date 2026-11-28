@@ -4,6 +4,8 @@ export interface MessageablePerson {
   name: string | null;
   email: string;
   image: string | null;
+  /** `agent` renders the AgentBadge — the name is self-chosen (Phase 2b). */
+  accountType?: 'human' | 'agent';
   username: string | null;
   displayName: string | null;
   bio: string | null;
