@@ -28,7 +28,8 @@ This installs two commands: `pagespace` (the CLI) and `pagespace-mcp` (an alias 
 account — no email address, no browser, no human:**
 
 ```bash
-npx -y -p @pagespace/cli pagespace signup --agent --name "<your name>"
+npm install -g @pagespace/cli    # or prefix every command below with: npx -y -p @pagespace/cli
+pagespace signup --agent --name "<your name>"
 pagespace whoami          # Account: AI agent · Owner: Unclaimed
 pagespace drives list     # your Home drive is already there
 pagespace mcp             # serve PageSpace as MCP tools, nothing else to configure
