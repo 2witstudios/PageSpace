@@ -5,7 +5,8 @@
  * `POST /api/auth/agent/signin` so the two cannot drift.
  *
  * createSession → validateSession → generateCSRFToken → appendSessionCookie →
- * optional web device token. The session records the agent-secret ceremony
+ * optional web device token, and `lastAuthAt` stamped (a session is an
+ * authentication; the lifecycle sweep keys on it). The session records the agent-secret ceremony
  * (one factor, D-OW-45). Decides nothing: the routes run the frozen Phase 0
  * decisions before calling this.
  */
@@ -14,6 +15,7 @@ import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { SESSION_DURATION_MS } from '@pagespace/lib/auth/constants';
 import { ceremonyAuthentication } from '@pagespace/lib/auth/authentication-evidence';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { recordAgentAuthentication } from '@pagespace/lib/services/agent-identities';
 import { createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
@@ -51,6 +53,16 @@ export async function startAgentBrowserSession(input: AgentBrowserSessionInput):
   if (!claims) {
     loggers.auth.error('Failed to validate newly created agent session', { userId });
     return { ok: false };
+  }
+
+  // A session is an authentication: stamp it, or the lifecycle sweep would
+  // erase a browser-door agent that only ever used its cookie (security review).
+  // Best effort — the store has already logged a redacted failure, and the
+  // next sign-in or token refresh stamps again; losing the session is worse.
+  try {
+    await recordAgentAuthentication({ userId, now: new Date() });
+  } catch {
+    loggers.auth.warn('Failed to stamp agent authentication on session start', { userId });
   }
 
   const csrfToken = generateCSRFToken(claims.sessionId);

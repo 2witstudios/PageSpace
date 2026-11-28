@@ -358,10 +358,21 @@ export async function verifyAgentSecret(input: { secret: string; now: Date }): P
   });
 
   if (decision.status === 'ok') {
-    await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId)));
+    await recordAgentAuthentication({ userId: row.userId, now: input.now });
   }
 
   return { decision, userId: row.userId };
+}
+
+/**
+ * Stamp `lastAuthAt` — the fact the lifecycle sweep keys on (an agent that
+ * ever authenticated is never erased). Every authentication stamps it: the
+ * secret check above, the browser door's session start (signup and sign-in —
+ * a session is an authentication), the jwt-bearer exchange, and a refresh of
+ * the agent's tokens. A no-op for a user with no identity row.
+ */
+export async function recordAgentAuthentication(input: { userId: string; now: Date }): Promise<void> {
+  await guardStore('stamp_last_auth', () => db.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, input.userId)));
 }
 
 export type RotateAgentSecretResult =

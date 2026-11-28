@@ -678,6 +678,11 @@ export async function refreshTokenGrant(input: RefreshTokenGrantInput): Promise<
       expiresAt: tokens.accessExpiresAt,
     });
 
+    // An agent refreshing its tokens is an agent in use: stamp the fact the
+    // lifecycle sweep keys on (security review addendum). Matches nothing for
+    // a human — only agents have an identity row.
+    await tx.update(agentIdentities).set({ lastAuthAt: input.now }).where(eq(agentIdentities.userId, row.userId));
+
     return { outcome: 'ok', userId: row.userId, scopes, tokens };
   });
 }

@@ -27,12 +27,14 @@ import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
-import { agentClaims } from '@pagespace/db/schema/agent-identities';
+import { agentClaims, agentIdentities } from '@pagespace/db/schema/agent-identities';
 import { requireDb } from '@pagespace/db/test/require-db';
 import { solvePow } from '@pagespace/lib/auth/agent/pow';
 import { hashToken } from '@pagespace/lib/auth/token-utils';
 import { normalizeUserCode } from '@pagespace/lib/auth/oauth/user-code';
 import { revokeAgent } from '@pagespace/lib/services/agent-identities';
+import { agentLifecycleStore, sweepAgentLifecycle } from '@pagespace/lib/services/agent-lifecycle';
+import { AGENT_UNAUTHENTICATED_TTL_MS } from '@pagespace/lib/auth/agent/lifecycle-decision';
 
 let dbAvailable = false;
 const createdUserIds: string[] = [];
@@ -138,5 +140,30 @@ describe('agent browser door — real Postgres', () => {
     expect(await revoked.text()).toBe(await unknown.text());
     const [after] = await db.select({ failed: users.failedLoginAttempts }).from(users).where(eq(users.id, created.agentId));
     expect(after.failed).toBe(before.failed + 1);
+  });
+
+  // Security review (MEDIUM): browser signup never stamped lastAuthAt, so the
+  // 30-day sweep erased a browser-door agent that had only ever used its cookie.
+  it('stamps a browser-signed-up agent as authenticated, so the lifecycle sweep keeps it', async () => {
+    if (!dbAvailable) return;
+
+    const pow = await solvedChallenge();
+    const signup = await signupPOST(json('/api/auth/agent/signup', {
+      name: 'Browser Lifecycle Agent', tosAccepted: true, pow, csrfToken: generateLoginCSRFToken(),
+    }));
+    expect(signup.status).toBe(200);
+    const created = await signup.json() as { agentId: string };
+    createdUserIds.push(created.agentId);
+
+    const [identity] = await db.select({ lastAuthAt: agentIdentities.lastAuthAt }).from(agentIdentities).where(eq(agentIdentities.userId, created.agentId));
+    expect(identity?.lastAuthAt).toBeInstanceOf(Date);
+
+    // Run the sweep as if 31 days had passed, with a recording eraser — and the
+    // prunes stubbed, so a shifted clock never deletes other suites' live rows.
+    const erased: string[] = [];
+    const later = new Date(Date.now() + AGENT_UNAUTHENTICATED_TTL_MS + 24 * 60 * 60 * 1000);
+    const store = { ...agentLifecycleStore, pruneExpiredChallenges: async () => 0, pruneExpiredClaims: async () => 0 };
+    await sweepAgentLifecycle({ now: later, store, eraseAgent: async (userId) => { erased.push(userId); } });
+    expect(erased).not.toContain(created.agentId);
   });
 });
